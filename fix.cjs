@@ -1,0 +1,12 @@
+const fs = require('fs');
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+pkg.version = '1.0.7';
+if (!pkg.build) pkg.build = {};
+if (!pkg.build.mac) pkg.build.mac = {};
+pkg.build.mac.hardenedRuntime = false;
+delete pkg.build.mac.entitlements;
+delete pkg.build.mac.entitlementsInherit;
+delete pkg.build.dmg;
+fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+console.log('done - version:', pkg.version);
+console.log('build keys:', Object.keys(pkg.build));

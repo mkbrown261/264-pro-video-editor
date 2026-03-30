@@ -7,53 +7,71 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-mac:
-    name: Build macOS (arm64 + x64)
-    runs-on: macos-14
-
+  build-mac-arm64:
+    name: Build macOS (arm64)
+    runs-on: macos-13
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build app
-        run: npm run build
-
-      - name: Build & publish macOS DMGs
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2));" || true
+      - run: npm ci
+      - run: npm run build
+      - name: Package arm64 DMG
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder --mac --arm64 --x64 --publish always
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
+          SKIP_NOTARIZE: true
+        run: npx electron-builder --mac --arm64 --publish always
+
+  build-mac-x64:
+    name: Build macOS (x64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2));" || true
+      - run: npm ci
+      - run: npm run build
+      - name: Package x64 DMG
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
+          SKIP_NOTARIZE: true
+        run: npx electron-builder --mac --x64 --publish always
 
   build-win:
     name: Build Windows (x64)
     runs-on: windows-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build app
-        run: npm run build
-
-      - name: Build & publish Windows installer
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2));" || true
+      - run: npm ci
+      - run: npm run build
+      - name: Package Windows installer
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npx electron-builder --win --x64 --publish always
