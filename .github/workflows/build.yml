@@ -39,8 +39,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          CSC_LINK: ''
-          CSC_KEY_PASSWORD: ''
         run: npx electron-builder --mac --arm64 --publish always
 
   build-mac-x64:
@@ -76,8 +74,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          CSC_LINK: ''
-          CSC_KEY_PASSWORD: ''
         run: npx electron-builder --mac --x64 --publish always
 
   build-win:
