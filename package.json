@@ -1,6 +1,6 @@
 {
   "name": "264-pro-video-editor",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "Phase 1 MVP for a professional modular video editor inspired by Resolve workflows.",
   "main": "dist-electron/electron/main.js",
@@ -41,6 +41,15 @@
   "build": {
     "mac": {
       "hardenedRuntime": false
-    }
+    },
+    "directories": {
+      "output": "release",
+      "buildResources": "build-assets"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ]
   }
 }
