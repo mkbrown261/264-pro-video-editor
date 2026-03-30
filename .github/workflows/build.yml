@@ -27,24 +27,11 @@ jobs:
       - name: Build app
         run: npm run build
 
-      - name: Build macOS DMG (arm64)
+      - name: Build & publish macOS DMGs
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder --mac --arm64
-
-      - name: Build macOS DMG (x64)
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder --mac --x64
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-installers
-          path: release/*.dmg
-          if-no-files-found: error
+        run: npx electron-builder --mac --arm64 --x64 --publish always
 
   build-win:
     name: Build Windows (x64)
@@ -66,55 +53,7 @@ jobs:
       - name: Build app
         run: npm run build
 
-      - name: Build Windows installer
+      - name: Build & publish Windows installer
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: npx electron-builder --win --x64
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: win-installer
-          path: release/*.exe
-          if-no-files-found: error
-
-  release:
-    name: Publish GitHub Release
-    needs: [build-mac, build-win]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: mac-installers
-          path: ./release
-
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: win-installer
-          path: ./release
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "264 Pro ${{ github.ref_name }}"
-          draft: false
-          prerelease: false
-          files: |
-            release/*.dmg
-            release/*.exe
-          body: |
-            ## 264 Pro ${{ github.ref_name }}
-
-            | Platform | File |
-            |----------|------|
-            | macOS Apple Silicon | 264-Pro-*-arm64.dmg |
-            | macOS Intel | 264-Pro-*-x64.dmg |
-            | Windows 10/11 | 264-Pro-Setup-*.exe |
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish always
