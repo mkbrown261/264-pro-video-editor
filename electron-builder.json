@@ -33,7 +33,20 @@
     "hardenedRuntime": false,
     "gatekeeperAssess": false,
     "notarize": false,
-    "target": "dmg"
+    "target": [
+      {
+        "target": "zip",
+        "arch": [
+          "arm64"
+        ]
+      },
+      {
+        "target": "zip",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
   },
   "win": {
     "icon": "build-assets/icon.ico",
