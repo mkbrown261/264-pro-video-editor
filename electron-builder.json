@@ -1,0 +1,54 @@
+{
+  "appId": "app.264pro.videoeditor",
+  "productName": "264 Pro",
+  "copyright": "Copyright \u00a9 2025 264 Pro",
+  "directories": {
+    "output": "release",
+    "buildResources": "build-assets"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "node_modules/ffmpeg-static",
+      "to": "ffmpeg-static",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "node_modules/ffprobe-static",
+      "to": "ffprobe-static",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.video",
+    "icon": "build-assets/icon.icns",
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false,
+    "notarize": false,
+    "target": "dmg"
+  },
+  "win": {
+    "icon": "build-assets/icon.ico",
+    "target": "nsis"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "mkbrown261",
+    "repo": "264-pro-video-editor",
+    "releaseType": "release"
+  }
+}
