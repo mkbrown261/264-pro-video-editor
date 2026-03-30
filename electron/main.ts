@@ -1,0 +1,293 @@
+import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, extname, join } from "node:path";
+import { Readable } from "node:stream";
+import type { ExportRequest } from "../src/shared/models.js";
+import {
+  exportSequence,
+  getEnvironmentStatus,
+  probeMediaFiles
+} from "./ffmpeg.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const VIDEO_FILE_EXTENSIONS = [
+  "mp4",
+  "mov",
+  "m4v",
+  "mkv",
+  "avi",
+  "webm",
+  "mxf",
+  "mts",
+  "m2ts",
+  "ts",
+  "mpg",
+  "mpeg",
+  "wmv",
+  "3gp",
+  "flv"
+];
+const MEDIA_CONTENT_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".m4v": "video/x-m4v",
+  ".mkv": "video/x-matroska",
+  ".webm": "video/webm",
+  ".avi": "video/x-msvideo",
+  ".mxf": "application/mxf",
+  ".ts": "video/mp2t",
+  ".m2ts": "video/mp2t",
+  ".mts": "video/mp2t",
+  ".mpg": "video/mpeg",
+  ".mpeg": "video/mpeg",
+  ".wmv": "video/x-ms-wmv",
+  ".3gp": "video/3gpp",
+  ".flv": "video/x-flv",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png"
+};
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "media",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true
+    }
+  }
+]);
+
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
+function getContentType(sourcePath: string): string {
+  return MEDIA_CONTENT_TYPES[extname(sourcePath).toLowerCase()] ?? "application/octet-stream";
+}
+
+function parseRangeHeader(
+  rangeHeader: string | null,
+  fileSize: number
+): { start: number; end: number } | null {
+  if (!rangeHeader) {
+    return null;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+
+  if (!match) {
+    return null;
+  }
+
+  const [, startText, endText] = match;
+
+  if (!startText && !endText) {
+    return null;
+  }
+
+  let start = startText ? Number(startText) : 0;
+  let end = endText ? Number(endText) : fileSize - 1;
+
+  if (!startText && endText) {
+    const suffixLength = Number(endText);
+
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+
+    start = Math.max(fileSize - suffixLength, 0);
+    end = fileSize - 1;
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  start = Math.max(0, Math.floor(start));
+  end = Math.min(fileSize - 1, Math.floor(end));
+
+  if (start > end || start >= fileSize) {
+    return null;
+  }
+
+  return {
+    start,
+    end
+  };
+}
+
+async function createMediaResponse(request: Request): Promise<Response> {
+  const requestedUrl = new URL(request.url);
+  const sourcePath = requestedUrl.searchParams.get("path");
+
+  if (!sourcePath) {
+    return new Response("Missing media path.", {
+      status: 400
+    });
+  }
+
+  try {
+    const fileStats = await stat(sourcePath);
+
+    if (!fileStats.isFile()) {
+      return new Response("Media source is unavailable.", {
+        status: 404
+      });
+    }
+
+    const range = parseRangeHeader(request.headers.get("range"), fileStats.size);
+    const start = range?.start ?? 0;
+    const end = range?.end ?? fileStats.size - 1;
+    const stream = createReadStream(sourcePath, {
+      start,
+      end
+    });
+    const headers = new Headers({
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "no-store",
+      "Content-Length": String(end - start + 1),
+      "Content-Type": getContentType(sourcePath)
+    });
+
+    if (range) {
+      headers.set("Content-Range", `bytes ${start}-${end}/${fileStats.size}`);
+    }
+
+    return new Response(Readable.toWeb(stream) as ReadableStream, {
+      status: range ? 206 : 200,
+      headers
+    });
+  } catch {
+    return new Response("Failed to open media source.", {
+      status: 500
+    });
+  }
+}
+
+function createMainWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 1600,
+    height: 1000,
+    minWidth: 1280,
+    minHeight: 800,
+    backgroundColor: "#091017",
+    title: "264 Pro Video Editor",
+    webPreferences: {
+      preload: join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+
+  if (devServerUrl) {
+    void window.loadURL(devServerUrl);
+    window.webContents.openDevTools({ mode: "detach" });
+  } else {
+    void window.loadFile(join(__dirname, "../../dist/index.html"));
+  }
+
+  return window;
+}
+
+app.whenReady().then(() => {
+  protocol.handle("media", (request) => createMediaResponse(request));
+
+  createMainWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createMainWindow();
+    }
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+ipcMain.handle("system:environment", () => {
+  return getEnvironmentStatus();
+});
+
+ipcMain.handle("media:open-files", async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const result = window
+    ? await dialog.showOpenDialog(window, {
+        title: "Import Media",
+        properties: ["openFile", "multiSelections"],
+        filters: [
+          {
+            name: "Video Files",
+            extensions: VIDEO_FILE_EXTENSIONS
+          },
+          {
+            name: "All Files",
+            extensions: ["*"]
+          }
+        ]
+      })
+    : await dialog.showOpenDialog({
+        title: "Import Media",
+        properties: ["openFile", "multiSelections"],
+        filters: [
+          {
+            name: "Video Files",
+            extensions: VIDEO_FILE_EXTENSIONS
+          },
+          {
+            name: "All Files",
+            extensions: ["*"]
+          }
+        ]
+      });
+
+  if (result.canceled || !result.filePaths.length) {
+    return [];
+  }
+
+  return probeMediaFiles(result.filePaths);
+});
+
+ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const result = window
+    ? await dialog.showSaveDialog(window, {
+        title: "Export MP4",
+        defaultPath: suggestedName.endsWith(".mp4")
+          ? suggestedName
+          : `${suggestedName}.mp4`,
+        filters: [
+          {
+            name: "MP4 Video",
+            extensions: ["mp4"]
+          }
+        ]
+      })
+    : await dialog.showSaveDialog({
+        title: "Export MP4",
+        defaultPath: suggestedName.endsWith(".mp4")
+          ? suggestedName
+          : `${suggestedName}.mp4`,
+        filters: [
+          {
+            name: "MP4 Video",
+            extensions: ["mp4"]
+          }
+        ]
+      });
+
+  return result.canceled ? null : result.filePath ?? null;
+});
+
+ipcMain.handle("export:render", async (_event, request: ExportRequest) => {
+  return exportSequence(request);
+});
