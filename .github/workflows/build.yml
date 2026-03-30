@@ -9,7 +9,7 @@ on:
 jobs:
   build-mac-arm64:
     name: Build macOS (arm64)
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +33,7 @@ jobs:
 
   build-mac-x64:
     name: Build macOS (x64)
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
