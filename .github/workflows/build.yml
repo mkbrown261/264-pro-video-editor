@@ -10,24 +10,18 @@ jobs:
   build-mac-arm64:
     name: Build macOS (arm64)
     runs-on: macos-15
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Sync version from git tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('version =>','${VERSION}');" || true
-
       - run: npm ci
-
       - run: npm run build
-
       - name: Package arm64 DMG
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -40,24 +34,18 @@ jobs:
   build-mac-x64:
     name: Build macOS (x64)
     runs-on: macos-15
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Sync version from git tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('version =>','${VERSION}');" || true
-
       - run: npm ci
-
       - run: npm run build
-
       - name: Package x64 DMG
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -70,25 +58,19 @@ jobs:
   build-win:
     name: Build Windows (x64)
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Sync version from git tag
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('version =>','${VERSION}');" || true
-
       - run: npm ci
-
       - run: npm run build
-
       - name: Package Windows installer
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}

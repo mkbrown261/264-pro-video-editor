@@ -1,19 +1,16 @@
 const fs = require('fs');
 const path = require('path');
 
-const dir  = path.join('dist-electron', 'electron');
-const src  = path.join(dir, 'preload.js');
-const dst  = path.join(dir, 'preload.cjs');
-
-console.log('dist-electron/electron contents:', fs.readdirSync(dir).join(', '));
+const src = path.join('dist-electron', 'electron', 'preload.js');
+const dst = path.join('dist-electron', 'electron', 'preload.cjs');
 
 if (fs.existsSync(dst)) {
-  console.log('preload.cjs already exists — done');
+  console.log('preload.cjs already exists, skipping rename');
   process.exit(0);
 }
 
 if (!fs.existsSync(src)) {
-  console.error('ERROR: preload.js not found. Contents of dir:', fs.readdirSync(dir).join(', '));
+  console.error('ERROR: preload.js not found at', src);
   process.exit(1);
 }
 

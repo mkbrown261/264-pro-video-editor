@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "CommonJS",
     "moduleResolution": "node",
     "strict": true,
@@ -10,8 +12,13 @@
     "resolveJsonModule": true,
     "outDir": "dist-electron",
     "rootDir": ".",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "declaration": false
   },
-  "include": ["electron/preload.ts", "src/shared"]
+  "include": [
+    "electron/preload.ts",
+    "src/shared"
+  ]
 }

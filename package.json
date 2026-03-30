@@ -9,18 +9,18 @@
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
     "dev:renderer": "vite",
-    "dev:main": "npx tsc -p tsconfig.node.json --watch --preserveWatchOutput",
+    "dev:main": "tsc -p tsconfig.node.json --watch --preserveWatchOutput",
     "dev:electron": "wait-on dist-electron/electron/main.js dist-electron/electron/preload.cjs tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build": "npm run build:renderer && npm run build:main && npm run build:preload",
     "build:renderer": "vite build",
     "build:main": "npx tsc -p tsconfig.node.json",
+    "build:preload": "npx tsc -p tsconfig.preload.json && node rename-preload.cjs",
     "preview": "vite preview",
     "start": "electron .",
-    "typecheck": "npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.node.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "dist:mac": "npm run build && electron-builder --mac --universal",
     "dist:win": "npm run build && electron-builder --win --x64",
-    "dist:all": "npm run build && electron-builder --mac --win",
-    "build:preload": "npx tsc -p tsconfig.preload.json && node rename-preload.cjs"
+    "dist:all": "npm run build && electron-builder --mac --win"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
@@ -47,7 +47,7 @@
   "build": {
     "appId": "app.264pro.videoeditor",
     "productName": "264 Pro",
-    "copyright": "Copyright © 2025 264 Pro",
+    "copyright": "Copyright \u00a9 2025 264 Pro",
     "directories": {
       "output": "release",
       "buildResources": "build-assets"
@@ -55,8 +55,7 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "package.json",
-      "build-assets/**/*"
+      "package.json"
     ],
     "extraResources": [
       {
@@ -80,26 +79,11 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "notarize": false,
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
-      ]
+      "target": "dmg"
     },
     "win": {
       "icon": "build-assets/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
