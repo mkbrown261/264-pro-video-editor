@@ -1,6 +1,6 @@
 {
   "name": "264-pro-video-editor",
-  "version": "1.0.0",
+  "version": "1.0.7",
   "private": true,
   "description": "Phase 1 MVP for a professional modular video editor inspired by Resolve workflows.",
   "main": "dist-electron/electron/main.js",
@@ -37,5 +37,10 @@
     "wait-on": "^8.0.3",
     "electron": "^36.2.1"
   },
-  "author": "Mason Brown <mkbrown261@gmail.com>"
+  "author": "Mason Brown <mkbrown261@gmail.com>",
+  "build": {
+    "mac": {
+      "hardenedRuntime": false
+    }
+  }
 }
