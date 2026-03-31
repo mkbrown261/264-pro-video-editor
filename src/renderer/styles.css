@@ -3480,12 +3480,14 @@ kbd {
    NEW TRACK GHOST INDICATOR
    ══════════════════════════════════════════════════════════════════════════ */
 .timeline-new-track-ghost {
-  height: 32px;
+  position: relative;
+  height: 52px;
   display: flex; align-items: center;
   background: rgba(79,142,247,0.08);
-  border: 1px dashed rgba(79,142,247,0.5);
+  border: 1.5px dashed rgba(79,142,247,0.6);
   margin: 2px 0;
   border-radius: 4px;
+  overflow: hidden;
   animation: ghostPulse 0.8s ease-in-out infinite;
 }
 .ghost-new-track-label {
@@ -3494,6 +3496,31 @@ kbd {
   color: var(--blue);
   font-weight: 600;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+  z-index: 2;
+  flex-shrink: 0;
+}
+
+/* Clip preview inside ghost new-track row */
+.new-track-ghost-clip {
+  border-radius: 3px;
+  background: rgba(79,142,247,0.35);
+  border: 1.5px solid rgba(79,142,247,0.8);
+  pointer-events: none;
+  z-index: 3;
+  min-width: 24px;
+  animation: ghostPulse 0.8s ease-in-out infinite;
+}
+.new-track-ghost-clip.audio-clip {
+  background: rgba(47,199,122,0.30);
+  border-color: rgba(47,199,122,0.8);
+}
+
+/* Clip stays at original position (faded) while dragging to new track */
+.timeline-clip.dragging-to-new-track {
+  opacity: 0.25;
+  border-style: dashed !important;
+  pointer-events: none;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -4592,19 +4619,26 @@ kbd {
 
 /* New track ghost */
 .timeline-new-track-ghost {
-  height: 28px;
+  position: relative;
+  height: 52px;
   background: rgba(79,142,247,0.08);
-  border: 1px dashed rgba(79,142,247,0.45);
+  border: 1.5px dashed rgba(79,142,247,0.6);
   border-radius: 4px;
   display: flex;
   align-items: center;
   overflow: hidden;
+  margin: 2px 0;
+  animation: ghostPulse 0.8s ease-in-out infinite;
 }
 .ghost-new-track-label {
   padding-left: 108px;
   font-size: 0.68rem;
-  color: rgba(79,142,247,0.75);
+  color: rgba(79,142,247,0.85);
   pointer-events: none;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  z-index: 2;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

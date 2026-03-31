@@ -140,6 +140,12 @@ interface EditorStore {
   removeTrack: (trackId: string) => void;
   updateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   duplicateTrack: (trackId: string) => void;
+  /**
+   * Atomically: create a new video track (+ paired audio track if the clip
+   * has linked audio), move the dragged clip group into those new tracks,
+   * preserving start-frame and audio/video sync.
+   */
+  addTracksAndMoveClip: (clipId: string, startFrame: number) => void;
 
   // ── Markers ──
   addMarker: (marker: Omit<TimelineMarker, "id">) => void;
@@ -1332,6 +1338,93 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             tracks,
             clips: [...state.project.sequence.clips, ...newClips]
           }
+        }
+      };
+    }));
+  },
+
+  addTracksAndMoveClip: (clipId, startFrame) => {
+    set(withUndo("Move to New Track", (state) => {
+      const seq = state.project.sequence;
+
+      // 1. Find the video clip being dragged (could be audio if user drags audio clip)
+      const clip = seq.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+
+      // 2. Collect the full linked group (video + audio)
+      const linkedClips = clip.linkedGroupId
+        ? seq.clips.filter((c) => c.linkedGroupId === clip.linkedGroupId)
+        : [clip];
+      const videoClip = linkedClips.find((c) => {
+        const t = seq.tracks.find((tr) => tr.id === c.trackId);
+        return t?.kind === "video";
+      }) ?? clip;
+      const audioClips = linkedClips.filter((c) => c.id !== videoClip.id);
+
+      // 3. Build new video track
+      const vCount = seq.tracks.filter((t) => t.kind === "video").length;
+      const newVideoTrackId = createId();
+      const newVideoTrack: TimelineTrack = {
+        id: newVideoTrackId,
+        name: `V${vCount + 1}`,
+        kind: "video",
+        muted: false, locked: false, solo: false,
+        height: 56,
+        color: "#4f8ef7"
+      };
+
+      // 4. Build new audio track (only if there are linked audio clips)
+      const newAudioTrackId = createId();
+      const needAudio = audioClips.length > 0;
+      const newAudioTrack: TimelineTrack | null = needAudio ? {
+        id: newAudioTrackId,
+        name: `A${seq.tracks.filter((t) => t.kind === "audio").length + 1}`,
+        kind: "audio",
+        muted: false, locked: false, solo: false,
+        height: 44,
+        color: "#2fc77a"
+      } : null;
+
+      // 5. Compute frame delta between old position and new startFrame
+      const frameDelta = startFrame - videoClip.startFrame;
+
+      // 6. Rewrite clips: move video → newVideoTrack, audio → newAudioTrack
+      const updatedClips = seq.clips.map((c) => {
+        if (c.id === videoClip.id) {
+          return {
+            ...c,
+            trackId: newVideoTrackId,
+            startFrame: Math.max(0, c.startFrame + frameDelta)
+          };
+        }
+        if (needAudio && audioClips.some((a) => a.id === c.id)) {
+          return {
+            ...c,
+            trackId: newAudioTrackId,
+            startFrame: Math.max(0, c.startFrame + frameDelta)
+          };
+        }
+        return c;
+      });
+
+      // 7. Insert new tracks at the top of their kind group
+      const newTracks = [...seq.tracks, newVideoTrack];
+      if (newAudioTrack) newTracks.push(newAudioTrack);
+
+      const nextProject = resolveTracks(
+        {
+          ...state.project,
+          sequence: { ...seq, tracks: newTracks, clips: updatedClips }
+        },
+        [newVideoTrackId, ...(needAudio ? [newAudioTrackId] : [])]
+      );
+
+      return {
+        project: nextProject,
+        selectedClipId: clipId,
+        playback: {
+          ...state.playback,
+          playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame)
         }
       };
     }));
