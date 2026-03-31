@@ -5,6 +5,48 @@ Built with Electron + Vite + React + TypeScript + FFmpeg.
 
 ---
 
+## ✅ Completed Features (Latest)
+
+### Project Persistence (.264proj)
+- JSON-based versioned schema with full project metadata, media pool, timeline, history
+- Serialize/deserialize entire editor state; v1→v2 migration; `sanitizeProject` safety net
+- IPC: `project:save`, `project:open`, `project:save-as` in Electron main + preload
+- localStorage fallback for non-Electron environments
+- `⌘S` save, `⌘O` open keyboard shortcuts
+
+### Undo / Redo (Command Pattern)
+- `withUndo(label, mutate)` captures before/after snapshots; LIFO undoStack + redoStack capped at 50
+- `⌘Z` / `⌘⇧Z` shortcuts; Undo/Redo buttons in menu bar — disabled when empty
+- Covers: import, clip move/trim/split/remove, transitions, effects, color grade, volume/speed, masks
+
+### Effects System
+- 13 effects: Blur, Sharpen, Brightness/Contrast, Hue/Saturation, Film Grain, Vignette, Glow/Bloom, Chroma Key, Pixelate, Edge Detect, B&W/Sepia, Exposure, RGB Split
+- Real-time CSS filter rendering (`computeCssFilterFromEffects`)
+- Per-effect: toggle (animated pip switch), expand/collapse params, reset to defaults
+- Drag-and-drop + ↑↓ buttons to reorder effect stack
+- 5 built-in presets + user presets saved to localStorage; preset delete
+
+### Hover Preview System
+- 2.5-second hover delay before showing effect preview on library items
+- CSS filter applied to icon thumbnail; `previewing` badge shown
+- Auto-cancelled on mouseleave; only one active preview at a time
+
+### Transitions (complete rebuild)
+- In / Out edge tabs — independent control per edge
+- Duration slider showing frames + seconds
+- Category tabs: Basic / Dissolve / Wipe / Push / Zoom / Stylized
+- 22 transition types in grid with icon + label
+- Applied transitions shown with clear buttons
+- Transitions draggable (dataTransfer for future timeline drop)
+
+### Button System
+- All interactive buttons: 180ms ease transitions, proper hover/active/disabled states
+- No misleading gray buttons — `disabled` properly prevents interaction
+- `cursor: not-allowed` on disabled elements; `cursor: grab` on drag handles
+- Primary, muted, danger, tool-button.active all fully styled
+
+---
+
 ## 🚀 Quick Start — Local Development
 
 ### Prerequisites
