@@ -3746,6 +3746,18 @@ kbd {
 }
 .timeline-lane.lane-locked { pointer-events: none; }
 
+/* Visual indicator: ghost will INSERT ABOVE this track — bright top border + blue tint */
+.timeline-lane.drag-insert-above {
+  border-top: 3px solid rgba(79,142,247,1) !important;
+  background: rgba(79,142,247,0.06) !important;
+}
+
+/* Visual indicator: ghost will DROP ONTO this existing track — green tint */
+.timeline-lane.drag-on-track-target {
+  background: rgba(47,199,122,0.10) !important;
+  box-shadow: inset 0 0 0 2px rgba(47,199,122,0.5);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    TIMELINE ROW LAYOUT
    ══════════════════════════════════════════════════════════════════════════ */

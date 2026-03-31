@@ -454,14 +454,15 @@ export function TimelinePanel({
         const { r, trackId } = kindLanes[i];
         if (clientY < r.top || clientY > r.bottom) continue;
 
-        // Cursor is inside this lane — decide intent by vertical zone
-        const relY    = clientY - r.top;
-        const h       = r.bottom - r.top;
-        const topZone = h * 0.38;  // top 38% → insert above
-        const botZone = h * 0.62;  // below 62% → insert below (= above next)
+        // Cursor is inside this lane — decide intent by vertical zone.
+        // Rule: top HALF → INSERT ABOVE, bottom HALF → DRAG ON TRACK
+        // (No bottom-insert zone — use "below all tracks" region for that)
+        const relY = clientY - r.top;
+        const h    = r.bottom - r.top;
+        const half = h * 0.5;
 
-        if (relY <= topZone) {
-          // INSERT ABOVE this track
+        if (relY < half) {
+          // TOP HALF → INSERT ABOVE this track
           const gIdx = globalIndexOf(trackId);
           return {
             intent: "INSERT_ABOVE_TRACK",
@@ -473,32 +474,7 @@ export function TimelinePanel({
           };
         }
 
-        if (relY >= botZone) {
-          // INSERT BELOW this track = INSERT ABOVE the next same-kind track (if any)
-          const nextKind = kindLanes[i + 1];
-          if (nextKind) {
-            const gIdx = globalIndexOf(nextKind.trackId);
-            return {
-              intent: "INSERT_ABOVE_TRACK",
-              frame: laneFrame(r),
-              trackId: "",
-              newTrackKind: dragState.trackKind,
-              insertBeforeTrackId: nextKind.trackId,
-              insertIndex: Math.max(0, gIdx),
-            };
-          }
-          // No next same-kind lane → append at bottom
-          return {
-            intent: "INSERT_BELOW_BOTTOM",
-            frame: laneFrame(r),
-            trackId: "",
-            newTrackKind: dragState.trackKind,
-            insertBeforeTrackId: "",
-            insertIndex: allLanes.length,
-          };
-        }
-
-        // Middle zone → DRAG ON TRACK (no new track)
+        // BOTTOM HALF → DRAG ON TRACK (move clip to this track)
         return {
           intent: "DRAG_ON_TRACK",
           frame: laneFrame(r),
@@ -536,26 +512,40 @@ export function TimelinePanel({
         };
       }
 
-      // Cursor is in a gap between rows of different kinds.
-      // Find the nearest same-kind lane by Y-center and apply the same zone logic.
+      // Cursor is in a gap between rows of different kinds (e.g. between video and audio rows).
+      // Find the nearest same-kind lane by Y-center and apply the 50/50 split rule.
       if (kindLanes.length > 0) {
         let nearest = kindLanes[0];
-        let minDist = Infinity;
+        let nearestDist = Infinity;
         for (const kl of kindLanes) {
           const center = (kl.r.top + kl.r.bottom) / 2;
           const d = Math.abs(clientY - center);
-          if (d < minDist) { minDist = d; nearest = kl; }
+          if (d < nearestDist) { nearestDist = d; nearest = kl; }
         }
-        // Treat as if cursor is just above the nearest lane → insert above it
-        const gIdx = globalIndexOf(nearest.trackId);
-        return {
-          intent: "INSERT_ABOVE_TRACK",
-          frame: laneFrame(nearest.r),
-          trackId: "",
-          newTrackKind: dragState.trackKind,
-          insertBeforeTrackId: nearest.trackId,
-          insertIndex: Math.max(0, gIdx),
-        };
+        // Is cursor above or below the nearest lane's center?
+        const center = (nearest.r.top + nearest.r.bottom) / 2;
+        if (clientY < center) {
+          // Above the center of nearest lane → INSERT ABOVE it
+          const gIdx = globalIndexOf(nearest.trackId);
+          return {
+            intent: "INSERT_ABOVE_TRACK",
+            frame: laneFrame(nearest.r),
+            trackId: "",
+            newTrackKind: dragState.trackKind,
+            insertBeforeTrackId: nearest.trackId,
+            insertIndex: Math.max(0, gIdx),
+          };
+        } else {
+          // Below the center → DRAG ON TRACK (drop onto nearest lane)
+          return {
+            intent: "DRAG_ON_TRACK",
+            frame: laneFrame(nearest.r),
+            trackId: nearest.trackId,
+            newTrackKind: dragState.trackKind,
+            insertBeforeTrackId: "",
+            insertIndex: -1,
+          };
+        }
       }
 
       return null;
@@ -1074,8 +1064,24 @@ export function TimelinePanel({
                 </div>
 
                 {/* ── Lane ── */}
+                {/* drag-insert-above: bright top-border indicator when ghost will insert ABOVE this track */}
+                {(() => {
+                  const isInsertAboveThis = ghostInfo?.intent === "INSERT_ABOVE_TRACK" &&
+                    ghostInfo.insertBeforeTrackId === layout.track.id;
+                  const isDragTarget = ghostInfo?.intent === "DRAG_ON_TRACK" &&
+                    ghostInfo.trackId === layout.track.id;
+                  const laneClass = [
+                    "timeline-lane",
+                    `${layout.track.kind}-lane`,
+                    toolMode === "blade" ? "blade-active" : "",
+                    dropTargetTrackId === layout.track.id ? "drop-target" : "",
+                    isLocked ? "lane-locked" : "",
+                    isInsertAboveThis ? "drag-insert-above" : "",
+                    isDragTarget ? "drag-on-track-target" : "",
+                  ].filter(Boolean).join(" ");
+                  return (
                 <div
-                  className={`timeline-lane ${layout.track.kind}-lane${toolMode === "blade" ? " blade-active" : ""}${dropTargetTrackId === layout.track.id ? " drop-target" : ""}${isLocked ? " lane-locked" : ""}`}
+                  className={laneClass}
                   data-track-id={layout.track.id}
                   data-track-kind={layout.track.kind}
                   style={{ width: canvasWidth, opacity: isMuted ? 0.45 : 1 }}
@@ -1424,6 +1430,8 @@ export function TimelinePanel({
                     );
                   })()}
                 </div>
+                  );
+                })()}
               </div>
               </>
             );
