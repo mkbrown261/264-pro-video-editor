@@ -563,16 +563,19 @@ export function TimelinePanel({
 
     const onMove = (e: MouseEvent) => {
       const g = resolveGhostAt(e.clientX, e.clientY);
+      if (g) console.log("[drag-move] intent:", g.intent, "insertBeforeTrackId:", g.insertBeforeTrackId, "insertIndex:", g.insertIndex);
       setGhostInfo(g);
     };
 
     const onUp = (e: MouseEvent) => {
       const g = resolveGhostAt(e.clientX, e.clientY);
+      console.log("[drag-drop] onUp intent:", g?.intent, "insertIndex:", g?.insertIndex, "trackId:", g?.trackId, "frame:", g?.frame);
       if (g) {
         if (g.intent === "DRAG_ON_TRACK") {
           propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
         } else {
           // INSERT_ABOVE_TRACK | INSERT_ABOVE_TOP | INSERT_BELOW_BOTTOM
+          console.log("[drag-drop] calling onAddTracksAndMoveClip, fn=", typeof propsRef.current.onAddTracksAndMoveClip);
           propsRef.current.onAddTracksAndMoveClip?.(dragState.clipId, g.frame, g.insertIndex);
         }
       }
