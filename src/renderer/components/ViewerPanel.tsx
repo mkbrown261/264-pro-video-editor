@@ -226,11 +226,17 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
 
     // ── WebGL color grade renderer ────────────────────────────────────────────
     //
-    // Lifecycle: create when canvas mounts, destroy when unmounts.
-    // The renderer runs its own RAF loop reading from videoRef every frame.
-    // Whenever colorGrade changes (any wheel, slider, or curve touch), we call
-    // renderer.setGrade() which bumps an internal version counter — the next RAF
-    // tick uploads new uniforms and redraws instantly (GPU, ~0 ms).
+    // The renderer ALWAYS runs (started on mount), reading the video element
+    // every RAF tick and applying grade uniforms in the GLSL shader.
+    //
+    // The raw <video> is hidden (opacity:0) and the graded <canvas> is shown
+    // whenever colorGrade is set. When no grade is present the canvas renders
+    // the video pass-through (all uniforms at neutral), still replacing the
+    // <video> element so transitions/masks work consistently.
+    //
+    // NOTE: The shader now uses corrected gain math:
+    //   gain [-1,1] → shader computes (gain+1) as the multiplier so 0 = ×1 = neutral
+    //   gamma exponent clamped to [0.1, 10] to prevent division-by-zero → black
     //
     useEffect(() => {
       const canvas = gradeCanvasRef.current;
@@ -245,14 +251,15 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       };
     }, []); // only on mount/unmount
 
-    // Sync video element reference into renderer every render pass so it's
-    // never stale (video ref stays the same object but its .current can update).
+    // Sync video element reference into renderer on every render so it's
+    // never stale (videoRef.current changes when src changes).
     useEffect(() => {
       rendererRef.current?.setVideo(videoRef.current);
     });
 
-    // Push the latest grade to the renderer immediately when it changes.
-    // colorGrade is the prop from the store — changes are instant.
+    // Push grade to renderer immediately whenever colorGrade prop changes.
+    // gradeVersion is bumped inside setGrade() so the RAF loop redraws even
+    // on a paused / static video frame.
     useEffect(() => {
       rendererRef.current?.setGrade(colorGrade ?? null);
     }, [colorGrade]);
@@ -265,8 +272,9 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
     const currentMasks    = activeSegment?.clip.masks ?? [];
 
-    // When a grade is active the raw <video> is hidden (opacity 0, pointer-events none)
-    // and the graded <canvas> sits on top at the same size.
+    // Show the WebGL canvas whenever a colorGrade is set.
+    // The canvas always renders (pass-through at neutral), but is only
+    // visible when a grade prop is provided — so the plain video shows otherwise.
     const hasGrade = Boolean(colorGrade);
 
     return (

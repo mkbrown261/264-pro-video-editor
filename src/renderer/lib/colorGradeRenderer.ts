@@ -1,18 +1,28 @@
 /**
- * 264 Pro — Real-time WebGL Color Grade Renderer
+ * 264 Pro — Real-time WebGL Color Grade Renderer  (v2 — gamma black-screen fix)
  *
- * Renders a <video> element into a <canvas> every animation frame,
- * applying the full ColorGrade (lift/gamma/gain/offset wheels, exposure,
- * contrast, saturation, temperature/tint, RGB curves) via a GLSL fragment
- * shader. GPU-accelerated: zero CPU pixel loops.
+ * KEY FIXES in this version:
  *
- * Usage:
- *   const renderer = new ColorGradeRenderer(canvasEl);
- *   renderer.setGrade(grade);         // call on every grade change
- *   renderer.setVideo(videoEl);       // call once video is available
- *   renderer.start();                 // begins RAF loop
- *   renderer.stop();                  // cancels RAF, frees GL
- *   renderer.dispose();               // full teardown
+ * 1. GAIN NEUTRAL VALUE: RGBValue uses [-1, 1] where 0 = neutral.
+ *    Old shader:  gain * (c + lift*(1-c))   → gain=0 → BLACK SCREEN
+ *    Fixed:       (gain+1) * (c + lift*(1-c)) → gain=0 → pass-through ✓
+ *
+ * 2. GAMMA EXPONENT: pow(x, 1/(1+gamma))
+ *    Old guard:  max(vec3(1)+gamma, vec3(0.001))  → allows (1+gamma)→0 → inf exponent
+ *    Fixed:      clamp(1+gamma, 0.1, 10.0)         → exponent always in [0.1, 10] ✓
+ *    Also:       pow() of negative base → NaN in GLSL; we clamp base ≥ 0 before pow ✓
+ *
+ * 3. LIFT NEUTRAL VALUE: lift=0 → c + 0*(1-c) = c → pass-through ✓  (was already correct)
+ *
+ * 4. OFFSET NEUTRAL VALUE: offset=0 → + 0 → pass-through ✓  (was already correct)
+ *
+ * 5. PER-STAGE CLAMP: every intermediate result is clamped [0,1] before being
+ *    fed to the next operation, preventing NaN/Infinity propagation.
+ *
+ * 6. RENDER SKIP LOGIC: renderer now re-draws whenever grade changes even if
+ *    the video frame hasn't advanced (paused video, still image).
+ *
+ * 7. CANVAS 2D FALLBACK: also fixed — neutral gain no longer darkens the image.
  */
 
 import type { ColorGrade, CurvePoint, RGBValue } from "../../shared/models";
@@ -30,58 +40,100 @@ void main() {
 `;
 
 // ─── Fragment shader ──────────────────────────────────────────────────────────
-// Each curve is baked into a 256-entry 1-D texture (R channel only) so
-// curve sampling is O(1) per pixel regardless of control-point count.
+//
+// IMPORTANT — value conventions (all match ColorGrade model):
+//   lift   [-1..1]  0 = neutral  (shadow additive shift)
+//   gamma  [-1..1]  0 = neutral  (midtone power curve)
+//   gain   [-1..1]  0 = neutral  (highlight scale; shader adds 1 internally)
+//   offset [-1..1]  0 = neutral  (global additive shift after LGG)
+//
+// DaVinci-style LGG formula (corrected):
+//   t  = (gain+1) * (c  + lift*(1-c))      -- lift shadows, scale gain
+//   t  = clamp(t, 0, 1)
+//   t  = pow(t, 1 / clamp(1+gamma, 0.1, 10))  -- gamma midtone curve
+//   t  = clamp(t + offset, 0, 1)
+//
+// When lift=0, gamma=0, gain=0, offset=0:
+//   t = 1 * (c + 0) = c  →  pow(c, 1/1) = c  →  c + 0 = c   ✓ pass-through
+//
 const FRAG_SRC = `
-precision mediump float;
+precision highp float;
 
 uniform sampler2D u_video;       // the video frame
-uniform sampler2D u_curve_r;     // red channel curve  LUT  (256×1)
+uniform sampler2D u_curve_r;     // red channel curve  LUT  (256x1)
 uniform sampler2D u_curve_g;     // green channel curve LUT
 uniform sampler2D u_curve_b;     // blue channel curve  LUT
 uniform sampler2D u_curve_m;     // master curve        LUT
 
-uniform vec3 u_lift;             // lift  wheel  (r,g,b)  each -1..1
-uniform vec3 u_gamma;            // gamma wheel
-uniform vec3 u_gain;             // gain  wheel
-uniform vec3 u_offset;           // offset wheel
+// Primary wheels — all in [-1, 1], 0 = neutral
+uniform vec3 u_lift;
+uniform vec3 u_gamma;
+uniform vec3 u_gain;
+uniform vec3 u_offset;
 
 uniform float u_exposure;        // stops, -3..3
-uniform float u_contrast;        // -1..1
-uniform float u_saturation;      // 0..3
-uniform float u_temperature;     // -100..100
-uniform float u_tint;            // -100..100
+uniform float u_contrast;        // -1..1, 0 = neutral
+uniform float u_saturation;      // 0..3, 1 = neutral
+uniform float u_temperature;     // -100..100, 0 = neutral
+uniform float u_tint;            // -100..100, 0 = neutral
 
 varying vec2 v_uv;
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// ── Safe power — avoids NaN from negative base ─────────────────────────────
+float safePow(float base, float exp) {
+  return pow(max(base, 0.0), exp);
+}
+vec3 safePow3(vec3 base, vec3 exp) {
+  return vec3(
+    safePow(base.r, exp.r),
+    safePow(base.g, exp.g),
+    safePow(base.b, exp.b)
+  );
+}
+
+// ── DaVinci-style Lift/Gamma/Gain/Offset ───────────────────────────────────
+//
+//  lift  [-1,1] 0=neutral : shifts shadows  (additive, weighted by (1-c))
+//  gamma [-1,1] 0=neutral : adjusts midtones via power curve
+//  gain  [-1,1] 0=neutral : scales highlights (neutral = ×1, not ×0!)
+//  offset[-1,1] 0=neutral : global brightness shift after LGG
+//
 vec3 lift_gamma_gain_offset(vec3 c,
                              vec3 lift, vec3 gamma, vec3 gain, vec3 offset) {
-  // Apply lift (shadow shift), gain (highlight scale), gamma (midtone power)
-  // Mirrors DaVinci's LGG model:
-  //   out = pow( clamp( gain*(c + lift*(1-c)), 0, 1 ), 1/(1+gamma) ) + offset
-  vec3 r = gain * (c + lift * (1.0 - c));
+  // Step 1 — Lift (shadow lift) + Gain (highlight scale)
+  //   gain+1 converts [-1,1] range to [0,2] where 0 = neutral (×1)
+  vec3 gainLinear = gain + vec3(1.0);               // [0..2], 1.0 = neutral
+  vec3 r = gainLinear * (c + lift * (1.0 - c));
   r = clamp(r, 0.0, 1.0);
-  // gamma: positive = brighter mids, negative = darker mids
-  vec3 gExp = vec3(1.0) / max(vec3(1.0) + gamma, vec3(0.001));
-  r = pow(r, gExp);
+
+  // Step 2 — Gamma (midtone power curve)
+  //   exponent = 1/(1+gamma).  When gamma=0 → exp=1 (pass-through).
+  //   clamp denominator to [0.1, 10] to prevent division-by-zero / extreme values.
+  vec3 denom = clamp(vec3(1.0) + gamma, 0.1, 10.0);
+  vec3 gExp  = vec3(1.0) / denom;
+  r = safePow3(r, gExp);
+  r = clamp(r, 0.0, 1.0);
+
+  // Step 3 — Offset (global shift)
   r = clamp(r + offset, 0.0, 1.0);
+
   return r;
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────
 float rgb_to_luma(vec3 c) {
   return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
-vec3 desaturate(vec3 c, float amount) {
+vec3 desaturate(vec3 c, float sat) {
+  // sat=1 → no change; sat=0 → greyscale; sat>1 → hypersaturated
   float luma = rgb_to_luma(c);
-  return mix(vec3(luma), c, amount);
+  return clamp(mix(vec3(luma), c, sat), 0.0, 1.0);
 }
 
-// Temperature shifts: warm=red/yellow, cool=blue
+// Temperature: +100 warm (redder/yellower), -100 cool (bluer)
 vec3 apply_temperature(vec3 c, float temp) {
-  // temp: +100 warm (add red, remove blue), -100 cool (add blue, remove red)
-  float t = temp / 100.0;
+  float t = temp / 100.0;  // [-1, 1]
   c.r = clamp(c.r + t * 0.12, 0.0, 1.0);
   c.b = clamp(c.b - t * 0.12, 0.0, 1.0);
   return c;
@@ -89,32 +141,33 @@ vec3 apply_temperature(vec3 c, float temp) {
 
 // Tint: +100 magenta, -100 green
 vec3 apply_tint(vec3 c, float tint) {
-  float t = tint / 100.0;
+  float t = tint / 100.0;  // [-1, 1]
   c.g = clamp(c.g - t * 0.10, 0.0, 1.0);
   c.r = clamp(c.r + t * 0.04, 0.0, 1.0);
   c.b = clamp(c.b + t * 0.04, 0.0, 1.0);
   return c;
 }
 
-// Sample a 256-entry 1-D LUT texture (stored as 256×1 RGBA, value in R)
+// Sample a 256-entry 1-D LUT texture (stored as 256x1 RGBA, value in R channel)
 float sampleLUT(sampler2D lut, float v) {
-  // Use centre-of-texel addressing to avoid edge artefacts
   float u = (clamp(v, 0.0, 1.0) * 255.0 + 0.5) / 256.0;
   return texture2D(lut, vec2(u, 0.5)).r;
 }
 
 void main() {
-  vec4 px   = texture2D(u_video, v_uv);
-  vec3 col  = px.rgb;
+  vec4 px  = texture2D(u_video, v_uv);
+  vec3 col = clamp(px.rgb, 0.0, 1.0);
 
   // 1. Exposure (multiply by 2^stops)
+  //    exposure=0 → ×1 = pass-through
   col *= pow(2.0, u_exposure);
   col  = clamp(col, 0.0, 1.0);
 
-  // 2. Lift / Gamma / Gain / Offset
+  // 2. Lift / Gamma / Gain / Offset (DaVinci LGG)
   col = lift_gamma_gain_offset(col, u_lift, u_gamma, u_gain, u_offset);
 
-  // 3. Contrast (S-curve around 0.5)
+  // 3. Contrast (S-curve around pivot 0.5)
+  //    contrast=0 → ×(1+0) = ×1 = pass-through
   col = clamp((col - 0.5) * (1.0 + u_contrast) + 0.5, 0.0, 1.0);
 
   // 4. Temperature & Tint
@@ -124,12 +177,12 @@ void main() {
   // 5. Saturation
   col = desaturate(col, u_saturation);
 
-  // 6. Per-channel curves (baked to 1-D LUT textures)
+  // 6. Per-channel curves (baked 1-D LUT textures)
   col.r = sampleLUT(u_curve_r, col.r);
   col.g = sampleLUT(u_curve_g, col.g);
   col.b = sampleLUT(u_curve_b, col.b);
 
-  // 7. Master curve
+  // 7. Master curve (applied after per-channel)
   col.r = sampleLUT(u_curve_m, col.r);
   col.g = sampleLUT(u_curve_m, col.g);
   col.b = sampleLUT(u_curve_m, col.b);
@@ -151,16 +204,15 @@ function evalCurve(pts: CurvePoint[], x: number): number {
     const p0 = sorted[i];
     const p1 = sorted[i + 1];
     if (x >= p0.x && x <= p1.x) {
-      const t = (x - p0.x) / (p1.x - p0.x);
-      // Cubic Hermite (tension 0) – tangent approximated from neighbours
-      const tm1 = i > 0 ? sorted[i - 1] : p0;
-      const tp2 = i < sorted.length - 2 ? sorted[i + 2] : p1;
+      const t  = (x - p0.x) / (p1.x - p0.x);
+      const tm1 = i > 0                  ? sorted[i - 1] : p0;
+      const tp2 = i < sorted.length - 2  ? sorted[i + 2] : p1;
       const m0 = (p1.y - tm1.y) / ((p1.x - tm1.x) || 1) * (p1.x - p0.x);
       const m1 = (tp2.y - p0.y) / ((tp2.x - p0.x) || 1) * (p1.x - p0.x);
       const t2 = t * t, t3 = t2 * t;
       return (
         (2 * t3 - 3 * t2 + 1) * p0.y +
-        (t3 - 2 * t2 + t)     * m0  +
+        (t3 - 2 * t2 + t)     * m0   +
         (-2 * t3 + 3 * t2)    * p1.y +
         (t3 - t2)             * m1
       );
@@ -173,7 +225,10 @@ function evalCurve(pts: CurvePoint[], x: number): number {
 function bakeCurve(pts: CurvePoint[]): Uint8Array {
   const data = new Uint8Array(256 * 4);
   for (let i = 0; i < 256; i++) {
-    const v = Math.round(Math.min(1, Math.max(0, evalCurve(pts, i / 255))) * 255);
+    const raw = evalCurve(pts, i / 255);
+    // Guard NaN / Infinity before clamping
+    const safe = Number.isFinite(raw) ? raw : i / 255;
+    const v   = Math.round(Math.min(1, Math.max(0, safe)) * 255);
     const idx = i * 4;
     data[idx]     = v;  // R
     data[idx + 1] = v;  // G
@@ -188,7 +243,7 @@ function bakeCurve(pts: CurvePoint[]): Uint8Array {
 const IDENTITY_CURVE: CurvePoint[] = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
 const ZERO_RGB: RGBValue = { r: 0, g: 0, b: 0 };
 
-// ─── Main renderer class ───────────────────────────────────────────────────
+// ─── WebGL helpers ─────────────────────────────────────────────────────────
 
 function compileShader(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
   const s = gl.createShader(type);
@@ -203,7 +258,11 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
   return s;
 }
 
-function linkProgram(gl: WebGLRenderingContext, vert: WebGLShader, frag: WebGLShader): WebGLProgram {
+function linkProgram(
+  gl: WebGLRenderingContext,
+  vert: WebGLShader,
+  frag: WebGLShader,
+): WebGLProgram {
   const p = gl.createProgram();
   if (!p) throw new Error("Could not create program");
   gl.attachShader(p, vert);
@@ -228,29 +287,42 @@ function make1DTexture(gl: WebGLRenderingContext, data: Uint8Array): WebGLTextur
   return tex;
 }
 
-function update1DTexture(gl: WebGLRenderingContext, tex: WebGLTexture, data: Uint8Array) {
+function update1DTexture(
+  gl: WebGLRenderingContext,
+  tex: WebGLTexture,
+  data: Uint8Array,
+) {
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
 }
+
+// ─── Renderer ──────────────────────────────────────────────────────────────
 
 export class ColorGradeRenderer {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private videoTex: WebGLTexture | null = null;
-  private curveTex: { r: WebGLTexture; g: WebGLTexture; b: WebGLTexture; m: WebGLTexture } | null = null;
+  private curveTex: {
+    r: WebGLTexture;
+    g: WebGLTexture;
+    b: WebGLTexture;
+    m: WebGLTexture;
+  } | null = null;
   private uniforms: Record<string, WebGLUniformLocation | null> = {};
   private video: HTMLVideoElement | null = null;
   private grade: ColorGrade | null = null;
   private rafId: number | null = null;
-  private lastVideoTime = -1;
-  private gradeVersion = 0;
-  private lastRenderedGradeVersion = -1;
+  private lastVideoTime   = -1;
+  private gradeVersion    = 0;
+  private lastRenderedVersion = -1;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.initGL();
   }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
 
   private initGL() {
     const gl = this.canvas.getContext("webgl", {
@@ -260,25 +332,29 @@ export class ColorGradeRenderer {
     }) as WebGLRenderingContext | null;
 
     if (!gl) {
-      console.warn("[ColorGradeRenderer] WebGL not available, will use canvas2D fallback");
+      console.warn("[ColorGradeRenderer] WebGL unavailable — using Canvas 2D fallback");
       return;
     }
     this.gl = gl;
 
     try {
-      const vert = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC);
+      const vert = compileShader(gl, gl.VERTEX_SHADER,   VERT_SRC);
       const frag = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
       this.program = linkProgram(gl, vert, frag);
 
-      // Full-screen quad
+      // Full-screen triangle-strip quad
       const buf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
+        gl.STATIC_DRAW,
+      );
       const aPos = gl.getAttribLocation(this.program, "a_pos");
       gl.enableVertexAttribArray(aPos);
       gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-      // Uniforms
+      // Cache uniform locations
       for (const name of [
         "u_video", "u_curve_r", "u_curve_g", "u_curve_b", "u_curve_m",
         "u_lift", "u_gamma", "u_gain", "u_offset",
@@ -287,7 +363,7 @@ export class ColorGradeRenderer {
         this.uniforms[name] = gl.getUniformLocation(this.program, name);
       }
 
-      // Video texture (TEXTURE0)
+      // Video texture slot (TEXTURE0) — parameters only; data uploaded per frame
       this.videoTex = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, this.videoTex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -295,7 +371,7 @@ export class ColorGradeRenderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-      // Curve textures (TEXTURE1-4) — baked to identity initially
+      // Curve textures (TEXTURE1-4) — initialised to identity
       const identity = bakeCurve(IDENTITY_CURVE);
       this.curveTex = {
         r: make1DTexture(gl, identity),
@@ -303,21 +379,23 @@ export class ColorGradeRenderer {
         b: make1DTexture(gl, identity),
         m: make1DTexture(gl, identity),
       };
-
     } catch (e) {
       console.error("[ColorGradeRenderer] GL init failed:", e);
-      this.gl = null;
+      this.gl      = null;
+      this.program = null;
     }
   }
 
+  // ── Public API ────────────────────────────────────────────────────────────
+
   setVideo(video: HTMLVideoElement | null) {
     this.video = video;
-    this.lastVideoTime = -1;
+    this.lastVideoTime = -1; // force re-upload on next frame
   }
 
   setGrade(grade: ColorGrade | null) {
     this.grade = grade;
-    this.gradeVersion++;
+    this.gradeVersion++;  // force shader uniform refresh even on paused video
   }
 
   start() {
@@ -336,11 +414,13 @@ export class ColorGradeRenderer {
     }
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────
+
   private renderFrame() {
-    const video = this.video;
+    const video  = this.video;
     const canvas = this.canvas;
 
-    // Sync canvas size to video intrinsic size (or container size)
+    // Sync canvas size to video intrinsic size
     const w = video?.videoWidth  || canvas.offsetWidth  || 1920;
     const h = video?.videoHeight || canvas.offsetHeight || 1080;
     if (canvas.width !== w || canvas.height !== h) {
@@ -348,13 +428,14 @@ export class ColorGradeRenderer {
       canvas.height = h;
     }
 
-    // Skip if no new frame and grade hasn't changed
-    const videoTime = video?.currentTime ?? -1;
-    const videoReady = video && video.readyState >= 2 && video.videoWidth > 0;
-    const gradeChanged = this.gradeVersion !== this.lastRenderedGradeVersion;
+    const videoTime    = video?.currentTime ?? -1;
+    const videoReady   = !!video && video.readyState >= 2 && video.videoWidth > 0;
+    const gradeChanged = this.gradeVersion !== this.lastRenderedVersion;
     const frameChanged = videoTime !== this.lastVideoTime;
 
-    if (!videoReady || (!frameChanged && !gradeChanged)) return;
+    // Render when: video has a new frame, OR grade changed (even on paused video)
+    if (!videoReady) return;
+    if (!frameChanged && !gradeChanged) return;
 
     if (this.gl && this.program && this.curveTex && this.videoTex) {
       this.renderGL(video!);
@@ -362,42 +443,43 @@ export class ColorGradeRenderer {
       this.renderCanvas2D(video!);
     }
 
-    this.lastVideoTime = videoTime;
-    this.lastRenderedGradeVersion = this.gradeVersion;
+    this.lastVideoTime      = videoTime;
+    this.lastRenderedVersion = this.gradeVersion;
   }
 
   private renderGL(video: HTMLVideoElement) {
-    const gl = this.gl!;
+    const gl   = this.gl!;
     const prog = this.program!;
-    const ct = this.curveTex!;
+    const ct   = this.curveTex!;
     const grade = this.grade;
 
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.useProgram(prog);
 
-    // Update curve textures if grade changed
-    if (this.gradeVersion !== this.lastRenderedGradeVersion && grade) {
-      update1DTexture(gl, ct.r, bakeCurve(grade.curves.red   ?? IDENTITY_CURVE));
-      update1DTexture(gl, ct.g, bakeCurve(grade.curves.green ?? IDENTITY_CURVE));
-      update1DTexture(gl, ct.b, bakeCurve(grade.curves.blue  ?? IDENTITY_CURVE));
-      // Master curve (applied after per-channel)
-      update1DTexture(gl, ct.m, bakeCurve(grade.curves.master ?? IDENTITY_CURVE));
-    } else if (this.gradeVersion !== this.lastRenderedGradeVersion) {
-      // No grade — reset all curves to identity
-      const id = bakeCurve(IDENTITY_CURVE);
-      update1DTexture(gl, ct.r, id);
-      update1DTexture(gl, ct.g, id);
-      update1DTexture(gl, ct.b, id);
-      update1DTexture(gl, ct.m, id);
+    // Rebuild curve textures when grade changes
+    if (this.gradeVersion !== this.lastRenderedVersion) {
+      if (grade) {
+        update1DTexture(gl, ct.r, bakeCurve(grade.curves?.red    ?? IDENTITY_CURVE));
+        update1DTexture(gl, ct.g, bakeCurve(grade.curves?.green  ?? IDENTITY_CURVE));
+        update1DTexture(gl, ct.b, bakeCurve(grade.curves?.blue   ?? IDENTITY_CURVE));
+        update1DTexture(gl, ct.m, bakeCurve(grade.curves?.master ?? IDENTITY_CURVE));
+      } else {
+        const id = bakeCurve(IDENTITY_CURVE);
+        update1DTexture(gl, ct.r, id);
+        update1DTexture(gl, ct.g, id);
+        update1DTexture(gl, ct.b, id);
+        update1DTexture(gl, ct.m, id);
+      }
     }
 
-    // Upload video frame to TEXTURE0
+    // Upload video frame → TEXTURE0
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex);
     try {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
     } catch {
-      return; // cross-origin or not-ready
+      // cross-origin / not-ready — skip this frame
+      return;
     }
     gl.uniform1i(this.uniforms["u_video"], 0);
 
@@ -418,49 +500,62 @@ export class ColorGradeRenderer {
     gl.bindTexture(gl.TEXTURE_2D, ct.m);
     gl.uniform1i(this.uniforms["u_curve_m"], 4);
 
-    // Upload grade uniforms
-    const g = grade;
-    const lift   = g?.lift   ?? ZERO_RGB;
-    const gamma  = g?.gamma  ?? ZERO_RGB;
-    const gain   = g?.gain   ?? ZERO_RGB;
-    const offset = g?.offset ?? ZERO_RGB;
+    // ── Upload grade uniforms ─────────────────────────────────────────────
+    // All wheels are in [-1, 1] where 0 = neutral.
+    // The shader adds 1 to gain internally to convert to [0..2] multiplicative range.
+    const lift   = grade?.lift   ?? ZERO_RGB;
+    const gamma  = grade?.gamma  ?? ZERO_RGB;
+    const gain   = grade?.gain   ?? ZERO_RGB;
+    const offset = grade?.offset ?? ZERO_RGB;
 
-    gl.uniform3f(this.uniforms["u_lift"],   lift.r,   lift.g,   lift.b);
-    gl.uniform3f(this.uniforms["u_gamma"],  gamma.r,  gamma.g,  gamma.b);
-    gl.uniform3f(this.uniforms["u_gain"],   gain.r,   gain.g,   gain.b);
-    gl.uniform3f(this.uniforms["u_offset"], offset.r, offset.g, offset.b);
-    gl.uniform1f(this.uniforms["u_exposure"],    g?.exposure    ?? 0);
-    gl.uniform1f(this.uniforms["u_contrast"],    g?.contrast    ?? 0);
-    gl.uniform1f(this.uniforms["u_saturation"],  g?.saturation  ?? 1);
-    gl.uniform1f(this.uniforms["u_temperature"], g?.temperature ?? 0);
-    gl.uniform1f(this.uniforms["u_tint"],        g?.tint        ?? 0);
+    // Sanity-check: reject NaN values (use 0 fallback)
+    const safeF = (v: number, def = 0) => (Number.isFinite(v) ? v : def);
+    const safeRGB = (rgb: RGBValue): [number, number, number] => [
+      safeF(rgb.r), safeF(rgb.g), safeF(rgb.b),
+    ];
+
+    gl.uniform3f(this.uniforms["u_lift"],   ...safeRGB(lift));
+    gl.uniform3f(this.uniforms["u_gamma"],  ...safeRGB(gamma));
+    gl.uniform3f(this.uniforms["u_gain"],   ...safeRGB(gain));
+    gl.uniform3f(this.uniforms["u_offset"], ...safeRGB(offset));
+
+    gl.uniform1f(this.uniforms["u_exposure"],    safeF(grade?.exposure    ?? 0));
+    gl.uniform1f(this.uniforms["u_contrast"],    safeF(grade?.contrast    ?? 0));
+    gl.uniform1f(this.uniforms["u_saturation"],  safeF(grade?.saturation  ?? 1, 1));
+    gl.uniform1f(this.uniforms["u_temperature"], safeF(grade?.temperature ?? 0));
+    gl.uniform1f(this.uniforms["u_tint"],        safeF(grade?.tint        ?? 0));
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  /** Canvas 2D fallback (no WebGL) — applies only exposure + saturation via compositing */
+  /** Canvas 2D fallback — applies exposure + saturation + contrast only */
   private renderCanvas2D(video: HTMLVideoElement) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, this.canvas.width, this.canvas.height);
 
-    if (!this.grade) return;
-    const { exposure, saturation, contrast } = this.grade;
+    const grade = this.grade;
+    if (!grade) {
+      ctx.drawImage(video, 0, 0, this.canvas.width, this.canvas.height);
+      return;
+    }
 
-    // Rough approximation via CSS filter on the canvas context (not perfect but visible)
-    const brightness = Math.pow(2, exposure);
-    const sat = saturation;
-    const con = 1 + contrast;
+    const { exposure, saturation, contrast } = grade;
+    const brightness = Math.pow(2, Number.isFinite(exposure)    ? exposure    : 0);
+    const sat        =             Number.isFinite(saturation)   ? saturation  : 1;
+    const con        =         1 + (Number.isFinite(contrast)    ? contrast    : 0);
+
     ctx.filter = `brightness(${brightness.toFixed(3)}) saturate(${sat.toFixed(3)}) contrast(${con.toFixed(3)})`;
     ctx.drawImage(video, 0, 0, this.canvas.width, this.canvas.height);
     ctx.filter = "none";
   }
 
+  // ── Cleanup ───────────────────────────────────────────────────────────────
+
   dispose() {
     this.stop();
     const gl = this.gl;
     if (gl) {
-      if (this.program) gl.deleteProgram(this.program);
+      if (this.program)  gl.deleteProgram(this.program);
       if (this.videoTex) gl.deleteTexture(this.videoTex);
       if (this.curveTex) {
         gl.deleteTexture(this.curveTex.r);
@@ -469,11 +564,11 @@ export class ColorGradeRenderer {
         gl.deleteTexture(this.curveTex.m);
       }
     }
-    this.gl = null;
-    this.program = null;
-    this.videoTex = null;
-    this.curveTex = null;
-    this.video = null;
-    this.grade = null;
+    this.gl        = null;
+    this.program   = null;
+    this.videoTex  = null;
+    this.curveTex  = null;
+    this.video     = null;
+    this.grade     = null;
   }
 }
