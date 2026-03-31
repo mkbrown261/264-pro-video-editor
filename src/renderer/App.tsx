@@ -176,8 +176,9 @@ export default function App() {
   const voiceChopRef = useRef<VoiceChopAI | null>(null);
 
   // ── Derived state ──────────────────────────────────────────────────────────
+  // Build segments once and reuse — avoids double-build (buildTrackLayouts would rebuild internally)
   const segments = buildTimelineSegments(project.sequence, project.assets);
-  const trackLayouts = buildTrackLayouts(project.sequence, project.assets);
+  const trackLayouts = buildTrackLayouts(project.sequence, project.assets, segments);
   const totalFrames = getTotalDurationFrames(segments);
   const activeSegment = findPlayableSegmentAtFrame(segments, playback.playheadFrame, "video");
   const activeAudioSegment = findPlayableSegmentAtFrame(segments, playback.playheadFrame, "audio");

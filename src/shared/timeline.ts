@@ -166,9 +166,10 @@ export function buildTimelineSegments(
 
 export function buildTrackLayouts(
   sequence: TimelineSequence,
-  assets: MediaAsset[]
+  assets: MediaAsset[],
+  prebuiltSegments?: TimelineSegment[]
 ): TimelineTrackLayout[] {
-  const segments = buildTimelineSegments(sequence, assets);
+  const segments = prebuiltSegments ?? buildTimelineSegments(sequence, assets);
 
   return sequence.tracks.map((track, trackIndex) => ({
     track,
