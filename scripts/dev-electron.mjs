@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { watch, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -14,13 +15,20 @@ const MAIN_JS = join(ROOT, "dist-electron", "electron", "main.js");
 const PRELOAD_CJS = join(ROOT, "dist-electron", "electron", "preload.cjs");
 const VITE_URL = process.env.VITE_DEV_SERVER_URL ?? "http://localhost:5173";
 
+// Use the same resolution logic as the official electron package
 function getElectronBin() {
-  const pathTxt = join(ROOT, "node_modules", "electron", "path.txt");
-  if (existsSync(pathTxt)) {
-    const rel = readFileSync(pathTxt, "utf8").trim();
-    return join(ROOT, "node_modules", "electron", rel);
+  try {
+    const require = createRequire(import.meta.url);
+    return require("electron");
+  } catch {
+    // fallback
+    const pathTxt = join(ROOT, "node_modules", "electron", "path.txt");
+    if (existsSync(pathTxt)) {
+      const rel = readFileSync(pathTxt, "utf8").trim();
+      return join(ROOT, "node_modules", "electron", "dist", rel);
+    }
+    return "electron";
   }
-  return "electron";
 }
 
 let electronProcess = null;
@@ -39,6 +47,7 @@ function startElectron() {
     console.log("[dev] Starting Electron ...");
   }
   const bin = getElectronBin();
+  console.log("[dev] Electron binary:", bin);
   electronProcess = spawn(bin, ["."], {
     cwd: ROOT,
     stdio: "inherit",
@@ -50,6 +59,7 @@ function startElectron() {
   });
   electronProcess.on("error", (err) => {
     console.error("[dev] Failed to start Electron:", err.message);
+    console.error("[dev] Binary path was:", bin);
     electronProcess = null;
   });
 }
