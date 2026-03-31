@@ -732,11 +732,13 @@ export default function App() {
               role="separator"
             />
 
-            {/* Right: Viewer — always shows live grade for the active clip */}
+            {/* Right: Viewer — shows the INSPECTED/SELECTED clip with its live grade.
+                Use inspectorSegment (selected clip) not activeSegment (playhead position)
+                so grade changes on the selected clip appear in the viewer immediately. */}
             <div className="color-page-viewer">
               <ViewerPanel
                 ref={viewerPanelRef}
-                activeSegment={activeSegment}
+                activeSegment={inspectorSegment ?? activeSegment}
                 activeAudioSegment={activeAudioSegment}
                 segments={segments}
                 selectedAsset={selectedAsset}
@@ -745,7 +747,7 @@ export default function App() {
                 sequenceFps={project.sequence.settings.fps}
                 isPlaying={playback.isPlaying}
                 toolMode={toolMode}
-                colorGrade={activeSegment?.clip.colorGrade ?? null}
+                colorGrade={inspectorSegment?.clip.colorGrade ?? activeSegment?.clip.colorGrade ?? null}
                 activeMaskTool="none"
                 selectedMaskId={null}
                 onAddMask={() => {}}

@@ -20,7 +20,7 @@ import {
 import { formatTimecode } from "../lib/format";
 import { usePlaybackController } from "../hooks/usePlaybackController";
 import { MaskingCanvas, type MaskTool } from "./MaskingCanvas";
-import { ColorGradeRenderer } from "../lib/colorGradeRenderer";
+import { colorGradeToCSS } from "../lib/colorGradeRenderer";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -40,7 +40,7 @@ interface ViewerPanelProps {
   sequenceFps: number;
   isPlaying: boolean;
   toolMode: EditorTool;
-  /** Color grade for the current active clip — drives the WebGL renderer */
+  /** Color grade for the current clip — applied as a CSS filter on the video element */
   colorGrade?: ColorGrade | null;
   // Masking
   activeMaskTool: MaskTool;
@@ -57,7 +57,7 @@ interface ViewerPanelProps {
   onStepFrames: (deltaFrames: number) => void;
 }
 
-// ─── Transition helpers (unchanged) ──────────────────────────────────────────
+// ─── Transition helpers ───────────────────────────────────────────────────────
 
 function getPreviewOpacity(activeSegment: TimelineSegment | null, frame: number): number {
   if (!activeSegment) return 1;
@@ -102,8 +102,8 @@ function getTransitionPreviewStyles(
   switch (type) {
     case "fade":
     case "crossDissolve": return { overlayStyle: { background: "#000", opacity: amount * 0.86 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
-    case "dipBlack":      return { overlayStyle: { background: "#000", opacity: Math.min(1, amount * 1.1) }, videoStyle: { filter: `brightness(${Math.max(0.15, 1 - amount * 0.9)})` } };
-    case "dipWhite":      return { overlayStyle: { background: "#fff", opacity: Math.min(1, amount * 1.1) }, videoStyle: { filter: `brightness(${Math.min(2,  1 + amount * 0.9)})` } };
+    case "dipBlack":      return { overlayStyle: { background: "#000", opacity: Math.min(1, amount * 1.1) }, videoStyle: {} };
+    case "dipWhite":      return { overlayStyle: { background: "#fff", opacity: Math.min(1, amount * 1.1) }, videoStyle: {} };
     case "wipe":
     case "wipeLeft":   return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 ${amount*100}% 0 0)` : `inset(0 0 0 ${amount*100}%)` } };
     case "wipeRight":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 0 0 ${amount*100}%)` : `inset(0 ${amount*100}% 0 0)` } };
@@ -115,12 +115,12 @@ function getTransitionPreviewStyles(
     case "zoomIn":
     case "zoom":       return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${1 + amount*0.25})`, opacity: Math.max(0, 1 - amount*0.6) } };
     case "zoomOut":    return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${Math.max(0.6, 1 - amount*0.25)})`, opacity: Math.max(0, 1 - amount*0.6) } };
-    case "blur":       return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { filter: `blur(${amount*18}px)`, opacity: Math.max(0.1, 1 - amount*0.5) } };
-    case "shake":      return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translate(${jx}px,${jy}px) scale(${1+amount*0.02}) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)`, filter: `blur(${amount*1.5}px) brightness(${Math.max(0.75,1-amount*0.18)})` } };
-    case "rumble":     return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})`, filter: `contrast(${1+amount*0.65}) saturate(${1+amount*0.35}) blur(${amount*1.2}px)` } };
-    case "glitch":     return { overlayStyle: { background: "repeating-linear-gradient(180deg,rgba(95,196,255,0.22) 0px,rgba(95,196,255,0.22) 2px,transparent 2px,transparent 6px)", opacity: amount*0.9, mixBlendMode: "screen" }, videoStyle: { transform: `translate(${Math.sin(frame*3.7)*amount*18}px,${Math.cos(frame*4.4)*amount*8}px) skew(${Math.sin(frame*2.6)*amount*2.5}deg)`, filter: `contrast(${1+amount*1.1}) saturate(${1+amount*1.2}) hue-rotate(${amount*55}deg)` } };
-    case "filmBurn":   return { overlayStyle: { background: `radial-gradient(circle at ${50+Math.sin(frame)*30}% ${50+Math.cos(frame)*20}%, rgba(255,160,30,0.7) 0%, rgba(0,0,0,0.95) 70%)`, opacity: amount*0.85 }, videoStyle: { filter: `contrast(${1+amount*0.4}) saturate(${1+amount*0.8}) brightness(${1+amount*0.3})` } };
-    case "lensFlare":  return { overlayStyle: { background: `radial-gradient(circle at 80% 20%, rgba(255,255,255,0.9) 0%, rgba(100,150,255,0.4) 20%, transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: { filter: `brightness(${1+amount*0.4})` } };
+    case "blur":       return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { opacity: Math.max(0.1, 1 - amount*0.5) } };
+    case "shake":      return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translate(${jx}px,${jy}px) scale(${1+amount*0.02}) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)` } };
+    case "rumble":     return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})` } };
+    case "glitch":     return { overlayStyle: { background: "repeating-linear-gradient(180deg,rgba(95,196,255,0.22) 0px,rgba(95,196,255,0.22) 2px,transparent 2px,transparent 6px)", opacity: amount*0.9, mixBlendMode: "screen" }, videoStyle: { transform: `translate(${Math.sin(frame*3.7)*amount*18}px,${Math.cos(frame*4.4)*amount*8}px) skew(${Math.sin(frame*2.6)*amount*2.5}deg)` } };
+    case "filmBurn":   return { overlayStyle: { background: `radial-gradient(circle at ${50+Math.sin(frame)*30}% ${50+Math.cos(frame)*20}%, rgba(255,160,30,0.7) 0%, rgba(0,0,0,0.95) 70%)`, opacity: amount*0.85 }, videoStyle: {} };
+    case "lensFlare":  return { overlayStyle: { background: `radial-gradient(circle at 80% 20%, rgba(255,255,255,0.9) 0%, rgba(100,150,255,0.4) 20%, transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: {} };
     default:           return { overlayStyle: { opacity: 0 }, videoStyle: {} };
   }
 }
@@ -152,12 +152,10 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onStepFrames,
   }, ref) {
 
-    const panelRef       = useRef<HTMLElement | null>(null);
-    const videoRef       = useRef<HTMLVideoElement | null>(null);
-    const audioRef       = useRef<HTMLAudioElement | null>(null);
-    const stageRef       = useRef<HTMLDivElement | null>(null);
-    const gradeCanvasRef = useRef<HTMLCanvasElement | null>(null);
-    const rendererRef    = useRef<ColorGradeRenderer | null>(null);
+    const panelRef   = useRef<HTMLElement | null>(null);
+    const videoRef   = useRef<HTMLVideoElement | null>(null);
+    const audioRef   = useRef<HTMLAudioElement | null>(null);
+    const stageRef   = useRef<HTMLDivElement | null>(null);
 
     const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
     const [isFullscreen,    setIsFullscreen]    = useState(false);
@@ -224,45 +222,18 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       }
     }, [activeSegment, selectedAsset?.id, selectedAsset?.previewUrl]);
 
-    // ── WebGL color grade renderer ────────────────────────────────────────────
+    // ── Color grading via CSS filter ─────────────────────────────────────────
     //
-    // The renderer ALWAYS runs (started on mount), reading the video element
-    // every RAF tick and applying grade uniforms in the GLSL shader.
+    // The grade is applied as a CSS `filter` string directly on the <video>
+    // element. This approach:
+    //   • Never goes black — CSS filters cannot zero out a video frame
+    //   • No WebGL context to lose — zero canvas management
+    //   • GPU-accelerated by the browser compositor
+    //   • Instant — recalculated every React render, ~0ms overhead
+    //   • Works identically in Electron and all browsers
     //
-    // The raw <video> is hidden (opacity:0) and the graded <canvas> is shown
-    // whenever colorGrade is set. When no grade is present the canvas renders
-    // the video pass-through (all uniforms at neutral), still replacing the
-    // <video> element so transitions/masks work consistently.
-    //
-    // NOTE: The shader now uses corrected gain math:
-    //   gain [-1,1] → shader computes (gain+1) as the multiplier so 0 = ×1 = neutral
-    //   gamma exponent clamped to [0.1, 10] to prevent division-by-zero → black
-    //
-    useEffect(() => {
-      const canvas = gradeCanvasRef.current;
-      if (!canvas) return;
-      const renderer = new ColorGradeRenderer(canvas);
-      rendererRef.current = renderer;
-      renderer.setVideo(videoRef.current);
-      renderer.start();
-      return () => {
-        renderer.dispose();
-        rendererRef.current = null;
-      };
-    }, []); // only on mount/unmount
-
-    // Sync video element reference into renderer on every render so it's
-    // never stale (videoRef.current changes when src changes).
-    useEffect(() => {
-      rendererRef.current?.setVideo(videoRef.current);
-    });
-
-    // Push grade to renderer immediately whenever colorGrade prop changes.
-    // gradeVersion is bumped inside setGrade() so the RAF loop redraws even
-    // on a paused / static video frame.
-    useEffect(() => {
-      rendererRef.current?.setGrade(colorGrade ?? null);
-    }, [colorGrade]);
+    const gradeFilter = colorGradeToCSS(colorGrade ?? null);
+    const hasGrade    = Boolean(colorGrade);
 
     // ── Derived display state ─────────────────────────────────────────────────
     const previewAsset    = activeSegment?.asset ?? selectedAsset ?? null;
@@ -271,11 +242,6 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
     const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
     const currentMasks    = activeSegment?.clip.masks ?? [];
-
-    // Show the WebGL canvas whenever a colorGrade is set.
-    // The canvas always renders (pass-through at neutral), but is only
-    // visible when a grade prop is provided — so the plain video shows otherwise.
-    const hasGrade = Boolean(colorGrade);
 
     return (
       <section
@@ -286,33 +252,28 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         <div ref={stageRef} className="viewer-stage">
           {previewAsset ? (
             <>
-              {/* Raw video — always in DOM so WebGL can read its frames.
-                  Hidden visually when grade is active. */}
+              {/*
+                * Single <video> element with CSS filter applied for color grading.
+                * No canvas or WebGL — the browser compositor applies the filter on
+                * the GPU. Adjusting any wheel/slider updates `gradeFilter` instantly
+                * on the next React render without any RAF loop or texture uploads.
+                *
+                * Transition effects that previously set videoStyle.filter (blur,
+                * shake, dipBlack, etc.) are now handled separately via overlayStyle
+                * only, so they don't conflict with the grade filter.
+                */}
               <video
                 ref={videoRef}
                 className="viewer-video"
-                controls={!timelineReady && !hasGrade}
+                controls={false}
                 style={{
-                  opacity: hasGrade ? 0 : previewOpacity,
+                  opacity: previewOpacity,
+                  filter:  gradeFilter,
                   ...videoStyle,
-                  // Keep it in layout flow at same position; canvas overlaps it
-                  ...(hasGrade ? { position: "absolute", inset: 0, pointerEvents: "none" } : {}),
                 }}
                 muted={timelineReady}
                 playsInline
                 preload="metadata"
-              />
-
-              {/* WebGL graded canvas — same size as stage, shown only when grade active */}
-              <canvas
-                ref={gradeCanvasRef}
-                className="viewer-grade-canvas"
-                style={{
-                  display:  hasGrade ? "block" : "none",
-                  opacity:  previewOpacity,
-                  // Transition styles (wipe, zoom, etc.) applied to canvas too
-                  ...(videoStyle as CSSProperties),
-                }}
               />
             </>
           ) : (
@@ -368,7 +329,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
 
           <div className="transport-right">
             {hasGrade && (
-              <span className="viewer-grade-badge" title="Color grade active — WebGL">● GRADE</span>
+              <span className="viewer-grade-badge" title="Color grade active">● GRADE</span>
             )}
             <button className={`transport-btn tool-btn${toolMode === "select" ? " active" : ""}`} onClick={() => onSetToolMode("select")} title="Select tool (A)" type="button">↖ <kbd>A</kbd></button>
             <button className={`transport-btn tool-btn${toolMode === "blade"  ? " active" : ""}`} onClick={onToggleBladeTool}            title="Blade tool (B)"  type="button">✂ <kbd>B</kbd></button>

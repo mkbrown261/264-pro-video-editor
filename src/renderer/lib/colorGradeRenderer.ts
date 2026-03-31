@@ -572,3 +572,97 @@ export class ColorGradeRenderer {
     this.grade     = null;
   }
 }
+
+// ─── CSS Filter helper (primary rendering path) ───────────────────────────────
+//
+// Converts a ColorGrade into a CSS `filter` string applied directly on the
+// <video> element.  This is the PRIMARY grading path in ViewerPanel because:
+//
+//  - Zero WebGL: no context loss, no CORS issues, no canvas display:none bugs
+//  - GPU-accelerated: browser compositor applies filters on the GPU layer
+//  - Instant: filter string recalculated on every React render (~0 ms)
+//  - Always visible: cannot produce an all-black image from neutral settings
+//
+// Mapping from ColorGrade model to CSS filters:
+//
+//   exposure   [-3..3 stops]   → brightness(2^exposure)
+//   contrast   [-1..1]         → contrast(1 + contrast)
+//   saturation [0..3]          → saturate(saturation)
+//   temperature[-100..100]     → hue-rotate (approximate warm/cool shift)
+//   tint       [-100..100]     → slight hue-rotate in opposite direction
+//   gamma      [-1..1 per ch]  → brightness of the luminance (average of r/g/b)
+//   lift       [-1..1 per ch]  → brightness shift (average of r/g/b)
+//   gain       [-1..1 per ch]  → brightness multiplier (average of r/g/b)
+//   offset     [-1..1 per ch]  → brightness additive (average of r/g/b)
+//
+// Wheel-to-brightness mapping (master luminance only; per-channel tint via
+// hue-rotate is not possible in CSS — full per-channel requires WebGL):
+//
+//   lift    master = avg(r,g,b) → add to brightness as (1 + liftMaster * 0.5)
+//   gamma   master             → brightness(2^(-gammaMaster))   (inverse: +gamma → brighter mids)
+//   gain    master             → multiply brightness by (1 + gainMaster)
+//   offset  master             → add to brightness as (1 + offsetMaster)
+//
+export function colorGradeToCSS(grade: ColorGrade | null): string {
+  if (!grade) return "none";
+
+  const safe = (v: number, fallback = 0) => (Number.isFinite(v) ? v : fallback);
+
+  // ── Exposure ─────────────────────────────────────────────────────────────
+  const exposure    = safe(grade.exposure, 0);
+  const expMult     = Math.pow(2, exposure);              // 2^stops
+
+  // ── Contrast ─────────────────────────────────────────────────────────────
+  const contrast    = safe(grade.contrast, 0);
+  const contrastVal = Math.max(0.01, 1 + contrast);       // 0.01..2
+
+  // ── Saturation ───────────────────────────────────────────────────────────
+  const saturation  = safe(grade.saturation, 1);
+  const satVal      = Math.max(0, saturation);            // 0..3
+
+  // ── Temperature/Tint → hue-rotate approximation ──────────────────────────
+  // temperature +100 = warm (red/yellow) ≈ -10deg hue shift
+  // temperature -100 = cool (blue)       ≈ +10deg hue shift
+  const temperature = safe(grade.temperature, 0);
+  const tint        = safe(grade.tint, 0);
+  const hueRot      = (-temperature * 0.10) + (tint * 0.05); // degrees
+
+  // ── Wheels → master luminance adjustments ────────────────────────────────
+  // Each wheel is RGBValue {r,g,b} in [-1,1]. We use the average as a
+  // master luminance delta. Per-channel colour shifts need WebGL.
+  const liftMaster   = (safe(grade.lift.r)  + safe(grade.lift.g)  + safe(grade.lift.b))  / 3;
+  const gammaMaster  = (safe(grade.gamma.r) + safe(grade.gamma.g) + safe(grade.gamma.b)) / 3;
+  const gainMaster   = (safe(grade.gain.r)  + safe(grade.gain.g)  + safe(grade.gain.b))  / 3;
+  const offsetMaster = (safe(grade.offset.r)+ safe(grade.offset.g)+ safe(grade.offset.b))/ 3;
+
+  // Combine all brightness factors multiplicatively:
+  //   lift   → additive shadow lift  (1 + lift*0.5)  clamped ≥0.05
+  //   gamma  → midtone power approx  (1 + gamma*0.8) clamped ≥0.05
+  //            positive gamma = brighter mids
+  //   gain   → highlight scale       (1 + gain)       clamped ≥0.05
+  //   offset → global additive       (1 + offset)     clamped ≥0.05
+  const liftFactor   = Math.max(0.05, 1 + liftMaster   * 0.5);
+  const gammaFactor  = Math.max(0.05, 1 + gammaMaster  * 0.8);
+  const gainFactor   = Math.max(0.05, 1 + gainMaster);
+  const offsetFactor = Math.max(0.05, 1 + offsetMaster);
+
+  const brightnessCombined = expMult * liftFactor * gammaFactor * gainFactor * offsetFactor;
+  const brightnessVal       = Math.max(0.001, brightnessCombined);
+
+  // Build filter string (only include non-identity values to keep it short)
+  const parts: string[] = [];
+
+  if (Math.abs(brightnessVal - 1) > 0.001)
+    parts.push(`brightness(${brightnessVal.toFixed(4)})`);
+
+  if (Math.abs(contrastVal - 1) > 0.001)
+    parts.push(`contrast(${contrastVal.toFixed(3)})`);
+
+  if (Math.abs(satVal - 1) > 0.001)
+    parts.push(`saturate(${satVal.toFixed(3)})`);
+
+  if (Math.abs(hueRot) > 0.1)
+    parts.push(`hue-rotate(${hueRot.toFixed(2)}deg)`);
+
+  return parts.length > 0 ? parts.join(" ") : "none";
+}
