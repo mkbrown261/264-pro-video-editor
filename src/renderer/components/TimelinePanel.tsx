@@ -242,6 +242,11 @@ export function TimelinePanel({
   const ghostInfoRef = useRef<GhostInfo | null>(null);
   const [dropTargetTrackId, setDropTargetTrackId]   = useState<string | null>(null);
 
+  // Magnetic snap indicator: frame where snap line is shown (null = no snap active)
+  const [snapIndicatorFrame, setSnapIndicatorFrame] = useState<number | null>(null);
+  // Pixel threshold for magnetic snap-to-edge/playhead to engage
+  const MAGNETIC_SNAP_PX = 10;
+
   // ── Track reorder drag ────────────────────────────────────────────────────
   const [trackReorderDrag, setTrackReorderDrag] = useState<{
     trackId: string;
@@ -552,6 +557,52 @@ export function TimelinePanel({
 
     const onMove = (e: MouseEvent) => {
       const g = resolveGhostAt(e.clientX, e.clientY);
+
+      // ── Magnetic snap-to-edges + snap-to-playhead ─────────────────────────
+      // Only applies when dragging onto an existing track (DRAG_ON_TRACK intent)
+      if (g && g.intent === "DRAG_ON_TRACK" && snapRef.current.snapEnabled) {
+        const ppf = ppfRef.current;
+        // Collect all candidate snap points: every clip edge + the playhead
+        const candidates: number[] = [];
+
+        // All clip edges from all visible lanes
+        document.querySelectorAll<HTMLElement>(".timeline-clip").forEach((el) => {
+          const left  = parseFloat(el.style.left  ?? "0");
+          const width = parseFloat(el.style.width ?? "0");
+          if (!isNaN(left))         candidates.push(Math.round(left  / ppf));
+          if (!isNaN(left + width)) candidates.push(Math.round((left + width) / ppf));
+        });
+
+        // Playhead — get current playhead frame from DOM
+        const currentPlayhead = (() => {
+          const ph = document.querySelector<HTMLElement>(".timeline-playhead");
+          if (!ph) return null;
+          return Math.round(parseFloat(ph.style.left ?? "0") / ppf);
+        })();
+        if (currentPlayhead !== null) candidates.push(currentPlayhead);
+
+        // Threshold in frames
+        const threshFrames = MAGNETIC_SNAP_PX / ppf;
+
+        // Find closest candidate within threshold
+        let bestFrame: number | null = null;
+        let bestDist = threshFrames;
+        for (const candidate of candidates) {
+          const dist = Math.abs(g.frame - candidate);
+          if (dist < bestDist) { bestDist = dist; bestFrame = candidate; }
+        }
+
+        if (bestFrame !== null) {
+          // Snap: override the ghost frame and show indicator
+          g.frame = bestFrame;
+          setSnapIndicatorFrame(bestFrame);
+        } else {
+          setSnapIndicatorFrame(null);
+        }
+      } else {
+        setSnapIndicatorFrame(null);
+      }
+
       // Keep ref in sync — onUp reads this instead of re-resolving at mouseup
       ghostInfoRef.current = g;
       setGhostInfo(g);
@@ -559,22 +610,18 @@ export function TimelinePanel({
 
     const onUp = (_e: MouseEvent) => {
       // Use the last-seen ghost intent (ref), not a fresh resolve at mouseup coords.
-      // This ensures fast drag+release honours the preview the user saw, not the
-      // exact zone the pointer happened to be in at the instant they released.
       const g = ghostInfoRef.current;
-      console.log("[drag-drop] onUp intent:", g?.intent, "insertIndex:", g?.insertIndex, "trackId:", g?.trackId, "frame:", g?.frame);
       if (g) {
         if (g.intent === "DRAG_ON_TRACK") {
           propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
         } else {
-          // INSERT_ABOVE_TRACK | INSERT_ABOVE_TOP | INSERT_BELOW_BOTTOM
-          console.log("[drag-drop] calling onAddTracksAndMoveClip, fn=", typeof propsRef.current.onAddTracksAndMoveClip);
           propsRef.current.onAddTracksAndMoveClip?.(dragState.clipId, g.frame, g.insertIndex);
         }
       }
       ghostInfoRef.current = null;
       setDragState(null);
       setGhostInfo(null);
+      setSnapIndicatorFrame(null);
     };
 
     window.addEventListener("mousemove", onMove);
@@ -945,6 +992,14 @@ export function TimelinePanel({
         </div>
 
         {/* ── TRACK ROWS ─────────────────────────────────────────────────── */}
+        {/* Global magnetic snap line — spans full height of the scroll canvas */}
+        {snapIndicatorFrame !== null && (
+          <div
+            className="snap-indicator-global"
+            style={{ left: LABEL_W + snapIndicatorFrame * pixelsPerFrame }}
+            aria-hidden="true"
+          />
+        )}
         <div className="timeline-rows">
 
           {/*
@@ -1163,6 +1218,14 @@ export function TimelinePanel({
                   {suggestedCutFrames.map((f) => (
                     <div key={`${layout.track.id}-ai-${f}`} className="timeline-guide-line ai-cut" style={{ left: f * pixelsPerFrame }} />
                   ))}
+
+                  {/* Magnetic snap indicator — blue vertical line across all lanes */}
+                  {snapIndicatorFrame !== null && (
+                    <div
+                      className="snap-indicator-line"
+                      style={{ left: snapIndicatorFrame * pixelsPerFrame }}
+                    />
+                  )}
 
                   {/* Playhead */}
                   <div className="timeline-playhead" style={{ left: playheadLeft }} />

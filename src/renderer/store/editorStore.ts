@@ -183,6 +183,66 @@ function getPrimaryTrackId(project: EditorProjectState, kind: TimelineTrackKind)
   return project.sequence.tracks.find((t) => t.kind === kind)?.id ?? null;
 }
 
+/**
+ * Find the first audio track that has NO clips overlapping [startFrame, endFrame).
+ * If every audio track is occupied at that range, create a new audio track and
+ * return its id.  The returned project may have an extra track appended.
+ *
+ * This is the CORRECT industry-standard behavior: each clip's audio gets its own
+ * lane — it never silently stacks on top of an unrelated clip.
+ */
+function findOrCreateFreeAudioTrack(
+  project: EditorProjectState,
+  asset: MediaAsset,
+  startFrame: number
+): { project: EditorProjectState; audioTrackId: string } {
+  const fps = project.sequence.settings.fps;
+  const assetDur = getClipDurationFrames(
+    // Estimate duration using a zero-trim placeholder
+    { trimStartFrames: 0, trimEndFrames: 0, speed: 1 } as Parameters<typeof getClipDurationFrames>[0],
+    asset,
+    fps
+  );
+  const endFrame = startFrame + assetDur;
+
+  const audioTracks = project.sequence.tracks.filter((t) => t.kind === "audio");
+
+  for (const track of audioTracks) {
+    // Check every clip in this track for overlap with [startFrame, endFrame)
+    const clipsInTrack = project.sequence.clips.filter((c) => c.trackId === track.id);
+    const hasOverlap = clipsInTrack.some((c) => {
+      const clipAsset = project.assets.find((a) => a.id === c.assetId);
+      if (!clipAsset) return false;
+      const clipEnd = c.startFrame + getClipDurationFrames(c, clipAsset, fps);
+      // Overlaps if: clip starts before endFrame AND clip ends after startFrame
+      return c.startFrame < endFrame && clipEnd > startFrame;
+    });
+    if (!hasOverlap) {
+      return { project, audioTrackId: track.id };
+    }
+  }
+
+  // All existing audio tracks are occupied — create a new one
+  const newTrack: TimelineTrack = {
+    id: createId(),
+    kind: "audio",
+    name: `Audio ${audioTracks.length + 1}`,
+    muted: false,
+    locked: false,
+    solo: false,
+    height: 44,
+    color: "#2fc77a",
+  };
+  const updatedProject: EditorProjectState = {
+    ...project,
+    sequence: {
+      ...project.sequence,
+      tracks: [...project.sequence.tracks, newTrack],
+    },
+  };
+  return { project: updatedProject, audioTrackId: newTrack.id };
+}
+
 function clampPlayhead(project: EditorProjectState, frame: number): number {
   const totalFrames = getTotalDurationFrames(
     buildTimelineSegments(project.sequence, project.assets)
@@ -270,17 +330,26 @@ function createTimelineClipsForAsset(
   project: EditorProjectState,
   asset: MediaAsset,
   startFrame: number
-): { clips: TimelineClip[]; selectedClipId: string } {
+): { project: EditorProjectState; clips: TimelineClip[]; selectedClipId: string } {
   const videoTrackId = getPrimaryTrackId(project, "video");
   if (!videoTrackId) throw new Error("No video track is available.");
-  const audioTrackId = asset.hasAudio ? getPrimaryTrackId(project, "audio") : null;
+
+  let resultProject = project;
+  let audioTrackId: string | null = null;
+
+  if (asset.hasAudio) {
+    const result = findOrCreateFreeAudioTrack(project, asset, startFrame);
+    resultProject = result.project;
+    audioTrackId = result.audioTrackId;
+  }
+
   const linkedGroupId = audioTrackId ? createId() : null;
   const videoClip = createEmptyClip(asset.id, videoTrackId, startFrame, { linkedGroupId });
   const clips: TimelineClip[] = [videoClip];
   if (audioTrackId) {
     clips.push(createEmptyClip(asset.id, audioTrackId, startFrame, { linkedGroupId }));
   }
-  return { clips, selectedClipId: videoClip.id };
+  return { project: resultProject, clips, selectedClipId: videoClip.id };
 }
 
 function applyClipMutation(
@@ -557,10 +626,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const primaryTrackId = getPrimaryTrackId(nextProject, "video");
       if (!primaryTrackId) return state;
       const curSegs = buildTimelineSegments(nextProject.sequence, nextProject.assets);
-      const { clips, selectedClipId } = createTimelineClipsForAsset(
-        nextProject, asset, getTrackEndFrame(primaryTrackId, curSegs)
+      const startFrame = getTrackEndFrame(primaryTrackId, curSegs);
+      const { project: projectWithTrack, clips, selectedClipId } = createTimelineClipsForAsset(
+        nextProject, asset, startFrame
       );
-      nextProject = { ...nextProject, sequence: { ...nextProject.sequence, clips: [...nextProject.sequence.clips, ...clips] } };
+      nextProject = {
+        ...projectWithTrack,
+        sequence: { ...projectWithTrack.sequence, clips: [...projectWithTrack.sequence.clips, ...clips] }
+      };
       return {
         project: nextProject,
         selectedAssetId: assetId,
@@ -583,10 +656,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const videoClip = createEmptyClip(asset.id, trackId, startFrame, { linkedGroupId });
       const newClips: TimelineClip[] = [videoClip];
       if (asset.hasAudio && track.kind === "video") {
-        const audioTrackId = getPrimaryTrackId(nextProject, "audio");
-        if (audioTrackId) {
-          newClips.push(createEmptyClip(asset.id, audioTrackId, startFrame, { linkedGroupId }));
-        }
+        // Use findOrCreateFreeAudioTrack so the audio never stacks on a busy track
+        const { project: projWithTrack, audioTrackId } = findOrCreateFreeAudioTrack(nextProject, asset, startFrame);
+        nextProject = projWithTrack;
+        newClips.push(createEmptyClip(asset.id, audioTrackId, startFrame, { linkedGroupId }));
       }
       nextProject = {
         ...nextProject,

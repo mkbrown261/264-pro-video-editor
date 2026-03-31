@@ -5186,3 +5186,54 @@ kbd {
   color: var(--text-dim);
   letter-spacing: 0.06em;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MAGNETIC SNAP INDICATOR
+   Blue vertical line shown when a dragged clip magnetically snaps to an edge
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Per-lane line (inside each .timeline-lane) */
+.snap-indicator-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #4a9eff;
+  box-shadow: 0 0 6px rgba(74, 158, 255, 0.85), 0 0 12px rgba(74, 158, 255, 0.4);
+  pointer-events: none;
+  z-index: 60;
+  transform: translateX(-1px);
+}
+
+/* Full-height global line spanning the entire .timeline-editor scroll area */
+.snap-indicator-global {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #4a9eff;
+  box-shadow: 0 0 8px rgba(74, 158, 255, 0.9), 0 0 20px rgba(74, 158, 255, 0.35);
+  pointer-events: none;
+  z-index: 100;
+  transform: translateX(-1px);
+  /* Subtle pulsing animation so the user clearly notices the snap */
+  animation: snap-pulse 0.4s ease-in-out infinite alternate;
+}
+
+@keyframes snap-pulse {
+  from { opacity: 1; box-shadow: 0 0 8px rgba(74,158,255,0.9), 0 0 20px rgba(74,158,255,0.35); }
+  to   { opacity: 0.7; box-shadow: 0 0 4px rgba(74,158,255,0.7), 0 0 10px rgba(74,158,255,0.2); }
+}
+
+/* Diamond snap indicator marker at the top of the line (like DaVinci Resolve) */
+.snap-indicator-global::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 8px;
+  height: 8px;
+  background: #4a9eff;
+  border: 1px solid rgba(255,255,255,0.6);
+}
