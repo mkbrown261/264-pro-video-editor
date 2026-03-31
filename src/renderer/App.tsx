@@ -20,6 +20,7 @@ import {
 import { serializeProject, deserializeProject } from "../shared/projectSerializer";
 import type { UpdaterStatus } from "./vite-env";
 import type { ClipMask } from "../shared/models";
+import { createEmptyProject } from "../shared/models";
 import type { MaskTool } from "./components/MaskingCanvas";
 
 type AppPage = "edit" | "color" | "effects";
@@ -75,6 +76,7 @@ export default function App() {
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
+  const updateTrack = useEditorStore((s) => s.updateTrack);
 
   // Masks
   const addMaskToClip = useEditorStore((s) => s.addMaskToClip);
@@ -122,6 +124,13 @@ export default function App() {
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
   const [projectDirty, setProjectDirty] = useState(false);
   const createdAtRef = useRef<string>(new Date().toISOString());
+
+  // Open Recent
+  const [recentProjects, setRecentProjects] = useState<Array<{ name: string; path: string; date: string }>>(() => {
+    try { return JSON.parse(localStorage.getItem("264pro_recent_projects") ?? "[]"); }
+    catch { return []; }
+  });
+  const [showRecentPanel, setShowRecentPanel] = useState(false);
 
   // Masking state
   const [activeMaskTool, setActiveMaskTool] = useState<MaskTool>("none");
@@ -293,12 +302,14 @@ export default function App() {
           currentProjectPath
         );
         setExportMessage(`✓ Saved to ${currentProjectPath}`);
+        addToRecentProjects(project.name, currentProjectPath);
       } else {
         const json = serializeProject(project, createdAtRef.current);
         const saved = await window.editorApi.saveProject(json, project.name);
         if (saved) {
           setCurrentProjectPath(saved);
           setExportMessage(`✓ Saved to ${saved}`);
+          addToRecentProjects(project.name, saved);
         }
       }
       setProjectDirty(false);
@@ -315,11 +326,32 @@ export default function App() {
       if (saved) {
         setCurrentProjectPath(saved);
         setProjectDirty(false);
+        addToRecentProjects(project.name, saved);
         setExportMessage(`✓ Saved as ${saved}`);
       }
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Save failed.");
     }
+  }
+
+  function addToRecentProjects(name: string, path: string) {
+    const entry = { name, path, date: new Date().toLocaleDateString() };
+    setRecentProjects((prev) => {
+      const filtered = prev.filter((r) => r.path !== path).slice(0, 9);
+      const next = [entry, ...filtered];
+      try { localStorage.setItem("264pro_recent_projects", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  function handleNewProject() {
+    if (projectDirty && !window.confirm("Discard unsaved changes and create a new project?")) return;
+    loadProjectFromData(createEmptyProject() as ReturnType<typeof createEmptyProject>);
+    setCurrentProjectPath(null);
+    setProjectDirty(false);
+    createdAtRef.current = new Date().toISOString();
+    setExportMessage("✓ New project created.");
+    setShowRecentPanel(false);
   }
 
   async function handleOpenProject() {
@@ -332,6 +364,7 @@ export default function App() {
           loadProjectFromData(loaded);
           createdAtRef.current = new Date().toISOString();
           setProjectDirty(false);
+          addToRecentProjects(loaded.name, "[localStorage]");
           setExportMessage(warnings.length ? `⚠ Loaded (${warnings[0]})` : "✓ Project loaded.");
         } else {
           // Try legacy format
@@ -358,10 +391,32 @@ export default function App() {
       setCurrentProjectPath(result.filePath);
       createdAtRef.current = new Date().toISOString();
       setProjectDirty(false);
+      addToRecentProjects(loaded.name, result.filePath);
       setExportMessage(warnings.length ? `⚠ Loaded (${warnings.join(", ")})` : "✓ Project loaded.");
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Load failed.");
     }
+  }
+
+  async function handleOpenRecentProject(path: string, name: string) {
+    if (path === "[localStorage]") {
+      await handleOpenProject();
+      return;
+    }
+    if (!window.editorApi) { setExportMessage("Requires Electron."); return; }
+    try {
+      const result = await window.editorApi.openProject();
+      if (!result) return;
+      const { project: loaded, warnings } = deserializeProject(result.json);
+      loadProjectFromData(loaded);
+      setCurrentProjectPath(result.filePath);
+      setProjectDirty(false);
+      addToRecentProjects(loaded.name, result.filePath);
+      setExportMessage(warnings.length ? `⚠ Loaded` : `✓ ${name} loaded.`);
+    } catch {
+      setExportMessage("Failed to open recent project.");
+    }
+    setShowRecentPanel(false);
   }
 
   // ── Shortcuts ──────────────────────────────────────────────────────────────
@@ -519,6 +574,46 @@ export default function App() {
     );
   }
 
+  // ── Recent Projects Panel ─────────────────────────────────────────────────
+  function renderRecentPanel() {
+    if (!showRecentPanel) return null;
+    return (
+      <div className="recent-panel-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowRecentPanel(false); }}>
+        <div className="recent-panel">
+          <div className="recent-panel-header">
+            <h3>Open Recent</h3>
+            <button className="recent-panel-close" onClick={() => setShowRecentPanel(false)} type="button">✕</button>
+          </div>
+          <div className="recent-panel-actions">
+            <button className="panel-action primary" onClick={handleNewProject} type="button">＋ New Project</button>
+            <button className="panel-action" onClick={() => { setShowRecentPanel(false); void handleOpenProject(); }} type="button">📂 Open File…</button>
+          </div>
+          {recentProjects.length === 0 ? (
+            <p className="recent-empty">No recent projects yet.</p>
+          ) : (
+            <div className="recent-list">
+              {recentProjects.map((r) => (
+                <button
+                  key={r.path}
+                  className="recent-item"
+                  onClick={() => void handleOpenRecentProject(r.path, r.name)}
+                  type="button"
+                >
+                  <span className="recent-item-icon">🎬</span>
+                  <span className="recent-item-info">
+                    <span className="recent-item-name">{r.name}</span>
+                    <span className="recent-item-path">{r.path}</span>
+                    <span className="recent-item-date">{r.date}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ── Settings helpers ──────────────────────────────────────────────────────
   function applyPreset(preset: string) {
     const presets: Record<string, ProjectSettings> = {
@@ -622,6 +717,7 @@ export default function App() {
     <div className="app-root">
       {renderUpdaterBanner()}
       {renderSettingsModal()}
+      {renderRecentPanel()}
 
       {/* ── TOP MENU BAR ── */}
       <header className="app-menubar">
@@ -644,7 +740,7 @@ export default function App() {
           ))}
         </nav>
 
-        {/* Undo/Redo + Save/Open in the menu bar */}
+        {/* Undo/Redo + File actions in the menu bar */}
         <div className="menubar-actions">
           <button
             className="menubar-action-btn"
@@ -667,6 +763,14 @@ export default function App() {
           <span className="menubar-sep" />
           <button
             className="menubar-action-btn"
+            onClick={handleNewProject}
+            title="New Project"
+            type="button"
+          >
+            ＋ New
+          </button>
+          <button
+            className="menubar-action-btn"
             onClick={() => void handleSaveProject()}
             title="Save Project (⌘S)"
             type="button"
@@ -675,11 +779,11 @@ export default function App() {
           </button>
           <button
             className="menubar-action-btn"
-            onClick={() => void handleOpenProject()}
-            title="Open Project (⌘O)"
+            onClick={() => setShowRecentPanel(true)}
+            title="Open Project / Recent"
             type="button"
           >
-            📂
+            📂 Open
           </button>
         </div>
 
@@ -841,6 +945,11 @@ export default function App() {
               onTrimClipEnd={(clipId, trim) => { pauseViewerPlayback(); trimClipEnd(clipId, trim); }}
               onBladeCut={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
               onDropAsset={(assetId, trackId, frame) => { pauseViewerPlayback(); dropAssetAtFrame(assetId, trackId, frame); }}
+              onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
+              onSetTransitionDuration={(clipId, edge, dur) => {
+                pauseViewerPlayback();
+                setTransitionMessage(setSelectedClipTransitionDuration(edge, dur));
+              }}
             />
           </>
         )}
@@ -920,6 +1029,11 @@ export default function App() {
                 onTrimClipEnd={(clipId, trim) => { pauseViewerPlayback(); trimClipEnd(clipId, trim); }}
                 onBladeCut={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
                 onDropAsset={(assetId, trackId, frame) => { pauseViewerPlayback(); dropAssetAtFrame(assetId, trackId, frame); }}
+                onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
+                onSetTransitionDuration={(clipId, edge, dur) => {
+                  pauseViewerPlayback();
+                  setTransitionMessage(setSelectedClipTransitionDuration(edge, dur));
+                }}
               />
             </div>
           </>
@@ -1043,6 +1157,8 @@ export default function App() {
                 onTrimClipEnd={trimClipEnd}
                 onBladeCut={splitClipAtFrame}
                 onDropAsset={dropAssetAtFrame}
+                onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
+                onSetTransitionDuration={(clipId, edge, dur) => setTransitionMessage(setSelectedClipTransitionDuration(edge, dur))}
               />
             </div>
           </>
