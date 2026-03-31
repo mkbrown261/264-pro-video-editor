@@ -71,6 +71,11 @@ export function MediaPool({
                 className={`media-card${selectedAssetId === asset.id ? " selected" : ""}`}
                 onClick={() => onSelectAsset(asset.id)}
                 onDoubleClick={() => onAppendAsset(asset.id)}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("application/x-asset-id", asset.id);
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
                 type="button"
               >
                 {asset.thumbnailUrl ? (

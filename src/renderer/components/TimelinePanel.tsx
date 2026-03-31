@@ -75,6 +75,7 @@ export function TimelinePanel({
     onTrimClipStart,
     onTrimClipEnd,
     onBladeCut,
+    onDropAsset,
     toolMode,
     sequenceFps
   });
@@ -86,6 +87,7 @@ export function TimelinePanel({
       onTrimClipStart,
       onTrimClipEnd,
       onBladeCut,
+      onDropAsset,
       toolMode,
       sequenceFps
     };
@@ -99,6 +101,7 @@ export function TimelinePanel({
   const [isScrubbingPlayhead, setIsScrubbingPlayhead] = useState(false);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [dragGhostInfo, setDragGhostInfo] = useState<{ frame: number; trackId: string } | null>(null);
+  const [dropTargetTrackId, setDropTargetTrackId] = useState<string | null>(null);
 
   const timelineFrames = Math.max(totalFrames, sequenceFps * 10);
   const canvasWidth = Math.max(timelineFrames * pixelsPerFrame, 960);
@@ -347,10 +350,33 @@ export function TimelinePanel({
 
               {/* Lane */}
               <div
-                className={`timeline-lane ${layout.track.kind}-lane${toolMode === "blade" ? " blade-active" : ""}`}
+                className={`timeline-lane ${layout.track.kind}-lane${toolMode === "blade" ? " blade-active" : ""}${dropTargetTrackId === layout.track.id ? " drop-target" : ""}`}
                 data-track-id={layout.track.id}
                 data-track-kind={layout.track.kind}
                 style={{ width: canvasWidth }}
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes("application/x-asset-id")) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "copy";
+                    setDropTargetTrackId(layout.track.id);
+                  }
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setDropTargetTrackId(null);
+                  }
+                }}
+                onDrop={(e) => {
+                  const assetId = e.dataTransfer.getData("application/x-asset-id");
+                  if (!assetId) return;
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const scrollLeft = timelineEditorRef.current?.scrollLeft ?? 0;
+                  const px = e.clientX - r.left + scrollLeft;
+                  const frame = Math.max(0, Math.round(px / ppfRef.current));
+                  propsRef.current.onDropAsset(assetId, layout.track.id, frame);
+                  setDropTargetTrackId(null);
+                }}
                 onClick={(e) => {
                   if (toolMode !== "select") return;
                   // Only fire if clicking on the lane itself (not on a clip)
@@ -374,7 +400,7 @@ export function TimelinePanel({
 
                 {/* Empty state */}
                 {layout.segments.length === 0 && (
-                  <div className="timeline-track-empty"><span>Empty track — double-click a media clip to add</span></div>
+                  <div className="timeline-track-empty"><span>Drag a clip here, or double-click in Media Pool to add</span></div>
                 )}
 
                 {/* Clips */}

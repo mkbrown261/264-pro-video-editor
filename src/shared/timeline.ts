@@ -6,7 +6,7 @@ import type {
   TimelineTrack,
   TimelineTrackKind
 } from "./models.js";
-import { createId } from "./models.js";
+import { createEmptyClip, createId } from "./models.js";
 
 export interface TimelineSegment {
   clip: TimelineClip;

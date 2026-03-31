@@ -261,10 +261,11 @@ button { cursor: pointer; }
   background: var(--bg-panel);
   color: var(--text);
   padding: 8px 10px;
-  cursor: pointer;
+  cursor: grab;
   text-align: left;
   transition: background 70ms;
 }
+.media-card:active { cursor: grabbing; }
 .media-card:hover { background: var(--bg-item-hi); }
 .media-card.selected { background: #2b1e0e; border-left: 2px solid var(--accent); padding-left: 8px; }
 
@@ -750,6 +751,11 @@ kbd {
 .video-lane { background: #181818; }
 .audio-lane { background: #161a1e; }
 .timeline-lane.blade-active { cursor: crosshair; }
+.timeline-lane.drop-target {
+  background: rgba(59, 130, 246, 0.15);
+  outline: 2px solid rgba(59, 130, 246, 0.7);
+  outline-offset: -2px;
+}
 
 .timeline-track-empty {
   display: flex;

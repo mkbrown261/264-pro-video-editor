@@ -1,12 +1,22 @@
 import { create } from "zustand";
 import {
+  type ClipEffect,
+  type ClipMask,
   type ClipTransitionType,
+  type ColorGrade,
+  createDefaultColorGrade,
+  createEmptyClip,
   createEmptyProject,
   createId,
+  type BeatSyncConfig,
+  type BackgroundRemovalConfig,
   type EditorTool,
+  type EditorPage,
   type EnvironmentStatus,
   type MediaAsset,
   type TimelineClip,
+  type TimelineMarker,
+  type TimelineTrack,
   type TimelineTrackKind
 } from "../../shared/models";
 import {
@@ -29,15 +39,21 @@ interface EditorStore {
   selectedAssetId: string | null;
   selectedClipId: string | null;
   toolMode: EditorTool;
+  activePage: EditorPage;
   environment: EnvironmentStatus | null;
   playback: {
     isPlaying: boolean;
     playheadFrame: number;
   };
+
+  // ── Asset Management ──
   importAssets: (assets: MediaAsset[]) => void;
   appendAssetToTimeline: (assetId: string) => void;
+  dropAssetAtFrame: (assetId: string, trackId: string, startFrame: number) => void;
   selectAsset: (assetId: string | null) => void;
   selectClip: (clipId: string | null) => void;
+
+  // ── Clip Movement ──
   moveClip: (clipId: string, direction: -1 | 1) => void;
   moveClipTo: (clipId: string, trackId: string, startFrame: number) => void;
   trimClipStart: (clipId: string, nextTrimStartFrames: number) => void;
@@ -47,59 +63,138 @@ interface EditorStore {
   removeSelectedClip: () => void;
   toggleClipEnabled: (clipId: string) => void;
   detachLinkedClips: (clipId: string) => void;
-  applyTransitionToSelectedClip: (
-    edge: "in" | "out",
-    type?: ClipTransitionType
-  ) => string | null;
-  setSelectedClipTransitionType: (
-    edge: "in" | "out",
-    type: ClipTransitionType
-  ) => string | null;
-  setSelectedClipTransitionDuration: (
-    edge: "in" | "out",
-    durationFrames: number
-  ) => string | null;
+
+  // ── Transitions ──
+  applyTransitionToSelectedClip: (edge: "in" | "out", type?: ClipTransitionType) => string | null;
+  setSelectedClipTransitionType: (edge: "in" | "out", type: ClipTransitionType) => string | null;
+  setSelectedClipTransitionDuration: (edge: "in" | "out", durationFrames: number) => string | null;
+  clearTransition: (clipId: string, edge: "in" | "out") => void;
+
+  // ── Audio ──
   extractAudioFromSelectedClip: () => string | null;
+  setClipVolume: (clipId: string, volume: number) => void;
+  setClipSpeed: (clipId: string, speed: number) => void;
+
+  // ── Masks ──
+  addMaskToClip: (clipId: string, mask: ClipMask) => void;
+  updateMask: (clipId: string, maskId: string, updates: Partial<ClipMask>) => void;
+  removeMask: (clipId: string, maskId: string) => void;
+  reorderMasks: (clipId: string, fromIdx: number, toIdx: number) => void;
+
+  // ── Effects ──
+  addEffectToClip: (clipId: string, effect: ClipEffect) => void;
+  updateEffect: (clipId: string, effectId: string, updates: Partial<ClipEffect>) => void;
+  removeEffect: (clipId: string, effectId: string) => void;
+  toggleEffect: (clipId: string, effectId: string) => void;
+  reorderEffects: (clipId: string, fromIdx: number, toIdx: number) => void;
+
+  // ── Color Grading ──
+  setColorGrade: (clipId: string, grade: Partial<ColorGrade>) => void;
+  resetColorGrade: (clipId: string) => void;
+  enableColorGrade: (clipId: string) => void;
+
+  // ── Background Removal ──
+  setBackgroundRemoval: (clipId: string, config: Partial<BackgroundRemovalConfig>) => void;
+  toggleBackgroundRemoval: (clipId: string) => void;
+
+  // ── Beat Sync ──
+  setBeatSync: (clipId: string | null, config: Partial<BeatSyncConfig>) => void;
+  clearBeatSync: (clipId: string | null) => void;
+
+  // ── Tracks ──
+  addTrack: (kind: TimelineTrackKind) => void;
+  removeTrack: (trackId: string) => void;
+  updateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
+
+  // ── Markers ──
+  addMarker: (marker: Omit<TimelineMarker, "id">) => void;
+  removeMarker: (markerId: string) => void;
+
+  // ── Playhead & Playback ──
   setPlayheadFrame: (playheadFrame: number) => void;
   nudgePlayhead: (deltaFrames: number) => void;
   setPlaybackPlaying: (isPlaying: boolean) => void;
   stopPlayback: () => void;
+
+  // ── Tool & Page ──
   setToolMode: (toolMode: EditorTool) => void;
   toggleBladeTool: () => void;
+  setActivePage: (page: EditorPage) => void;
   setEnvironment: (environment: EnvironmentStatus) => void;
 }
 
-function createClip(
-  assetId: string,
-  trackId: string,
-  startFrame: number,
-  options: {
-    linkedGroupId?: string | null;
-    isEnabled?: boolean;
-  } = {}
-): TimelineClip {
+// ─── Private helpers ──────────────────────────────────────────────────────────
+
+function getPrimaryTrackId(project: EditorProjectState, kind: TimelineTrackKind): string | null {
+  return project.sequence.tracks.find((t) => t.kind === kind)?.id ?? null;
+}
+
+function clampPlayhead(project: EditorProjectState, frame: number): number {
+  const totalFrames = getTotalDurationFrames(
+    buildTimelineSegments(project.sequence, project.assets)
+  );
+  if (totalFrames <= 0) return 0;
+  return Math.max(0, Math.min(Math.round(frame), totalFrames - 1));
+}
+
+function resolveTrackLayout(project: EditorProjectState, trackId: string): EditorProjectState {
+  const assetsById = new Map(project.assets.map((a) => [a.id, a]));
+  const fps = project.sequence.settings.fps;
+  const ordered = project.sequence.clips
+    .filter((c) => c.trackId === trackId)
+    .sort((a, b) => {
+      if (a.startFrame !== b.startFrame) return a.startFrame - b.startFrame;
+      return project.sequence.clips.findIndex((c) => c.id === a.id) -
+             project.sequence.clips.findIndex((c) => c.id === b.id);
+    });
+
+  let cursor = 0;
+  const resolved = new Map<string, TimelineClip>();
+  for (const clip of ordered) {
+    const asset = assetsById.get(clip.assetId);
+    if (!asset) { resolved.set(clip.id, clip); continue; }
+    const dur = getClipDurationFrames(clip, asset, fps);
+    const start = Math.max(cursor, Math.max(0, clip.startFrame));
+    resolved.set(clip.id, { ...clip, startFrame: start });
+    cursor = start + dur;
+  }
+
   return {
-    id: createId(),
-    assetId,
-    trackId,
-    startFrame,
-    trimStartFrames: 0,
-    trimEndFrames: 0,
-    linkedGroupId: options.linkedGroupId ?? null,
-    isEnabled: options.isEnabled ?? true,
-    transitionIn: null,
-    transitionOut: null
+    ...project,
+    sequence: {
+      ...project.sequence,
+      clips: project.sequence.clips.map((c) => resolved.get(c.id) ?? c)
+    }
   };
 }
 
-function withAssetSequenceDefaults(
-  project: EditorProjectState,
-  asset: MediaAsset
-): EditorProjectState {
-  if (project.sequence.clips.length > 0) {
-    return project;
-  }
+function resolveTracks(project: EditorProjectState, trackIds: string[]): EditorProjectState {
+  return Array.from(new Set(trackIds)).reduce(
+    (p, id) => resolveTrackLayout(p, id),
+    project
+  );
+}
 
+function getLinkedClips(project: EditorProjectState, clipId: string): TimelineClip[] {
+  const clip = project.sequence.clips.find((c) => c.id === clipId);
+  if (!clip) return [];
+  if (!clip.linkedGroupId) return [clip];
+  return project.sequence.clips.filter((c) => c.linkedGroupId === clip.linkedGroupId);
+}
+
+function getTransitionTargetClip(project: EditorProjectState, clipId: string): TimelineClip | null {
+  const clip = project.sequence.clips.find((c) => c.id === clipId);
+  if (!clip) return null;
+  const track = project.sequence.tracks.find((t) => t.id === clip.trackId);
+  if (track?.kind === "video") return clip;
+  return getLinkedClips(project, clipId).find((c) => {
+    const t = project.sequence.tracks.find((tr) => tr.id === c.trackId);
+    return t?.kind === "video";
+  }) ?? null;
+}
+
+function withAssetSequenceDefaults(project: EditorProjectState, asset: MediaAsset): EditorProjectState {
+  if (project.sequence.clips.length > 0) return project;
   return {
     ...project,
     sequence: {
@@ -114,235 +209,52 @@ function withAssetSequenceDefaults(
   };
 }
 
-function getPrimaryTrackId(
-  project: EditorProjectState,
-  kind: TimelineTrackKind
-): string | null {
-  return project.sequence.tracks.find((track) => track.kind === kind)?.id ?? null;
-}
-
-function clampPlayhead(project: EditorProjectState, frame: number): number {
-  const totalFrames = getTotalDurationFrames(
-    buildTimelineSegments(project.sequence, project.assets)
-  );
-
-  if (totalFrames <= 0) {
-    return 0;
-  }
-
-  return Math.max(0, Math.min(Math.round(frame), totalFrames - 1));
-}
-
-function resolveTrackLayout(
-  project: EditorProjectState,
-  trackId: string
-): EditorProjectState {
-  const assetsById = new Map(project.assets.map((asset) => [asset.id, asset]));
-  const sequenceFps = project.sequence.settings.fps;
-  const orderedTrackClips = project.sequence.clips
-    .filter((clip) => clip.trackId === trackId)
-    .sort((left, right) => {
-      if (left.startFrame !== right.startFrame) {
-        return left.startFrame - right.startFrame;
-      }
-
-      return project.sequence.clips.findIndex((clip) => clip.id === left.id) -
-        project.sequence.clips.findIndex((clip) => clip.id === right.id);
-    });
-
-  let cursorFrame = 0;
-  const resolvedClips = new Map<string, TimelineClip>();
-
-  for (const clip of orderedTrackClips) {
-    const asset = assetsById.get(clip.assetId);
-
-    if (!asset) {
-      resolvedClips.set(clip.id, clip);
-      continue;
-    }
-
-    const durationFrames = getClipDurationFrames(clip, asset, sequenceFps);
-    const startFrame = Math.max(cursorFrame, Math.max(0, clip.startFrame));
-
-    resolvedClips.set(clip.id, {
-      ...clip,
-      startFrame
-    });
-    cursorFrame = startFrame + durationFrames;
-  }
-
-  return {
-    ...project,
-    sequence: {
-      ...project.sequence,
-      clips: project.sequence.clips.map((clip) => resolvedClips.get(clip.id) ?? clip)
-    }
-  };
-}
-
-function resolveTracks(
-  project: EditorProjectState,
-  trackIds: string[]
-): EditorProjectState {
-  const uniqueTrackIds = Array.from(new Set(trackIds));
-
-  return uniqueTrackIds.reduce(
-    (currentProject, trackId) => resolveTrackLayout(currentProject, trackId),
-    project
-  );
-}
-
-function getLinkedClips(
-  project: EditorProjectState,
-  clipId: string
-): TimelineClip[] {
-  const clip = project.sequence.clips.find((candidate) => candidate.id === clipId);
-
-  if (!clip) {
-    return [];
-  }
-
-  if (!clip.linkedGroupId) {
-    return [clip];
-  }
-
-  return project.sequence.clips.filter(
-    (candidate) => candidate.linkedGroupId === clip.linkedGroupId
-  );
-}
-
-function getTransitionTargetClip(
-  project: EditorProjectState,
-  clipId: string
-): TimelineClip | null {
-  const clip = project.sequence.clips.find((candidate) => candidate.id === clipId);
-
-  if (!clip) {
-    return null;
-  }
-
-  const track = project.sequence.tracks.find(
-    (candidate) => candidate.id === clip.trackId
-  );
-
-  if (track?.kind === "video") {
-    return clip;
-  }
-
-  return getLinkedClips(project, clipId).find((candidate) => {
-    const linkedTrack = project.sequence.tracks.find(
-      (trackCandidate) => trackCandidate.id === candidate.trackId
-    );
-
-    return linkedTrack?.kind === "video";
-  }) ?? null;
-}
-
-function findIndependentAudioCompanion(
-  project: EditorProjectState,
-  clip: TimelineClip
-): TimelineClip | null {
-  return (
-    project.sequence.clips.find((candidate) => {
-      if (candidate.id === clip.id || candidate.assetId !== clip.assetId) {
-        return false;
-      }
-
-      const track = project.sequence.tracks.find(
-        (trackCandidate) => trackCandidate.id === candidate.trackId
-      );
-
-      return (
-        track?.kind === "audio" &&
-        candidate.linkedGroupId === null &&
-        candidate.startFrame === clip.startFrame &&
-        candidate.trimStartFrames === clip.trimStartFrames &&
-        candidate.trimEndFrames === clip.trimEndFrames
-      );
-    }) ?? null
-  );
-}
-
 function createTimelineClipsForAsset(
   project: EditorProjectState,
   asset: MediaAsset,
   startFrame: number
-): {
-  clips: TimelineClip[];
-  selectedClipId: string;
-} {
+): { clips: TimelineClip[]; selectedClipId: string } {
   const videoTrackId = getPrimaryTrackId(project, "video");
-
-  if (!videoTrackId) {
-    throw new Error("No video track is available.");
-  }
-
-  const audioTrackId = asset.hasAudio
-    ? getPrimaryTrackId(project, "audio")
-    : null;
+  if (!videoTrackId) throw new Error("No video track is available.");
+  const audioTrackId = asset.hasAudio ? getPrimaryTrackId(project, "audio") : null;
   const linkedGroupId = audioTrackId ? createId() : null;
-  const videoClip = createClip(asset.id, videoTrackId, startFrame, {
-    linkedGroupId
-  });
-  const clips = [videoClip];
-
+  const videoClip = createEmptyClip(asset.id, videoTrackId, startFrame, { linkedGroupId });
+  const clips: TimelineClip[] = [videoClip];
   if (audioTrackId) {
-    clips.push(
-      createClip(asset.id, audioTrackId, startFrame, {
-        linkedGroupId
-      })
-    );
+    clips.push(createEmptyClip(asset.id, audioTrackId, startFrame, { linkedGroupId }));
   }
-
-  return {
-    clips,
-    selectedClipId: videoClip.id
-  };
+  return { clips, selectedClipId: videoClip.id };
 }
 
 function applyClipMutation(
   state: EditorStore,
   clipId: string,
-  mutate: (
-    clip: TimelineClip,
-    asset: MediaAsset
-  ) => TimelineClip
+  mutate: (clip: TimelineClip, asset: MediaAsset) => TimelineClip
 ): Partial<EditorStore> | EditorStore {
   const linkedClips = getLinkedClips(state.project, clipId);
-
-  if (!linkedClips.length) {
-    return state;
-  }
-
-  const assetsById = new Map(
-    state.project.assets.map((asset) => [asset.id, asset])
-  );
-  const linkedClipIds = new Set(linkedClips.map((clip) => clip.id));
-  const affectedTrackIds = linkedClips.map((clip) => clip.trackId);
-  const nextProject = resolveTracks(
+  if (!linkedClips.length) return state;
+  const assetsById = new Map(state.project.assets.map((a) => [a.id, a]));
+  const linkedIds = new Set(linkedClips.map((c) => c.id));
+  const trackIds = linkedClips.map((c) => c.trackId);
+  const next = resolveTracks(
     {
       ...state.project,
       sequence: {
         ...state.project.sequence,
-        clips: state.project.sequence.clips.map((candidate) => {
-          if (!linkedClipIds.has(candidate.id)) {
-            return candidate;
-          }
-
-          const asset = assetsById.get(candidate.assetId);
-
-          return asset ? mutate(candidate, asset) : candidate;
+        clips: state.project.sequence.clips.map((c) => {
+          if (!linkedIds.has(c.id)) return c;
+          const asset = assetsById.get(c.assetId);
+          return asset ? mutate(c, asset) : c;
         })
       }
     },
-    affectedTrackIds
+    trackIds
   );
-
   return {
-    project: nextProject,
+    project: next,
     playback: {
       ...state.playback,
-      playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame)
+      playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
     }
   };
 }
@@ -353,83 +265,46 @@ function splitStateAtFrame(
   frame: number
 ): Partial<EditorStore> | EditorStore {
   const linkedClips = getLinkedClips(state.project, clipId);
-
-  if (!linkedClips.length) {
-    return state;
-  }
-
-  const linkedClipIds = new Set(linkedClips.map((clip) => clip.id));
-  const segmentsById = new Map(
-    buildTimelineSegments(state.project.sequence, state.project.assets).map((segment) => [
-      segment.clip.id,
-      segment
-    ])
+  if (!linkedClips.length) return state;
+  const linkedIds = new Set(linkedClips.map((c) => c.id));
+  const segsById = new Map(
+    buildTimelineSegments(state.project.sequence, state.project.assets).map((s) => [s.clip.id, s])
   );
-  const shouldRelinkSplitGroup =
-    Boolean(linkedClips[0]?.linkedGroupId) && linkedClips.length > 1;
-  const leftGroupId = shouldRelinkSplitGroup ? createId() : linkedClips[0]?.linkedGroupId ?? null;
-  const rightGroupId = shouldRelinkSplitGroup ? createId() : linkedClips[0]?.linkedGroupId ?? null;
+  const shouldRelink = Boolean(linkedClips[0]?.linkedGroupId) && linkedClips.length > 1;
+  const leftGroupId = shouldRelink ? createId() : (linkedClips[0]?.linkedGroupId ?? null);
+  const rightGroupId = shouldRelink ? createId() : (linkedClips[0]?.linkedGroupId ?? null);
   let splitOccurred = false;
 
   const nextSequence = {
     ...state.project.sequence,
     clips: state.project.sequence.clips.flatMap((clip) => {
-      if (!linkedClipIds.has(clip.id)) {
-        return [clip];
-      }
-
-      const segment = segmentsById.get(clip.id);
-
-      if (!segment || frame <= segment.startFrame || frame >= segment.endFrame) {
-        return [clip];
-      }
-
-      const splitOffsetFrames = frame - segment.startFrame;
-      const leftDurationFrames = splitOffsetFrames;
-      const rightDurationFrames = segment.durationFrames - splitOffsetFrames;
-
-      if (leftDurationFrames <= 0 || rightDurationFrames <= 0) {
-        return [clip];
-      }
-
+      if (!linkedIds.has(clip.id)) return [clip];
+      const seg = segsById.get(clip.id);
+      if (!seg || frame <= seg.startFrame || frame >= seg.endFrame) return [clip];
+      const splitOffset = frame - seg.startFrame;
+      const leftDur = splitOffset;
+      const rightDur = seg.durationFrames - splitOffset;
+      if (leftDur <= 0 || rightDur <= 0) return [clip];
       splitOccurred = true;
-
-      const leftClip: TimelineClip = {
-        ...clip,
-        trimEndFrames: clip.trimEndFrames + rightDurationFrames,
-        linkedGroupId: leftGroupId,
-        transitionOut: null
-      };
-      const rightClip: TimelineClip = {
-        ...clip,
-        id: createId(),
-        startFrame: frame,
-        trimStartFrames: clip.trimStartFrames + leftDurationFrames,
-        linkedGroupId: rightGroupId,
-        transitionIn: null
-      };
-
-      return [leftClip, rightClip];
+      return [
+        { ...clip, trimEndFrames: clip.trimEndFrames + rightDur, linkedGroupId: leftGroupId, transitionOut: null },
+        { ...clip, id: createId(), startFrame: frame, trimStartFrames: clip.trimStartFrames + leftDur, linkedGroupId: rightGroupId, transitionIn: null }
+      ];
     })
   };
 
-  if (!splitOccurred) {
-    return state;
-  }
+  if (!splitOccurred) return state;
 
-  const nextProject = {
-    ...state.project,
-    sequence: nextSequence
-  };
-  const nextSegments = buildTimelineSegments(nextSequence, state.project.assets);
-  const activeSegment =
-    findPlayableSegmentAtFrame(nextSegments, frame, "video") ??
-    findSegmentAtFrame(nextSegments, frame);
+  const nextProject = { ...state.project, sequence: nextSequence };
+  const nextSegs = buildTimelineSegments(nextSequence, state.project.assets);
+  const activeSeg =
+    findPlayableSegmentAtFrame(nextSegs, frame, "video") ??
+    findSegmentAtFrame(nextSegs, frame);
 
   return {
     project: nextProject,
-    selectedClipId: activeSegment?.clip.id ?? state.selectedClipId,
-    selectedAssetId: activeSegment?.asset.id ?? state.selectedAssetId,
+    selectedClipId: activeSeg?.clip.id ?? state.selectedClipId,
+    selectedAssetId: activeSeg?.asset.id ?? state.selectedAssetId,
     playback: {
       ...state.playback,
       playheadFrame: clampPlayhead(nextProject, frame)
@@ -437,959 +312,804 @@ function splitStateAtFrame(
   };
 }
 
+function updateClipInState(
+  state: EditorStore,
+  clipId: string,
+  updater: (clip: TimelineClip) => TimelineClip
+): Partial<EditorStore> {
+  return {
+    project: {
+      ...state.project,
+      sequence: {
+        ...state.project.sequence,
+        clips: state.project.sequence.clips.map((c) => (c.id === clipId ? updater(c) : c))
+      }
+    }
+  };
+}
+
+// ─── Store ────────────────────────────────────────────────────────────────────
+
 export const useEditorStore = create<EditorStore>((set) => ({
   project: createEmptyProject(),
   selectedAssetId: null,
   selectedClipId: null,
   toolMode: "select",
+  activePage: "edit",
   environment: null,
-  playback: {
-    isPlaying: false,
-    playheadFrame: 0
-  },
+  playback: { isPlaying: false, playheadFrame: 0 },
+
+  // ── Asset management ──────────────────────────────────────────────────────
+
   importAssets: (assets) => {
-    if (!assets.length) {
-      return;
-    }
-
+    if (!assets.length) return;
     set((state) => {
-      const existingAssetsByPath = new Map(
-        state.project.assets.map((asset) => [asset.sourcePath, asset])
-      );
-      const importedAssets = assets.map((asset) => {
-        const existingAsset = existingAssetsByPath.get(asset.sourcePath);
-
-        if (!existingAsset) {
-          return asset;
-        }
-
-        return {
-          ...asset,
-          id: existingAsset.id
-        };
+      const existingByPath = new Map(state.project.assets.map((a) => [a.sourcePath, a]));
+      const imported = assets.map((a) => {
+        const existing = existingByPath.get(a.sourcePath);
+        return existing ? { ...a, id: existing.id } : a;
       });
-      const importedAssetsByPath = new Map(
-        importedAssets.map((asset) => [asset.sourcePath, asset])
-      );
-      const mergedAssets = [
-        ...state.project.assets.map(
-          (asset) => importedAssetsByPath.get(asset.sourcePath) ?? asset
-        ),
-        ...importedAssets.filter(
-          (asset) => !existingAssetsByPath.has(asset.sourcePath)
-        )
+      const importedByPath = new Map(imported.map((a) => [a.sourcePath, a]));
+      const merged = [
+        ...state.project.assets.map((a) => importedByPath.get(a.sourcePath) ?? a),
+        ...imported.filter((a) => !existingByPath.has(a.sourcePath))
       ];
+      if (!merged.length) return state;
 
-      if (!mergedAssets.length) {
-        return state;
-      }
-
-      let nextProject: EditorProjectState = {
-        ...state.project,
-        assets: mergedAssets
-      };
-      let selectedAssetId = state.selectedAssetId ?? importedAssets[0]?.id ?? null;
+      let nextProject: EditorProjectState = { ...state.project, assets: merged };
+      let selectedAssetId = state.selectedAssetId ?? imported[0]?.id ?? null;
       let selectedClipId = state.selectedClipId;
 
       if (!nextProject.sequence.clips.length) {
-        const firstAsset = importedAssets[0];
-        nextProject = withAssetSequenceDefaults(nextProject, firstAsset);
-        const { clips, selectedClipId: nextSelectedClipId } =
-          createTimelineClipsForAsset(nextProject, firstAsset, 0);
-        nextProject = {
-          ...nextProject,
-          sequence: {
-            ...nextProject.sequence,
-            clips
-          }
-        };
-        selectedAssetId = firstAsset.id;
-        selectedClipId = nextSelectedClipId;
-      } else if (!selectedAssetId && importedAssets[0]) {
-        selectedAssetId = importedAssets[0].id;
+        const first = imported[0];
+        nextProject = withAssetSequenceDefaults(nextProject, first);
+        const { clips, selectedClipId: nextId } = createTimelineClipsForAsset(nextProject, first, 0);
+        nextProject = { ...nextProject, sequence: { ...nextProject.sequence, clips } };
+        selectedAssetId = first.id;
+        selectedClipId = nextId;
+      } else if (!selectedAssetId && imported[0]) {
+        selectedAssetId = imported[0].id;
       }
 
-      return {
-        project: nextProject,
-        selectedAssetId,
-        selectedClipId
-      };
+      return { project: nextProject, selectedAssetId, selectedClipId };
     });
   },
+
   appendAssetToTimeline: (assetId) => {
     set((state) => {
-      const asset = state.project.assets.find((candidate) => candidate.id === assetId);
-
-      if (!asset) {
-        return state;
-      }
-
+      const asset = state.project.assets.find((a) => a.id === assetId);
+      if (!asset) return state;
       let nextProject = withAssetSequenceDefaults(state.project, asset);
       const primaryTrackId = getPrimaryTrackId(nextProject, "video");
-
-      if (!primaryTrackId) {
-        return state;
-      }
-
-      const currentSegments = buildTimelineSegments(
-        nextProject.sequence,
-        nextProject.assets
-      );
+      if (!primaryTrackId) return state;
+      const curSegs = buildTimelineSegments(nextProject.sequence, nextProject.assets);
       const { clips, selectedClipId } = createTimelineClipsForAsset(
-        nextProject,
-        asset,
-        getTrackEndFrame(primaryTrackId, currentSegments)
+        nextProject, asset, getTrackEndFrame(primaryTrackId, curSegs)
       );
-      nextProject = {
-        ...nextProject,
-        sequence: {
-          ...nextProject.sequence,
-          clips: [...nextProject.sequence.clips, ...clips]
-        }
-      };
-
+      nextProject = { ...nextProject, sequence: { ...nextProject.sequence, clips: [...nextProject.sequence.clips, ...clips] } };
       return {
         project: nextProject,
         selectedAssetId: assetId,
         selectedClipId,
-        playback: {
-          isPlaying: false,
-          playheadFrame: clampPlayhead(nextProject, clips[0].startFrame)
-        }
+        playback: { isPlaying: false, playheadFrame: clampPlayhead(nextProject, clips[0].startFrame) }
       };
     });
   },
-  selectAsset: (assetId) => {
-    set({
-      selectedAssetId: assetId
+
+  selectAsset: (assetId) => set({ selectedAssetId: assetId }),
+
+  dropAssetAtFrame: (assetId, trackId, startFrame) => {
+    set((state) => {
+      const asset = state.project.assets.find((a) => a.id === assetId);
+      if (!asset) return state;
+      let nextProject = withAssetSequenceDefaults(state.project, asset);
+      // Find the track to know its kind
+      const track = nextProject.sequence.tracks.find((t) => t.id === trackId);
+      if (!track) return state;
+      // Build clips: video clip on the dropped track, matching audio if asset has audio
+      const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;
+      const videoClip = createEmptyClip(asset.id, trackId, startFrame, { linkedGroupId });
+      const newClips: TimelineClip[] = [videoClip];
+      if (asset.hasAudio && track.kind === "video") {
+        const audioTrackId = getPrimaryTrackId(nextProject, "audio");
+        if (audioTrackId) {
+          newClips.push(createEmptyClip(asset.id, audioTrackId, startFrame, { linkedGroupId }));
+        }
+      }
+      nextProject = {
+        ...nextProject,
+        sequence: { ...nextProject.sequence, clips: [...nextProject.sequence.clips, ...newClips] }
+      };
+      return {
+        project: nextProject,
+        selectedAssetId: assetId,
+        selectedClipId: videoClip.id,
+        playback: { isPlaying: false, playheadFrame: clampPlayhead(nextProject, startFrame) }
+      };
     });
   },
+
   selectClip: (clipId) => {
     set((state) => {
-      if (!clipId) {
-        return {
-          selectedClipId: null
-        };
-      }
-
-      const clip = state.project.sequence.clips.find(
-        (candidate) => candidate.id === clipId
-      );
-
-      if (!clip) {
-        return state;
-      }
-
-      return {
-        selectedClipId: clipId,
-        selectedAssetId: clip.assetId
-      };
+      if (!clipId) return { selectedClipId: null };
+      const clip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+      return { selectedClipId: clipId, selectedAssetId: clip.assetId };
     });
   },
+
+  // ── Clip Movement ─────────────────────────────────────────────────────────
+
   moveClip: (clipId, direction) => {
     set((state) => {
-      const linkedClips = getLinkedClips(state.project, clipId);
-
-      if (!linkedClips.length) {
-        return state;
-      }
-
-      const deltaFrames = state.project.sequence.settings.fps * direction;
-
+      const delta = state.project.sequence.settings.fps * direction;
       return applyClipMutation(state, clipId, (clip) => ({
         ...clip,
-        startFrame: Math.max(0, clip.startFrame + deltaFrames)
+        startFrame: Math.max(0, clip.startFrame + delta)
       }));
     });
   },
+
   moveClipTo: (clipId, trackId, startFrame) => {
     set((state) => {
-      const clip = state.project.sequence.clips.find(
-        (candidate) => candidate.id === clipId
-      );
-
-      if (!clip) {
-        return state;
-      }
-
-      const linkedClips = getLinkedClips(state.project, clipId);
-      const deltaFrames = Math.max(0, startFrame) - clip.startFrame;
-      const linkedClipIds = new Set(linkedClips.map((candidate) => candidate.id));
-      const affectedTrackIds = [
-        ...linkedClips.map((candidate) => candidate.trackId),
-        trackId
-      ];
-      const nextProject = resolveTracks(
+      const clip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+      const linked = getLinkedClips(state.project, clipId);
+      const delta = Math.max(0, startFrame) - clip.startFrame;
+      const linkedIds = new Set(linked.map((c) => c.id));
+      const trackIds = [...linked.map((c) => c.trackId), trackId];
+      const next = resolveTracks(
         {
           ...state.project,
           sequence: {
             ...state.project.sequence,
-            clips: state.project.sequence.clips.map((candidate) => {
-              if (!linkedClipIds.has(candidate.id)) {
-                return candidate;
-              }
-
-              if (candidate.id === clipId) {
-                return {
-                  ...candidate,
-                  trackId,
-                  startFrame: Math.max(0, startFrame)
-                };
-              }
-
-              return {
-                ...candidate,
-                startFrame: Math.max(0, candidate.startFrame + deltaFrames)
-              };
+            clips: state.project.sequence.clips.map((c) => {
+              if (!linkedIds.has(c.id)) return c;
+              if (c.id === clipId) return { ...c, trackId, startFrame: Math.max(0, startFrame) };
+              return { ...c, startFrame: Math.max(0, c.startFrame + delta) };
             })
           }
         },
-        affectedTrackIds
+        trackIds
       );
-
       return {
-        project: nextProject,
+        project: next,
         selectedClipId: clipId,
         selectedAssetId: clip.assetId,
-        playback: {
-          ...state.playback,
-          playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame)
-        }
+        playback: { ...state.playback, playheadFrame: clampPlayhead(next, state.playback.playheadFrame) }
       };
     });
   },
-  trimClipStart: (clipId, nextTrimStartFrames) => {
+
+  trimClipStart: (clipId, nextTrim) => {
     set((state) => {
-      const selectedClip = state.project.sequence.clips.find(
-        (candidate) => candidate.id === clipId
-      );
-
-      if (!selectedClip) {
-        return state;
-      }
-
-      const selectedAsset = state.project.assets.find(
-        (candidate) => candidate.id === selectedClip.assetId
-      );
-
-      if (!selectedAsset) {
-        return state;
-      }
-
-      const nextSelectedTrimStartFrames = clampTrimStart(
-        selectedClip,
-        selectedAsset,
-        state.project.sequence.settings.fps,
-        nextTrimStartFrames
-      );
-      const trimDeltaFrames =
-        nextSelectedTrimStartFrames - selectedClip.trimStartFrames;
-
+      const selectedClip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!selectedClip) return state;
+      const selectedAsset = state.project.assets.find((a) => a.id === selectedClip.assetId);
+      if (!selectedAsset) return state;
+      const fps = state.project.sequence.settings.fps;
+      const clamped = clampTrimStart(selectedClip, selectedAsset, fps, nextTrim);
+      const delta = clamped - selectedClip.trimStartFrames;
       return applyClipMutation(state, clipId, (clip, asset) => {
-        const nextClipTrimStartFrames = clampTrimStart(
-          clip,
-          asset,
-          state.project.sequence.settings.fps,
-          clip.trimStartFrames + trimDeltaFrames
-        );
-        const nextTrimDeltaFrames =
-          nextClipTrimStartFrames - clip.trimStartFrames;
-
-        return {
-          ...clip,
-          startFrame: Math.max(0, clip.startFrame + nextTrimDeltaFrames),
-          trimStartFrames: nextClipTrimStartFrames
-        };
+        const nc = clampTrimStart(clip, asset, fps, clip.trimStartFrames + delta);
+        const nd = nc - clip.trimStartFrames;
+        return { ...clip, startFrame: Math.max(0, clip.startFrame + nd), trimStartFrames: nc };
       });
     });
   },
-  trimClipEnd: (clipId, nextTrimEndFrames) => {
+
+  trimClipEnd: (clipId, nextTrim) => {
     set((state) => {
-      const selectedClip = state.project.sequence.clips.find(
-        (candidate) => candidate.id === clipId
-      );
-
-      if (!selectedClip) {
-        return state;
-      }
-
-      const selectedAsset = state.project.assets.find(
-        (candidate) => candidate.id === selectedClip.assetId
-      );
-
-      if (!selectedAsset) {
-        return state;
-      }
-
-      const nextSelectedTrimEndFrames = clampTrimEnd(
-        selectedClip,
-        selectedAsset,
-        state.project.sequence.settings.fps,
-        nextTrimEndFrames
-      );
-      const trimDeltaFrames =
-        nextSelectedTrimEndFrames - selectedClip.trimEndFrames;
-
+      const selectedClip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!selectedClip) return state;
+      const selectedAsset = state.project.assets.find((a) => a.id === selectedClip.assetId);
+      if (!selectedAsset) return state;
+      const fps = state.project.sequence.settings.fps;
+      const clamped = clampTrimEnd(selectedClip, selectedAsset, fps, nextTrim);
+      const delta = clamped - selectedClip.trimEndFrames;
       return applyClipMutation(state, clipId, (clip, asset) => ({
         ...clip,
-        trimEndFrames: clampTrimEnd(
-          clip,
-          asset,
-          state.project.sequence.settings.fps,
-          clip.trimEndFrames + trimDeltaFrames
-        )
+        trimEndFrames: clampTrimEnd(clip, asset, fps, clip.trimEndFrames + delta)
       }));
     });
   },
+
   splitSelectedClipAtPlayhead: () => {
     set((state) => {
-      if (!state.selectedClipId) {
-        return state;
-      }
-
-      return splitStateAtFrame(
-        state,
-        state.selectedClipId,
-        state.playback.playheadFrame
-      );
+      if (!state.selectedClipId) return state;
+      return splitStateAtFrame(state, state.selectedClipId, state.playback.playheadFrame);
     });
   },
+
   splitClipAtFrame: (clipId, frame) => {
     set((state) => splitStateAtFrame(state, clipId, frame));
   },
+
   removeSelectedClip: () => {
     set((state) => {
-      if (!state.selectedClipId) {
-        return state;
+      if (!state.selectedClipId) return state;
+      const linked = getLinkedClips(state.project, state.selectedClipId);
+      if (!linked.length) return state;
+      const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+      const segsById = new Map(segs.map((s) => [s.clip.id, s]));
+      const linkedIds = new Set(linked.map((c) => c.id));
+      const trackIds = linked.map((c) => c.trackId);
+      const removedByTrack = new Map<string, Array<{ dur: number; start: number }>>();
+      for (const clip of linked) {
+        const seg = segsById.get(clip.id);
+        if (!seg) continue;
+        const arr = removedByTrack.get(clip.trackId) ?? [];
+        arr.push({ dur: seg.durationFrames, start: seg.startFrame });
+        removedByTrack.set(clip.trackId, arr);
       }
-
-      const linkedClips = getLinkedClips(state.project, state.selectedClipId);
-
-      if (!linkedClips.length) {
-        return state;
-      }
-
-      const currentSegments = buildTimelineSegments(
-        state.project.sequence,
-        state.project.assets
-      );
-      const segmentsById = new Map(
-        currentSegments.map((segment) => [segment.clip.id, segment])
-      );
-      const linkedClipIds = new Set(linkedClips.map((clip) => clip.id));
-      const affectedTrackIds = linkedClips.map((clip) => clip.trackId);
-      const removedSegmentsByTrack = new Map<
-        string,
-        Array<{ durationFrames: number; startFrame: number }>
-      >();
-
-      for (const clip of linkedClips) {
-        const segment = segmentsById.get(clip.id);
-
-        if (!segment) {
-          continue;
-        }
-
-        const removedSegments = removedSegmentsByTrack.get(clip.trackId) ?? [];
-
-        removedSegments.push({
-          durationFrames: segment.durationFrames,
-          startFrame: segment.startFrame
-        });
-        removedSegmentsByTrack.set(clip.trackId, removedSegments);
-      }
-
-      const nextProject = resolveTracks(
+      const next = resolveTracks(
         {
           ...state.project,
           sequence: {
             ...state.project.sequence,
             clips: state.project.sequence.clips
-              .filter((candidate) => !linkedClipIds.has(candidate.id))
-              .map((candidate) => {
-                const removedSegments = removedSegmentsByTrack.get(candidate.trackId);
-
-                if (!removedSegments?.length) {
-                  return candidate;
-                }
-
-                const rippleFrames = removedSegments.reduce((totalFrames, removedSegment) => {
-                  return removedSegment.startFrame < candidate.startFrame
-                    ? totalFrames + removedSegment.durationFrames
-                    : totalFrames;
-                }, 0);
-
-                if (rippleFrames <= 0) {
-                  return candidate;
-                }
-
-                return {
-                  ...candidate,
-                  startFrame: Math.max(0, candidate.startFrame - rippleFrames)
-                };
+              .filter((c) => !linkedIds.has(c.id))
+              .map((c) => {
+                const removed = removedByTrack.get(c.trackId);
+                if (!removed?.length) return c;
+                const ripple = removed.reduce((t, r) => r.start < c.startFrame ? t + r.dur : t, 0);
+                return ripple > 0 ? { ...c, startFrame: Math.max(0, c.startFrame - ripple) } : c;
               })
           }
         },
-        affectedTrackIds
+        trackIds
       );
-      const nextSegments = buildTimelineSegments(
-        nextProject.sequence,
-        nextProject.assets
-      );
-      const fallbackSegment =
-        findPlayableSegmentAtFrame(
-          nextSegments,
-          state.playback.playheadFrame,
-          "video"
-        ) ??
-        nextSegments[0] ??
-        null;
-
+      const nextSegs = buildTimelineSegments(next.sequence, next.assets);
+      const fallback = findPlayableSegmentAtFrame(nextSegs, state.playback.playheadFrame, "video") ?? nextSegs[0] ?? null;
       return {
-        project: nextProject,
-        selectedClipId: fallbackSegment?.clip.id ?? null,
-        selectedAssetId: fallbackSegment?.asset.id ?? state.selectedAssetId,
+        project: next,
+        selectedClipId: fallback?.clip.id ?? null,
+        selectedAssetId: fallback?.asset.id ?? state.selectedAssetId,
         playback: {
-          isPlaying: nextSegments.length ? state.playback.isPlaying : false,
-          playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame)
+          isPlaying: nextSegs.length ? state.playback.isPlaying : false,
+          playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
         }
       };
     });
   },
+
   toggleClipEnabled: (clipId) => {
     set((state) => {
-      const clip = state.project.sequence.clips.find(
-        (candidate) => candidate.id === clipId
-      );
-
-      if (!clip) {
-        return state;
-      }
-
-      const nextIsEnabled = !clip.isEnabled;
-
-      return applyClipMutation(state, clipId, (candidate) => ({
-        ...candidate,
-        isEnabled: nextIsEnabled
-      }));
+      const clip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+      const next = !clip.isEnabled;
+      return applyClipMutation(state, clipId, (c) => ({ ...c, isEnabled: next }));
     });
   },
+
   detachLinkedClips: (clipId) => {
     set((state) => {
-      const clip = state.project.sequence.clips.find(
-        (candidate) => candidate.id === clipId
-      );
-
-      if (!clip?.linkedGroupId) {
-        return state;
-      }
-
+      const clip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!clip?.linkedGroupId) return state;
       return {
         project: {
           ...state.project,
           sequence: {
             ...state.project.sequence,
-            clips: state.project.sequence.clips.map((candidate) =>
-              candidate.linkedGroupId === clip.linkedGroupId
-                ? {
-                    ...candidate,
-                    linkedGroupId: null
-                  }
-                : candidate
+            clips: state.project.sequence.clips.map((c) =>
+              c.linkedGroupId === clip.linkedGroupId ? { ...c, linkedGroupId: null } : c
             )
           }
         }
       };
     });
   },
+
+  // ── Transitions ───────────────────────────────────────────────────────────
+
+  applyTransitionToSelectedClip: (edge, type = "fade") => {
+    const state = useEditorStore.getState();
+    if (!state.selectedClipId) return "Select a timeline clip before adding a transition.";
+    const target = getTransitionTargetClip(state.project, state.selectedClipId);
+    if (!target) return "Transitions apply to video clips.";
+    const asset = state.project.assets.find((a) => a.id === target.assetId);
+    if (!asset) return "The selected clip is missing its source media.";
+    const dur = getClipDurationFrames(target, asset, state.project.sequence.settings.fps);
+    const tDur = getClipTransitionDurationFrames(
+      { type, durationFrames: Math.max(6, Math.round(state.project.sequence.settings.fps * 0.5)) },
+      dur
+    );
+    if (tDur < 1) return "Clip is too short for that transition.";
+
+    set((s) => {
+      const t = getTransitionTargetClip(s.project, s.selectedClipId!);
+      if (!t) return s;
+      return {
+        project: {
+          ...s.project,
+          sequence: {
+            ...s.project.sequence,
+            clips: s.project.sequence.clips.map((c) => {
+              if (c.id !== t.id) return c;
+              return edge === "in"
+                ? { ...c, transitionIn: { type, durationFrames: tDur } }
+                : { ...c, transitionOut: { type, durationFrames: tDur } };
+            })
+          }
+        },
+        selectedClipId: t.id,
+        selectedAssetId: t.assetId
+      };
+    });
+    return `${type} ${edge === "in" ? "in" : "out"} transition added.`;
+  },
+
   setSelectedClipTransitionType: (edge, type) => {
     const state = useEditorStore.getState();
-
-    if (!state.selectedClipId) {
-      return "Select a timeline clip before choosing a transition.";
-    }
-
-    const targetClip = getTransitionTargetClip(state.project, state.selectedClipId);
-
-    if (!targetClip) {
-      return "Transitions currently apply to video timeline clips.";
-    }
-
-    const asset = state.project.assets.find(
-      (candidate) => candidate.id === targetClip.assetId
+    if (!state.selectedClipId) return "Select a clip first.";
+    const target = getTransitionTargetClip(state.project, state.selectedClipId);
+    if (!target) return "Transitions apply to video clips.";
+    const asset = state.project.assets.find((a) => a.id === target.assetId);
+    if (!asset) return "Missing source media.";
+    const fps = state.project.sequence.settings.fps;
+    const dur = getClipDurationFrames(target, asset, fps);
+    const current = edge === "in" ? target.transitionIn : target.transitionOut;
+    const tDur = getClipTransitionDurationFrames(
+      { type, durationFrames: current?.durationFrames ?? Math.max(6, Math.round(fps * 0.5)) },
+      dur
     );
+    if (tDur < 1) return "Clip too short for that transition.";
 
-    if (!asset) {
-      return "The selected clip is missing its source media.";
-    }
-
-    const clipDurationFrames = getClipDurationFrames(
-      targetClip,
-      asset,
-      state.project.sequence.settings.fps
-    );
-    const currentTransition =
-      edge === "in" ? targetClip.transitionIn : targetClip.transitionOut;
-    const nextDurationFrames = getClipTransitionDurationFrames(
-      {
-        type,
-        durationFrames:
-          currentTransition?.durationFrames ??
-          Math.max(6, Math.round(state.project.sequence.settings.fps * 0.5))
-      },
-      clipDurationFrames
-    );
-
-    if (nextDurationFrames < 1) {
-      return "The selected clip is too short for that transition.";
-    }
-
-    set((currentState) => {
-      const selectedId = currentState.selectedClipId;
-
-      if (!selectedId) {
-        return currentState;
-      }
-
-      const currentTargetClip = getTransitionTargetClip(
-        currentState.project,
-        selectedId
-      );
-
-      if (!currentTargetClip) {
-        return currentState;
-      }
-
+    set((s) => {
+      const t = getTransitionTargetClip(s.project, s.selectedClipId!);
+      if (!t) return s;
       return {
         project: {
-          ...currentState.project,
+          ...s.project,
           sequence: {
-            ...currentState.project.sequence,
-            clips: currentState.project.sequence.clips.map((candidate) => {
-              if (candidate.id !== currentTargetClip.id) {
-                return candidate;
-              }
-
+            ...s.project.sequence,
+            clips: s.project.sequence.clips.map((c) => {
+              if (c.id !== t.id) return c;
               return edge === "in"
-                ? {
-                    ...candidate,
-                    transitionIn: {
-                      type,
-                      durationFrames: nextDurationFrames
-                    }
-                  }
-                : {
-                    ...candidate,
-                    transitionOut: {
-                      type,
-                      durationFrames: nextDurationFrames
-                    }
-                  };
+                ? { ...c, transitionIn: { type, durationFrames: tDur } }
+                : { ...c, transitionOut: { type, durationFrames: tDur } };
             })
           }
         },
-        selectedClipId: currentTargetClip.id,
-        selectedAssetId: currentTargetClip.assetId
+        selectedClipId: t.id,
+        selectedAssetId: t.assetId
       };
     });
-
-    return `${type} ${edge === "in" ? "intro" : "outro"} transition updated.`;
+    return `Transition type updated to ${type}.`;
   },
+
   setSelectedClipTransitionDuration: (edge, durationFrames) => {
     const state = useEditorStore.getState();
-
-    if (!state.selectedClipId) {
-      return "Select a timeline clip before editing fades.";
-    }
-
-    const targetClip = getTransitionTargetClip(state.project, state.selectedClipId);
-
-    if (!targetClip) {
-      return "Fade controls currently apply to video timeline clips.";
-    }
-
-    const asset = state.project.assets.find(
-      (candidate) => candidate.id === targetClip.assetId
+    if (!state.selectedClipId) return "Select a clip first.";
+    const target = getTransitionTargetClip(state.project, state.selectedClipId);
+    if (!target) return "Transitions apply to video clips.";
+    const asset = state.project.assets.find((a) => a.id === target.assetId);
+    if (!asset) return "Missing source media.";
+    const fps = state.project.sequence.settings.fps;
+    const dur = getClipDurationFrames(target, asset, fps);
+    const current = edge === "in" ? target.transitionIn : target.transitionOut;
+    const tDur = getClipTransitionDurationFrames(
+      durationFrames > 0 ? { type: current?.type ?? "fade", durationFrames } : null,
+      dur
     );
 
-    if (!asset) {
-      return "The selected clip is missing its source media.";
-    }
-
-    const clipDurationFrames = getClipDurationFrames(
-      targetClip,
-      asset,
-      state.project.sequence.settings.fps
-    );
-    const nextDurationFrames = getClipTransitionDurationFrames(
-      durationFrames > 0
-        ? {
-            type: "fade",
-            durationFrames
-          }
-        : null,
-      clipDurationFrames
-    );
-
-    set((currentState) => {
-      const selectedId = currentState.selectedClipId;
-
-      if (!selectedId) {
-        return currentState;
-      }
-
-      const currentTargetClip = getTransitionTargetClip(
-        currentState.project,
-        selectedId
-      );
-
-      if (!currentTargetClip) {
-        return currentState;
-      }
-
+    set((s) => {
+      const t = getTransitionTargetClip(s.project, s.selectedClipId!);
+      if (!t) return s;
       return {
         project: {
-          ...currentState.project,
+          ...s.project,
           sequence: {
-            ...currentState.project.sequence,
-            clips: currentState.project.sequence.clips.map((candidate) => {
-              if (candidate.id !== currentTargetClip.id) {
-                return candidate;
-              }
-
+            ...s.project.sequence,
+            clips: s.project.sequence.clips.map((c) => {
+              if (c.id !== t.id) return c;
+              const existingType = (edge === "in" ? c.transitionIn?.type : c.transitionOut?.type) ?? "fade";
               return edge === "in"
-                ? {
-                    ...candidate,
-                    transitionIn:
-                      nextDurationFrames > 0
-                        ? {
-                            type: "fade",
-                            durationFrames: nextDurationFrames
-                          }
-                        : null
-                  }
-                : {
-                    ...candidate,
-                    transitionOut:
-                      nextDurationFrames > 0
-                        ? {
-                            type: "fade",
-                            durationFrames: nextDurationFrames
-                          }
-                        : null
-                  };
+                ? { ...c, transitionIn: tDur > 0 ? { type: existingType, durationFrames: tDur } : null }
+                : { ...c, transitionOut: tDur > 0 ? { type: existingType, durationFrames: tDur } : null };
             })
           }
         },
-        selectedClipId: currentTargetClip.id,
-        selectedAssetId: currentTargetClip.assetId
+        selectedClipId: t.id,
+        selectedAssetId: t.assetId
       };
     });
-
-    return nextDurationFrames > 0
-      ? `${edge === "in" ? "Fade in" : "Fade out"} updated.`
-      : `${edge === "in" ? "Fade in" : "Fade out"} cleared.`;
+    return tDur > 0 ? `Transition duration updated.` : `Transition cleared.`;
   },
+
+  clearTransition: (clipId, edge) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      transitionIn: edge === "in" ? null : c.transitionIn,
+      transitionOut: edge === "out" ? null : c.transitionOut
+    })));
+  },
+
+  // ── Audio ─────────────────────────────────────────────────────────────────
+
   extractAudioFromSelectedClip: () => {
     const state = useEditorStore.getState();
-
-    if (!state.selectedClipId) {
-      return "Select a timeline clip before extracting audio.";
-    }
-
-    const targetClip = getTransitionTargetClip(state.project, state.selectedClipId);
-
-    if (!targetClip) {
-      return "Select a video clip to extract audio.";
-    }
-
-    const asset = state.project.assets.find(
-      (candidate) => candidate.id === targetClip.assetId
-    );
-
-    if (!asset?.hasAudio) {
-      return "This source clip does not contain embedded audio.";
-    }
-
-    const linkedClips = getLinkedClips(state.project, targetClip.id);
-    const existingAudioClip = linkedClips.find((candidate) => {
-      const track = state.project.sequence.tracks.find(
-        (trackCandidate) => trackCandidate.id === candidate.trackId
-      );
-
-      return track?.kind === "audio";
+    if (!state.selectedClipId) return "Select a timeline clip first.";
+    const target = getTransitionTargetClip(state.project, state.selectedClipId);
+    if (!target) return "Select a video clip to extract audio.";
+    const asset = state.project.assets.find((a) => a.id === target.assetId);
+    if (!asset?.hasAudio) return "This clip has no embedded audio.";
+    const linked = getLinkedClips(state.project, target.id);
+    const existingAudio = linked.find((c) => {
+      const t = state.project.sequence.tracks.find((tr) => tr.id === c.trackId);
+      return t?.kind === "audio";
     });
-    const existingIndependentAudioClip = findIndependentAudioCompanion(
-      state.project,
-      targetClip
-    );
 
-    if (existingAudioClip) {
-      if (!targetClip.linkedGroupId && !existingAudioClip.linkedGroupId) {
-        return "Audio is already extracted and independent.";
-      }
-
-      set((currentState) => {
-        const selectedId = currentState.selectedClipId;
-
-        if (!selectedId) {
-          return currentState;
-        }
-
-        const currentTargetClip = getTransitionTargetClip(
-          currentState.project,
-          selectedId
-        );
-
-        if (!currentTargetClip?.linkedGroupId) {
-          return currentState;
-        }
-
+    if (existingAudio) {
+      if (!target.linkedGroupId && !existingAudio.linkedGroupId) return "Audio is already extracted.";
+      set((s) => {
+        const t2 = getTransitionTargetClip(s.project, s.selectedClipId!);
+        if (!t2?.linkedGroupId) return s;
         return {
           project: {
-            ...currentState.project,
+            ...s.project,
             sequence: {
-              ...currentState.project.sequence,
-              clips: currentState.project.sequence.clips.map((candidate) =>
-                candidate.linkedGroupId === currentTargetClip.linkedGroupId
-                  ? {
-                      ...candidate,
-                      linkedGroupId: null
-                    }
-                  : candidate
+              ...s.project.sequence,
+              clips: s.project.sequence.clips.map((c) =>
+                c.linkedGroupId === t2.linkedGroupId ? { ...c, linkedGroupId: null } : c
               )
             }
           }
         };
       });
-
-      return "Audio extracted. The audio clip is now independent from the video clip.";
-    }
-
-    if (existingIndependentAudioClip) {
-      return "Audio is already extracted and available on the audio track.";
+      return "Audio extracted and independent from video.";
     }
 
     const audioTrackId = getPrimaryTrackId(state.project, "audio");
+    if (!audioTrackId) return "No audio track available.";
 
-    if (!audioTrackId) {
-      return "No audio track is available in the timeline.";
-    }
-
-    set((currentState) => {
-      const selectedId = currentState.selectedClipId;
-
-      if (!selectedId) {
-        return currentState;
-      }
-
-      const currentTargetClip = getTransitionTargetClip(
-        currentState.project,
-        selectedId
-      );
-
-      if (!currentTargetClip) {
-        return currentState;
-      }
-
-      const audioClip: TimelineClip = {
-        id: createId(),
-        assetId: currentTargetClip.assetId,
-        trackId: audioTrackId,
-        startFrame: currentTargetClip.startFrame,
-        trimStartFrames: currentTargetClip.trimStartFrames,
-        trimEndFrames: currentTargetClip.trimEndFrames,
-        linkedGroupId: null,
-        isEnabled: currentTargetClip.isEnabled,
-        transitionIn: null,
-        transitionOut: null
+    set((s) => {
+      const t2 = getTransitionTargetClip(s.project, s.selectedClipId!);
+      if (!t2) return s;
+      const audioClip = createEmptyClip(t2.assetId, audioTrackId, t2.startFrame);
+      const audioClipFull: TimelineClip = {
+        ...audioClip,
+        trimStartFrames: t2.trimStartFrames,
+        trimEndFrames: t2.trimEndFrames,
+        isEnabled: t2.isEnabled
       };
-      const nextProject = resolveTracks(
-        {
-          ...currentState.project,
-          sequence: {
-            ...currentState.project.sequence,
-            clips: [...currentState.project.sequence.clips, audioClip]
-          }
-        },
+      const next = resolveTracks(
+        { ...s.project, sequence: { ...s.project.sequence, clips: [...s.project.sequence.clips, audioClipFull] } },
         [audioTrackId]
       );
-
-      return {
-        project: nextProject
-      };
+      return { project: next };
     });
-
-    return "Audio extracted onto the primary audio track.";
+    return "Audio extracted onto audio track.";
   },
-  applyTransitionToSelectedClip: (edge, type = "fade") => {
-    const state = useEditorStore.getState();
 
-    if (!state.selectedClipId) {
-      return "Select a timeline clip before adding a transition.";
-    }
-
-    const targetClip = getTransitionTargetClip(state.project, state.selectedClipId);
-
-    if (!targetClip) {
-      return "Transitions currently apply to video timeline clips.";
-    }
-
-    const asset = state.project.assets.find(
-      (candidate) => candidate.id === targetClip.assetId
-    );
-
-    if (!asset) {
-      return "The selected clip is missing its source media.";
-    }
-
-    const durationFrames = getClipDurationFrames(
-      targetClip,
-      asset,
-      state.project.sequence.settings.fps
-    );
-    const transitionDurationFrames = getClipTransitionDurationFrames(
-      {
-        type,
-        durationFrames: Math.max(
-          6,
-          Math.round(state.project.sequence.settings.fps * 0.5)
-        )
-      },
-      durationFrames
-    );
-
-    if (transitionDurationFrames < 1) {
-      return "The selected clip is too short for that transition.";
-    }
-
-    set((currentState) => {
-      const selectedId = currentState.selectedClipId;
-
-      if (!selectedId) {
-        return currentState;
-      }
-
-      const currentTargetClip = getTransitionTargetClip(
-        currentState.project,
-        selectedId
-      );
-
-      if (!currentTargetClip) {
-        return currentState;
-      }
-
-      return {
-        project: {
-          ...currentState.project,
-          sequence: {
-            ...currentState.project.sequence,
-            clips: currentState.project.sequence.clips.map((candidate) => {
-              if (candidate.id !== currentTargetClip.id) {
-                return candidate;
-              }
-
-              return edge === "in"
-                ? {
-                    ...candidate,
-                    transitionIn: {
-                      type,
-                      durationFrames: transitionDurationFrames
-                    }
-                  }
-                : {
-                    ...candidate,
-                    transitionOut: {
-                      type,
-                      durationFrames: transitionDurationFrames
-                    }
-                  };
-            })
-          }
-        },
-        selectedClipId: currentTargetClip.id,
-        selectedAssetId: currentTargetClip.assetId
-      };
-    });
-
-    return `${type} ${edge === "in" ? "intro" : "outro"} transition added.`;
+  setClipVolume: (clipId, volume) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      volume: Math.max(0, Math.min(2, volume))
+    })));
   },
-  setPlayheadFrame: (playheadFrame) => {
-    set((state) => {
-      const nextFrame = clampPlayhead(state.project, playheadFrame);
 
-      if (nextFrame === state.playback.playheadFrame) {
-        return state;
-      }
-
-      return {
-        playback: {
-          ...state.playback,
-          playheadFrame: nextFrame
-        }
-      };
-    });
+  setClipSpeed: (clipId, speed) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      speed: Math.max(0.1, Math.min(4, speed))
+    })));
   },
-  nudgePlayhead: (deltaFrames) => {
-    set((state) => {
-      const nextFrame = clampPlayhead(
-        state.project,
-        state.playback.playheadFrame + deltaFrames
-      );
 
-      if (nextFrame === state.playback.playheadFrame) {
-        return state;
-      }
+  // ── Masks ─────────────────────────────────────────────────────────────────
 
-      return {
-        playback: {
-          ...state.playback,
-          playheadFrame: nextFrame
-        }
-      };
-    });
+  addMaskToClip: (clipId, mask) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      masks: [...c.masks, mask]
+    })));
   },
-  setPlaybackPlaying: (isPlaying) => {
-    set((state) => {
-      if (state.playback.isPlaying === isPlaying) {
-        return state;
-      }
 
-      return {
-        playback: {
-          ...state.playback,
-          isPlaying
-        }
-      };
-    });
+  updateMask: (clipId, maskId, updates) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      masks: c.masks.map((m) => (m.id === maskId ? { ...m, ...updates } : m))
+    })));
   },
-  stopPlayback: () => {
-    set((state) => {
-      if (!state.playback.isPlaying) {
-        return state;
-      }
 
-      return {
-        playback: {
-          ...state.playback,
-          isPlaying: false
-        }
-      };
-    });
+  removeMask: (clipId, maskId) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      masks: c.masks.filter((m) => m.id !== maskId)
+    })));
   },
-  setToolMode: (toolMode) => {
-    set({
-      toolMode
-    });
-  },
-  toggleBladeTool: () => {
-    set((state) => ({
-      toolMode: state.toolMode === "blade" ? "select" : "blade"
+
+  reorderMasks: (clipId, fromIdx, toIdx) => {
+    set((state) => updateClipInState(state, clipId, (c) => {
+      const masks = [...c.masks];
+      const [removed] = masks.splice(fromIdx, 1);
+      masks.splice(toIdx, 0, removed);
+      return { ...c, masks };
     }));
   },
-  setEnvironment: (environment) => {
-    set({
-      environment
+
+  // ── Effects ───────────────────────────────────────────────────────────────
+
+  addEffectToClip: (clipId, effect) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      effects: [...c.effects, { ...effect, order: c.effects.length }]
+    })));
+  },
+
+  updateEffect: (clipId, effectId, updates) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      effects: c.effects.map((e) => (e.id === effectId ? { ...e, ...updates } : e))
+    })));
+  },
+
+  removeEffect: (clipId, effectId) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      effects: c.effects.filter((e) => e.id !== effectId).map((e, i) => ({ ...e, order: i }))
+    })));
+  },
+
+  toggleEffect: (clipId, effectId) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      effects: c.effects.map((e) => (e.id === effectId ? { ...e, enabled: !e.enabled } : e))
+    })));
+  },
+
+  reorderEffects: (clipId, fromIdx, toIdx) => {
+    set((state) => updateClipInState(state, clipId, (c) => {
+      const effects = [...c.effects];
+      const [removed] = effects.splice(fromIdx, 1);
+      effects.splice(toIdx, 0, removed);
+      return { ...c, effects: effects.map((e, i) => ({ ...e, order: i })) };
+    }));
+  },
+
+  // ── Color Grading ─────────────────────────────────────────────────────────
+
+  enableColorGrade: (clipId) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      colorGrade: c.colorGrade ?? createDefaultColorGrade()
+    })));
+  },
+
+  setColorGrade: (clipId, grade) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      colorGrade: { ...(c.colorGrade ?? createDefaultColorGrade()), ...grade }
+    })));
+  },
+
+  resetColorGrade: (clipId) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      colorGrade: createDefaultColorGrade()
+    })));
+  },
+
+  // ── Background Removal ────────────────────────────────────────────────────
+
+  setBackgroundRemoval: (clipId, config) => {
+    set((state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      aiBackgroundRemoval: {
+        ...(c.aiBackgroundRemoval ?? {
+          enabled: true,
+          edgeRefinement: 0.5,
+          spillSuppression: 0.3,
+          backgroundType: "transparent" as const,
+          backgroundColor: "#000000",
+          backgroundAssetId: null,
+          threshold: 0.5
+        }),
+        ...config
+      }
+    })));
+  },
+
+  toggleBackgroundRemoval: (clipId) => {
+    set((state) => updateClipInState(state, clipId, (c) => {
+      if (!c.aiBackgroundRemoval) {
+        return {
+          ...c,
+          aiBackgroundRemoval: {
+            enabled: true,
+            edgeRefinement: 0.5,
+            spillSuppression: 0.3,
+            backgroundType: "transparent" as const,
+            backgroundColor: "#000000",
+            backgroundAssetId: null,
+            threshold: 0.5
+          }
+        };
+      }
+      return { ...c, aiBackgroundRemoval: { ...c.aiBackgroundRemoval, enabled: !c.aiBackgroundRemoval.enabled } };
+    }));
+  },
+
+  // ── Beat Sync ─────────────────────────────────────────────────────────────
+
+  setBeatSync: (clipId, config) => {
+    if (clipId === null) {
+      // Set on sequence
+      set((state) => ({
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            beatSync: {
+              ...(state.project.sequence.beatSync ?? {
+                bpm: 120,
+                beatsPerMeasure: 4,
+                offset: 0,
+                detectedBeats: [],
+                syncMode: "everyBeat" as const,
+                sensitivity: 0.7
+              }),
+              ...config
+            }
+          }
+        }
+      }));
+    } else {
+      set((state) => updateClipInState(state, clipId, (c) => ({
+        ...c,
+        beatSync: {
+          ...(c.beatSync ?? {
+            bpm: 120,
+            beatsPerMeasure: 4,
+            offset: 0,
+            detectedBeats: [],
+            syncMode: "everyBeat" as const,
+            sensitivity: 0.7
+          }),
+          ...config
+        }
+      })));
+    }
+  },
+
+  clearBeatSync: (clipId) => {
+    if (clipId === null) {
+      set((state) => ({
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, beatSync: null }
+        }
+      }));
+    } else {
+      set((state) => updateClipInState(state, clipId, (c) => ({ ...c, beatSync: null })));
+    }
+  },
+
+  // ── Tracks ────────────────────────────────────────────────────────────────
+
+  addTrack: (kind) => {
+    set((state) => {
+      const count = state.project.sequence.tracks.filter((t) => t.kind === kind).length;
+      const label = kind === "video" ? "V" : "A";
+      const newTrack: TimelineTrack = {
+        id: createId(),
+        name: `${label}${count + 1}`,
+        kind,
+        muted: false,
+        locked: false,
+        solo: false,
+        height: kind === "video" ? 56 : 44,
+        color: kind === "video" ? "#4f8ef7" : "#2fc77a"
+      };
+      return {
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            tracks: [...state.project.sequence.tracks, newTrack]
+          }
+        }
+      };
     });
-  }
+  },
+
+  removeTrack: (trackId) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.filter((t) => t.id !== trackId),
+          clips: state.project.sequence.clips.filter((c) => c.trackId !== trackId)
+        }
+      }
+    }));
+  },
+
+  updateTrack: (trackId, updates) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.map((t) =>
+            t.id === trackId ? { ...t, ...updates } : t
+          )
+        }
+      }
+    }));
+  },
+
+  // ── Markers ───────────────────────────────────────────────────────────────
+
+  addMarker: (marker) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          markers: [
+            ...state.project.sequence.markers,
+            { ...marker, id: createId() }
+          ]
+        }
+      }
+    }));
+  },
+
+  removeMarker: (markerId) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          markers: state.project.sequence.markers.filter((m) => m.id !== markerId)
+        }
+      }
+    }));
+  },
+
+  // ── Playhead ─────────────────────────────────────────────────────────────
+
+  setPlayheadFrame: (frame) => {
+    set((state) => {
+      const next = clampPlayhead(state.project, frame);
+      if (next === state.playback.playheadFrame) return state;
+      return { playback: { ...state.playback, playheadFrame: next } };
+    });
+  },
+
+  nudgePlayhead: (delta) => {
+    set((state) => {
+      const next = clampPlayhead(state.project, state.playback.playheadFrame + delta);
+      if (next === state.playback.playheadFrame) return state;
+      return { playback: { ...state.playback, playheadFrame: next } };
+    });
+  },
+
+  setPlaybackPlaying: (isPlaying) => {
+    set((state) => {
+      if (state.playback.isPlaying === isPlaying) return state;
+      return { playback: { ...state.playback, isPlaying } };
+    });
+  },
+
+  stopPlayback: () => {
+    set((state) => {
+      if (!state.playback.isPlaying) return state;
+      return { playback: { ...state.playback, isPlaying: false } };
+    });
+  },
+
+  // ── Tool & Page ───────────────────────────────────────────────────────────
+
+  setToolMode: (toolMode) => set({ toolMode }),
+
+  toggleBladeTool: () => {
+    set((state) => ({ toolMode: state.toolMode === "blade" ? "select" : "blade" }));
+  },
+
+  setActivePage: (page) => set({ activePage: page }),
+
+  setEnvironment: (environment) => set({ environment })
 }));
