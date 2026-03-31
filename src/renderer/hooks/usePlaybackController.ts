@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useEffectEvent,
   useRef,
   type MutableRefObject,
   type RefObject
@@ -39,28 +38,20 @@ function getTargetCurrentTime(
   sequenceFps: number
 ): number {
   const segmentOffsetFrames = Math.max(0, playheadFrame - segment.startFrame);
-  const expectedTime =
-    segment.sourceInSeconds + framesToSeconds(segmentOffsetFrames, sequenceFps);
-
+  const expectedTime = segment.sourceInSeconds + framesToSeconds(segmentOffsetFrames, sequenceFps);
   return Math.min(
     Math.max(expectedTime, segment.sourceInSeconds),
-    Math.max(
-      segment.sourceInSeconds,
-      segment.sourceOutSeconds - framesToSeconds(1, sequenceFps)
-    )
+    Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, sequenceFps))
   );
 }
 
 function getPlaybackErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
+  if (error instanceof Error && error.message) return error.message;
   return "Playback could not start for this media source.";
 }
 
 function getEnabledSegments(segments: TimelineSegment[]): TimelineSegment[] {
-  return segments.filter((segment) => segment.clip.isEnabled);
+  return segments.filter((s) => s.clip.isEnabled);
 }
 
 function findActivePlayableSegmentAtFrame(
@@ -68,72 +59,43 @@ function findActivePlayableSegmentAtFrame(
   frame: number,
   trackKind: TimelineTrackKind
 ): TimelineSegment | null {
-  const coveringSegments = segments.filter(
-    (segment) =>
-      segment.track.kind === trackKind &&
-      segment.clip.isEnabled &&
-      frame >= segment.startFrame &&
-      frame < segment.endFrame
+  const covering = segments.filter(
+    (s) =>
+      s.track.kind === trackKind &&
+      s.clip.isEnabled &&
+      frame >= s.startFrame &&
+      frame < s.endFrame
   );
-
-  if (!coveringSegments.length) {
-    return null;
-  }
-
-  return coveringSegments.sort((left, right) => right.trackIndex - left.trackIndex)[0];
+  if (!covering.length) return null;
+  return covering.sort((a, b) => b.trackIndex - a.trackIndex)[0];
 }
 
-async function loadMediaSource(
-  element: HTMLMediaElement,
-  sourceUrl: string,
-  assetName: string
-): Promise<void> {
+async function loadMediaSource(element: HTMLMediaElement, sourceUrl: string, assetName: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const handleLoadedData = () => {
-      cleanup();
-      resolve();
-    };
-    const handleError = () => {
-      cleanup();
-      reject(new Error(`Failed to load ${assetName} into playback.`));
-    };
+    const handleLoadedData = () => { cleanup(); resolve(); };
+    const handleError = () => { cleanup(); reject(new Error(`Failed to load ${assetName} into playback.`)); };
     const cleanup = () => {
       element.removeEventListener("loadeddata", handleLoadedData);
       element.removeEventListener("error", handleError);
     };
-
     element.pause();
-    element.addEventListener("loadeddata", handleLoadedData, {
-      once: true
-    });
+    element.addEventListener("loadeddata", handleLoadedData, { once: true });
     element.addEventListener("error", handleError, { once: true });
     element.src = sourceUrl;
     element.load();
   });
 }
 
-async function seekMediaElement(
-  element: HTMLMediaElement,
-  targetTime: number,
-  sequenceFps: number
-): Promise<void> {
+async function seekMediaElement(element: HTMLMediaElement, targetTime: number, sequenceFps: number): Promise<void> {
   await new Promise<void>((resolve) => {
-    const timeoutId = window.setTimeout(() => {
-      cleanup();
-      resolve();
-    }, 350);
-    const handleSeeked = () => {
-      cleanup();
-      resolve();
-    };
+    const timeoutId = window.setTimeout(() => { cleanup(); resolve(); }, 400);
+    const handleSeeked = () => { cleanup(); resolve(); };
     const cleanup = () => {
       window.clearTimeout(timeoutId);
       element.removeEventListener("seeked", handleSeeked);
     };
-
     element.addEventListener("seeked", handleSeeked, { once: true });
     element.currentTime = targetTime;
-
     if (Math.abs(element.currentTime - targetTime) < framesToSeconds(1, sequenceFps)) {
       cleanup();
       resolve();
@@ -156,240 +118,153 @@ export function usePlaybackController({
   onPlaybackMessage
 }: PlaybackControllerOptions): PlaybackControllerResult {
   const rafRef = useRef<number | null>(null);
-  const playheadRef = useRef(playheadFrame);
-  const activeSegmentRef = useRef(activeSegment);
-  const activeAudioSegmentRef = useRef(activeAudioSegment);
-  const segmentsRef = useRef(segments);
-  const isPlayingRef = useRef(isPlaying);
-  const playbackAnchorFrameRef = useRef(playheadFrame);
-  const playbackStartedAtRef = useRef<number | null>(null);
+
+  // All mutable state tracked via refs to avoid stale closures
+  const stateRef = useRef({
+    isPlaying,
+    playheadFrame,
+    activeSegment,
+    activeAudioSegment,
+    segments,
+    sequenceFps,
+    totalFrames,
+    setPlayheadFrame,
+    setPlaybackPlaying,
+    onPlaybackMessage,
+    playbackAnchorFrame: playheadFrame,
+    playbackStartedAt: null as number | null,
+    lastLoadedVideoUrl: null as string | null,
+    lastLoadedAudioUrl: null as string | null
+  });
+
+  // Keep stateRef in sync with latest props
+  useEffect(() => {
+    stateRef.current.isPlaying = isPlaying;
+    stateRef.current.playheadFrame = playheadFrame;
+    stateRef.current.activeSegment = activeSegment;
+    stateRef.current.activeAudioSegment = activeAudioSegment;
+    stateRef.current.segments = segments;
+    stateRef.current.sequenceFps = sequenceFps;
+    stateRef.current.totalFrames = totalFrames;
+    stateRef.current.setPlayheadFrame = setPlayheadFrame;
+    stateRef.current.setPlaybackPlaying = setPlaybackPlaying;
+    stateRef.current.onPlaybackMessage = onPlaybackMessage;
+  });
+
+  // ── sync media element ─────────────────────────────────────────────────────
+  async function syncMedia(
+    mediaRef: RefObject<HTMLMediaElement | null>,
+    segment: TimelineSegment | null,
+    frame: number,
+    shouldPlay: boolean,
+    lastLoadedUrlRef: MutableRefObject<string | null>
+  ): Promise<boolean> {
+    const media = mediaRef.current;
+    if (!media) return false;
+
+    if (!segment) {
+      media.pause();
+      return false;
+    }
+
+    try {
+      const nextUrl = segment.asset.previewUrl;
+      const urlChanged = lastLoadedUrlRef.current !== nextUrl;
+      const targetTime = getTargetCurrentTime(segment, frame, stateRef.current.sequenceFps);
+
+      if (urlChanged) {
+        await loadMediaSource(media, nextUrl, segment.asset.name);
+        lastLoadedUrlRef.current = nextUrl;
+      }
+
+      const timeDrift = Math.abs(media.currentTime - targetTime);
+      if (urlChanged || !shouldPlay || timeDrift > framesToSeconds(2, stateRef.current.sequenceFps)) {
+        await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
+      }
+
+      if (shouldPlay) {
+        await media.play();
+      } else {
+        media.pause();
+      }
+
+      stateRef.current.onPlaybackMessage?.(null);
+      return true;
+    } catch (error) {
+      stateRef.current.onPlaybackMessage?.(getPlaybackErrorMessage(error));
+      return false;
+    }
+  }
+
   const lastLoadedVideoUrlRef = useRef<string | null>(null);
   const lastLoadedAudioUrlRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    playheadRef.current = playheadFrame;
-  }, [playheadFrame]);
-
-  useEffect(() => {
-    activeSegmentRef.current = activeSegment;
-  }, [activeSegment]);
-
-  useEffect(() => {
-    activeAudioSegmentRef.current = activeAudioSegment;
-  }, [activeAudioSegment]);
-
-  useEffect(() => {
-    segmentsRef.current = segments;
-  }, [segments]);
-
-  useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
-
-  const reportPlaybackMessage = useEffectEvent((message: string | null) => {
-    onPlaybackMessage?.(message);
-  });
-
-  const syncMediaElementToSegment = useEffectEvent(
-    async (
-      mediaRef: RefObject<HTMLMediaElement | null>,
-      segment: TimelineSegment | null,
-      frame: number,
-      shouldPlayAfterSync: boolean,
-      lastLoadedSourceUrlRef: MutableRefObject<string | null>
-    ) => {
-      const media = mediaRef.current;
-
-      if (!media) {
-        return false;
-      }
-
-      if (!segment) {
-        media.pause();
-        return false;
-      }
-
-      try {
-        const nextSourceUrl = segment.asset.previewUrl;
-        const sourceChanged = lastLoadedSourceUrlRef.current !== nextSourceUrl;
-        const targetTime = getTargetCurrentTime(segment, frame, sequenceFps);
-
-        if (sourceChanged) {
-          await loadMediaSource(media, nextSourceUrl, segment.asset.name);
-          lastLoadedSourceUrlRef.current = nextSourceUrl;
-        }
-
-        if (
-          sourceChanged ||
-          !shouldPlayAfterSync ||
-          Math.abs(media.currentTime - targetTime) > framesToSeconds(1, sequenceFps)
-        ) {
-          await seekMediaElement(media, targetTime, sequenceFps);
-        }
-
-        if (shouldPlayAfterSync) {
-          await media.play();
-        } else {
-          media.pause();
-        }
-
-        reportPlaybackMessage(null);
-        return true;
-      } catch (error) {
-        reportPlaybackMessage(getPlaybackErrorMessage(error));
-        return false;
-      }
-    }
-  );
-
-  const pausePlayback = useEffectEvent(() => {
+  // ── pause ─────────────────────────────────────────────────────────────────
+  function pausePlayback() {
     videoRef.current?.pause();
     audioRef.current?.pause();
-    playbackAnchorFrameRef.current = playheadRef.current;
-    playbackStartedAtRef.current = null;
+    stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
+    stateRef.current.playbackStartedAt = null;
 
-    if (isPlayingRef.current) {
-      isPlayingRef.current = false;
-      setPlaybackPlaying(false);
+    if (stateRef.current.isPlaying) {
+      stateRef.current.isPlaying = false;
+      stateRef.current.setPlaybackPlaying(false);
     }
-  });
+  }
 
-  const startPlaybackAtFrame = useEffectEvent(async (frame: number) => {
-    const targetVideoSegment = findActivePlayableSegmentAtFrame(
-      segmentsRef.current,
-      frame,
-      "video"
-    );
-    const targetAudioSegment = findActivePlayableSegmentAtFrame(
-      segmentsRef.current,
-      frame,
-      "audio"
-    );
+  // ── stop (same as pause for now) ──────────────────────────────────────────
+  function stopPlayback() {
+    pausePlayback();
+  }
 
-    playbackAnchorFrameRef.current = frame;
-    playbackStartedAtRef.current = performance.now();
-    playheadRef.current = frame;
-    setPlayheadFrame(frame);
+  // ── start playback ────────────────────────────────────────────────────────
+  async function startPlaybackAtFrame(frame: number): Promise<void> {
+    const { segments: segs, sequenceFps: fps } = stateRef.current;
+    const targetVideo = findActivePlayableSegmentAtFrame(segs, frame, "video");
+    const targetAudio = findActivePlayableSegmentAtFrame(segs, frame, "audio");
+
+    stateRef.current.playbackAnchorFrame = frame;
+    stateRef.current.playbackStartedAt = performance.now();
+    stateRef.current.playheadFrame = frame;
+    stateRef.current.setPlayheadFrame(frame);
 
     await Promise.all([
-      syncMediaElementToSegment(
-        videoRef,
-        targetVideoSegment,
-        frame,
-        true,
-        lastLoadedVideoUrlRef
-      ),
-      syncMediaElementToSegment(
-        audioRef,
-        targetAudioSegment,
-        frame,
-        true,
-        lastLoadedAudioUrlRef
-      )
+      syncMedia(videoRef, targetVideo, frame, true, lastLoadedVideoUrlRef),
+      syncMedia(audioRef, targetAudio, frame, true, lastLoadedAudioUrlRef)
     ]);
 
-    if (!isPlayingRef.current) {
-      isPlayingRef.current = true;
-      setPlaybackPlaying(true);
+    if (!stateRef.current.isPlaying) {
+      stateRef.current.isPlaying = true;
+      stateRef.current.setPlaybackPlaying(true);
     }
-  });
+  }
 
-  const togglePlayback = useEffectEvent(async () => {
-    if (isPlayingRef.current) {
+  // ── toggle playback ───────────────────────────────────────────────────────
+  async function togglePlayback(): Promise<void> {
+    if (stateRef.current.isPlaying) {
       pausePlayback();
       return;
     }
 
-    const enabledSegments = getEnabledSegments(segmentsRef.current);
+    const enabledSegs = getEnabledSegments(stateRef.current.segments);
+    if (!enabledSegs.length || stateRef.current.totalFrames <= 0) return;
 
-    if (!enabledSegments.length || totalFrames <= 0) {
-      return;
-    }
-
-    let targetFrame = playheadRef.current;
+    let targetFrame = stateRef.current.playheadFrame;
     const hasMediaAtPlayhead =
-      Boolean(activeSegmentRef.current) || Boolean(activeAudioSegmentRef.current);
+      findActivePlayableSegmentAtFrame(enabledSegs, targetFrame, "video") !== null ||
+      findActivePlayableSegmentAtFrame(enabledSegs, targetFrame, "audio") !== null;
 
-    if (targetFrame >= totalFrames - 1) {
-      const firstSegment = enabledSegments[0];
-
-      targetFrame = firstSegment.startFrame;
+    if (targetFrame >= stateRef.current.totalFrames - 1) {
+      targetFrame = enabledSegs[0].startFrame;
     } else if (!hasMediaAtPlayhead) {
-      const nextSegment =
-        findNextSegmentAtOrAfterFrame(enabledSegments, targetFrame) ??
-        enabledSegments[0];
-
-      targetFrame = nextSegment.startFrame;
+      const nextSeg = findNextSegmentAtOrAfterFrame(enabledSegs, targetFrame) ?? enabledSegs[0];
+      targetFrame = nextSeg.startFrame;
     }
 
     await startPlaybackAtFrame(targetFrame);
-  });
+  }
 
-  const stopPlayback = useEffectEvent(() => {
-    pausePlayback();
-  });
-
-  useEffect(() => {
-    if (isPlaying) {
-      return;
-    }
-
-    if (activeSegment) {
-      void syncMediaElementToSegment(
-        videoRef,
-        activeSegment,
-        playheadFrame,
-        false,
-        lastLoadedVideoUrlRef
-      );
-    }
-
-    if (activeAudioSegment) {
-      void syncMediaElementToSegment(
-        audioRef,
-        activeAudioSegment,
-        playheadFrame,
-        false,
-        lastLoadedAudioUrlRef
-      );
-    } else {
-      audioRef.current?.pause();
-    }
-  }, [
-    activeAudioSegment?.clip.id,
-    activeSegment?.clip.id,
-    isPlaying,
-    playheadFrame,
-    syncMediaElementToSegment
-  ]);
-
-  useEffect(() => {
-    if (!isPlaying) {
-      return;
-    }
-
-    void syncMediaElementToSegment(
-      videoRef,
-      activeSegment,
-      playheadFrame,
-      true,
-      lastLoadedVideoUrlRef
-    );
-    void syncMediaElementToSegment(
-      audioRef,
-      activeAudioSegment,
-      playheadFrame,
-      true,
-      lastLoadedAudioUrlRef
-    );
-  }, [
-    activeAudioSegment?.clip.id,
-    activeSegment?.clip.id,
-    isPlaying,
-    playheadFrame,
-    syncMediaElementToSegment
-  ]);
-
+  // ── RAF loop ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isPlaying || totalFrames <= 0) {
       if (rafRef.current !== null) {
@@ -400,19 +275,23 @@ export function usePlaybackController({
     }
 
     const step = (timestamp: number) => {
-      const startedAt = playbackStartedAtRef.current ?? timestamp;
-      const elapsedFrames = ((timestamp - startedAt) / 1000) * sequenceFps;
-      const nextFrame = Math.min(
-        totalFrames - 1,
-        Math.round(playbackAnchorFrameRef.current + elapsedFrames)
-      );
+      const { playbackStartedAt, playbackAnchorFrame, sequenceFps: fps, totalFrames: total } = stateRef.current;
+      const startedAt = playbackStartedAt ?? timestamp;
 
-      if (nextFrame !== playheadRef.current) {
-        playheadRef.current = nextFrame;
-        setPlayheadFrame(nextFrame);
+      // Update startedAt in ref if it was null
+      if (!stateRef.current.playbackStartedAt) {
+        stateRef.current.playbackStartedAt = timestamp;
       }
 
-      if (nextFrame >= totalFrames - 1) {
+      const elapsedFrames = ((timestamp - startedAt) / 1000) * fps;
+      const nextFrame = Math.min(total - 1, Math.round(playbackAnchorFrame + elapsedFrames));
+
+      if (nextFrame !== stateRef.current.playheadFrame) {
+        stateRef.current.playheadFrame = nextFrame;
+        stateRef.current.setPlayheadFrame(nextFrame);
+      }
+
+      if (nextFrame >= total - 1) {
         pausePlayback();
         return;
       }
@@ -428,28 +307,46 @@ export function usePlaybackController({
         rafRef.current = null;
       }
     };
+  }, [isPlaying, totalFrames]);
+
+  // ── sync when NOT playing (scrub / seek) ──────────────────────────────────
+  useEffect(() => {
+    if (isPlaying) return;
+
+    void syncMedia(videoRef, activeSegment, playheadFrame, false, lastLoadedVideoUrlRef);
+
+    if (activeAudioSegment) {
+      void syncMedia(audioRef, activeAudioSegment, playheadFrame, false, lastLoadedAudioUrlRef);
+    } else {
+      audioRef.current?.pause();
+    }
   }, [
+    activeSegment?.clip.id,
+    activeAudioSegment?.clip.id,
     isPlaying,
-    pausePlayback,
-    sequenceFps,
-    setPlayheadFrame,
-    totalFrames
+    playheadFrame
   ]);
 
+  // ── sync when PLAYING and segment changes ─────────────────────────────────
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    void syncMedia(videoRef, activeSegment, playheadFrame, true, lastLoadedVideoUrlRef);
+    void syncMedia(audioRef, activeAudioSegment, playheadFrame, true, lastLoadedAudioUrlRef);
+  }, [
+    activeSegment?.clip.id,
+    activeAudioSegment?.clip.id,
+    isPlaying
+  ]);
+
+  // ── cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-      }
-
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       videoRef.current?.pause();
       audioRef.current?.pause();
     };
-  }, [audioRef, videoRef]);
+  }, []);
 
-  return {
-    togglePlayback,
-    pausePlayback,
-    stopPlayback
-  };
+  return { togglePlayback, pausePlayback, stopPlayback };
 }

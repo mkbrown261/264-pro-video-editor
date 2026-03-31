@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useRef } from "react";
 
 interface EditorShortcutOptions {
   sequenceFps: number;
@@ -14,98 +14,100 @@ interface EditorShortcutOptions {
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const tagName = target.tagName.toLowerCase();
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
   return (
     target.isContentEditable ||
-    tagName === "input" ||
-    tagName === "textarea" ||
-    tagName === "select"
+    tag === "input" ||
+    tag === "textarea" ||
+    tag === "select"
   );
 }
 
-export function useEditorShortcuts({
-  sequenceFps,
-  onTogglePlayback,
-  onToggleFullscreen,
-  onSelectTool,
-  onToggleBladeTool,
-  onSplitSelectedClip,
-  onNudgePlayhead,
-  onSeekToStart,
-  onSeekToEnd,
-  onRemoveSelectedClip
-}: EditorShortcutOptions) {
-  const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (isTypingTarget(event.target)) {
-      return;
-    }
-
-    const key = event.key.toLowerCase();
-    const isModifierPressed = event.metaKey || event.ctrlKey;
-
-    if (isModifierPressed && key === "b") {
-      event.preventDefault();
-      onSplitSelectedClip();
-      return;
-    }
-
-    switch (key) {
-      case " ":
-      case "k":
-        event.preventDefault();
-        onTogglePlayback();
-        return;
-      case "a":
-        event.preventDefault();
-        onSelectTool();
-        return;
-      case "b":
-        event.preventDefault();
-        onToggleBladeTool();
-        return;
-      case "f":
-        event.preventDefault();
-        onToggleFullscreen();
-        return;
-      case "arrowleft":
-        event.preventDefault();
-        onNudgePlayhead(event.shiftKey ? -sequenceFps : -1);
-        return;
-      case "arrowright":
-        event.preventDefault();
-        onNudgePlayhead(event.shiftKey ? sequenceFps : 1);
-        return;
-      case "home":
-        event.preventDefault();
-        onSeekToStart();
-        return;
-      case "end":
-        event.preventDefault();
-        onSeekToEnd();
-        return;
-      case "backspace":
-      case "delete":
-        event.preventDefault();
-        onRemoveSelectedClip();
-        return;
-      case "escape":
-        event.preventDefault();
-        onSelectTool();
-        return;
-      default:
-        return;
-    }
-  });
+export function useEditorShortcuts(options: EditorShortcutOptions) {
+  // Store latest options in a ref so the stable event listener always calls the current callbacks
+  const optionsRef = useRef(options);
+  useEffect(() => { optionsRef.current = options; });
 
   useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
+    function handleKeyDown(event: KeyboardEvent) {
+      if (isTypingTarget(event.target)) return;
 
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleKeyDown]);
+      const {
+        sequenceFps,
+        onTogglePlayback,
+        onToggleFullscreen,
+        onSelectTool,
+        onToggleBladeTool,
+        onSplitSelectedClip,
+        onNudgePlayhead,
+        onSeekToStart,
+        onSeekToEnd,
+        onRemoveSelectedClip
+      } = optionsRef.current;
+
+      const key = event.key.toLowerCase();
+      const isModifier = event.metaKey || event.ctrlKey;
+
+      // Cmd/Ctrl+B → split
+      if (isModifier && key === "b") {
+        event.preventDefault();
+        onSplitSelectedClip();
+        return;
+      }
+
+      // Ignore other modifier combos
+      if (isModifier) return;
+
+      switch (key) {
+        case " ":
+        case "k":
+          event.preventDefault();
+          onTogglePlayback();
+          break;
+        case "a":
+          event.preventDefault();
+          onSelectTool();
+          break;
+        case "b":
+          event.preventDefault();
+          onToggleBladeTool();
+          break;
+        case "f":
+          event.preventDefault();
+          onToggleFullscreen();
+          break;
+        case "arrowleft":
+          event.preventDefault();
+          onNudgePlayhead(event.shiftKey ? -sequenceFps : -1);
+          break;
+        case "arrowright":
+          event.preventDefault();
+          onNudgePlayhead(event.shiftKey ? sequenceFps : 1);
+          break;
+        case "home":
+          event.preventDefault();
+          onSeekToStart();
+          break;
+        case "end":
+          event.preventDefault();
+          onSeekToEnd();
+          break;
+        case "backspace":
+        case "delete":
+          event.preventDefault();
+          onRemoveSelectedClip();
+          break;
+        case "escape":
+          event.preventDefault();
+          onSelectTool();
+          break;
+        default:
+          break;
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []); // stable — options accessed via ref
 }

@@ -59,6 +59,7 @@ export default function App() {
   const setToolMode = useEditorStore((state) => state.setToolMode);
   const toggleBladeTool = useEditorStore((state) => state.toggleBladeTool);
   const setEnvironment = useEditorStore((state) => state.setEnvironment);
+
   const [exportBusy, setExportBusy] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null);
@@ -66,8 +67,8 @@ export default function App() {
     typeof window !== "undefined" && Boolean(window.editorApi)
   );
   const appShellRef = useRef<HTMLElement | null>(null);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(320);
-  const [rightPanelWidth, setRightPanelWidth] = useState(320);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(300);
+  const [rightPanelWidth, setRightPanelWidth] = useState(300);
   const [resizeSide, setResizeSide] = useState<"left" | "right" | null>(null);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null);
   const [updaterDismissed, setUpdaterDismissed] = useState(false);
@@ -334,9 +335,9 @@ export default function App() {
         return;
       }
 
-      const minPanelWidth = 240;
+      const minPanelWidth = 220;
       const maxPanelWidth = 520;
-      const minCenterWidth = 560;
+      const minCenterWidth = 480;
 
       if (resizeSide === "left") {
         const proposedWidth = event.clientX - bounds.left;
@@ -372,9 +373,6 @@ export default function App() {
   useEffect(() => {
     if (!window.editorApi) {
       setBridgeReady(false);
-      setExportMessage(
-        "Electron preload bridge is unavailable. Restart the app after rebuilding."
-      );
       return;
     }
 
@@ -396,10 +394,8 @@ export default function App() {
         }
       });
 
-    // Subscribe to auto-updater events pushed from the main process
     const unsubUpdater = window.editorApi.onUpdaterStatus((status) => {
       setUpdaterStatus(status);
-      // Reset dismissed state whenever a new, different state arrives
       if (status.state === "available" || status.state === "ready") {
         setUpdaterDismissed(false);
       }
@@ -414,7 +410,7 @@ export default function App() {
   async function handleImport() {
     if (!window.editorApi) {
       setBridgeReady(false);
-      setExportMessage("Import is unavailable because the Electron bridge did not load.");
+      setExportMessage("Import is unavailable — Electron bridge did not load. Restart the app.");
       return;
     }
 
@@ -422,6 +418,11 @@ export default function App() {
 
     try {
       const assets = await window.editorApi.openMediaFiles();
+
+      if (assets.length === 0) {
+        return; // user cancelled
+      }
+
       importAssets(assets);
     } catch (error) {
       setExportMessage(
@@ -433,11 +434,16 @@ export default function App() {
   async function handleExport() {
     if (!window.editorApi) {
       setBridgeReady(false);
-      setExportMessage("Export is unavailable because the Electron bridge did not load.");
+      setExportMessage("Export is unavailable — Electron bridge did not load.");
       return;
     }
 
     setExportMessage(null);
+
+    if (!segments.length) {
+      setExportMessage("Add clips to the timeline before exporting.");
+      return;
+    }
 
     try {
       const outputPath = await window.editorApi.chooseExportFile(
@@ -453,7 +459,7 @@ export default function App() {
         outputPath,
         project
       });
-      setExportMessage(`Rendered successfully to ${result.outputPath}`);
+      setExportMessage(`✓ Rendered to ${result.outputPath}`);
     } catch (error) {
       setExportMessage(
         error instanceof Error ? error.message : "Render failed."
@@ -473,7 +479,6 @@ export default function App() {
     "--right-panel-width": `${rightPanelWidth}px`
   } as CSSProperties;
 
-  // Compute the updater banner content
   const showUpdaterBanner =
     !updaterDismissed &&
     updaterStatus !== null &&
@@ -525,188 +530,194 @@ export default function App() {
     <div className="app-root">
       {renderUpdaterBanner()}
       <main ref={appShellRef} className="app-shell" style={shellStyle}>
-      <header className="workspace-header">
-        <div>
-          <p className="eyebrow">264 Pro Video Editor</p>
-          <h1>Phase 1 Editorial MVP</h1>
-        </div>
-        <div className="header-status">
-          <span>{bridgeReady ? "Bridge ready" : "Bridge unavailable"}</span>
-          <span>{project.assets.length} assets</span>
-          <strong>{project.sequence.clips.length} timeline clips</strong>
-          <span>{project.sequence.tracks.length} tracks</span>
-          <span>
-            {project.sequence.settings.width}x{project.sequence.settings.height} / {project.sequence.settings.fps} fps
-          </span>
-        </div>
-      </header>
 
-      <MediaPool
-        assets={project.assets}
-        selectedAssetId={selectedAssetId}
-        selectedSegment={inspectorSegment}
-        transitionMessage={transitionMessage}
-        onImport={handleImport}
-        onSelectAsset={selectAsset}
-        onAppendAsset={appendAssetToTimeline}
-        onApplyTransition={handleApplyTransition}
-      />
+        {/* ── TOP HEADER ── */}
+        <header className="workspace-header">
+          <div className="header-brand">
+            <span className="header-logo">264</span>
+            <span className="header-title">Pro Video Editor</span>
+          </div>
+          <div className="header-status">
+            <span className={`header-bridge-dot${bridgeReady ? " ready" : ""}`} />
+            <span>{bridgeReady ? "Bridge ready" : "No bridge"}</span>
+            <span className="header-sep" />
+            <span>{project.assets.length} assets</span>
+            <span>{project.sequence.clips.length} clips</span>
+            <span>
+              {project.sequence.settings.width}×{project.sequence.settings.height}
+              {" / "}{project.sequence.settings.fps}fps
+            </span>
+          </div>
+        </header>
 
-      <div
-        className="panel-resizer left-resizer"
-        onMouseDown={(event) => {
-          event.preventDefault();
-          setResizeSide("left");
-        }}
-        role="separator"
-        aria-label="Resize media panel"
-      />
+        {/* ── MEDIA POOL ── */}
+        <MediaPool
+          assets={project.assets}
+          selectedAssetId={selectedAssetId}
+          selectedSegment={inspectorSegment}
+          transitionMessage={transitionMessage}
+          onImport={handleImport}
+          onSelectAsset={selectAsset}
+          onAppendAsset={appendAssetToTimeline}
+          onApplyTransition={handleApplyTransition}
+        />
 
-      <ViewerPanel
-        ref={viewerPanelRef}
-        activeSegment={activeSegment}
-        activeAudioSegment={activeAudioSegment}
-        segments={segments}
-        selectedAsset={selectedAsset}
-        playheadFrame={playback.playheadFrame}
-        totalFrames={totalFrames}
-        sequenceFps={project.sequence.settings.fps}
-        isPlaying={playback.isPlaying}
-        toolMode={toolMode}
-        onSetPlaybackPlaying={setPlaybackPlaying}
-        onSetToolMode={setToolMode}
-        onToggleBladeTool={toggleBladeTool}
-        onSplitAtPlayhead={splitSelectedClipAtPlayhead}
-        onSetPlayheadFrame={setPlayheadFrame}
-        onStepFrames={handleStepFrames}
-      />
+        <div
+          className="panel-resizer left-resizer"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setResizeSide("left");
+          }}
+          role="separator"
+          aria-label="Resize media panel"
+        />
 
-      <div
-        className="panel-resizer right-resizer"
-        onMouseDown={(event) => {
-          event.preventDefault();
-          setResizeSide("right");
-        }}
-        role="separator"
-        aria-label="Resize inspector panel"
-      />
+        {/* ── VIEWER ── */}
+        <ViewerPanel
+          ref={viewerPanelRef}
+          activeSegment={activeSegment}
+          activeAudioSegment={activeAudioSegment}
+          segments={segments}
+          selectedAsset={selectedAsset}
+          playheadFrame={playback.playheadFrame}
+          totalFrames={totalFrames}
+          sequenceFps={project.sequence.settings.fps}
+          isPlaying={playback.isPlaying}
+          toolMode={toolMode}
+          onSetPlaybackPlaying={setPlaybackPlaying}
+          onSetToolMode={setToolMode}
+          onToggleBladeTool={toggleBladeTool}
+          onSplitAtPlayhead={splitSelectedClipAtPlayhead}
+          onSetPlayheadFrame={setPlayheadFrame}
+          onStepFrames={handleStepFrames}
+        />
 
-      <InspectorPanel
-        selectedAsset={selectedAsset}
-        selectedSegment={inspectorSegment}
-        environment={environment}
-        exportBusy={exportBusy}
-        exportMessage={exportMessage}
-        sequenceSettings={project.sequence.settings}
-        clipMessage={transitionMessage}
-        voiceListening={voiceListening}
-        voiceStatus={voiceStatus}
-        voiceTranscript={voiceTranscript}
-        voiceLastCommand={voiceLastCommand}
-        voiceSuggestedCutFrames={voiceSuggestedCutFrames}
-        voiceMarkInFrame={voiceMarkInFrame}
-        voiceMarkOutFrame={voiceMarkOutFrame}
-        voiceBpm={voiceBpm}
-        voiceGridFrames={voiceGridFrames}
-        onToggleClipEnabled={(clipId) => {
-          pauseViewerPlayback();
-          toggleClipEnabled(clipId);
-        }}
-        onDetachLinkedClips={(clipId) => {
-          pauseViewerPlayback();
-          detachLinkedClips(clipId);
-        }}
-        onSetTransitionType={(edge, type) => {
-          pauseViewerPlayback();
-          setTransitionMessage(setSelectedClipTransitionType(edge, type));
-        }}
-        onSetTransitionDuration={(edge, durationFrames) => {
-          pauseViewerPlayback();
-          setTransitionMessage(
-            setSelectedClipTransitionDuration(edge, durationFrames)
-          );
-        }}
-        onExtractAudio={() => {
-          pauseViewerPlayback();
-          setTransitionMessage(extractAudioFromSelectedClip());
-        }}
-        onRippleDelete={() => {
-          pauseViewerPlayback();
-          removeSelectedClip();
-        }}
-        onToggleVoiceListening={() => {
-          voiceChopRef.current?.listenForCommands();
-        }}
-        onAnalyzeVoiceChops={() => {
-          const targetClip =
-            (inspectorSegment?.track.kind === "video" ? inspectorSegment : null) ??
-            activeSegment;
+        <div
+          className="panel-resizer right-resizer"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setResizeSide("right");
+          }}
+          role="separator"
+          aria-label="Resize inspector panel"
+        />
 
-          if (!targetClip) {
-            setVoiceStatus("Select a video clip or park the playhead on one before running AI chops.");
-            return;
-          }
+        {/* ── INSPECTOR ── */}
+        <InspectorPanel
+          selectedAsset={selectedAsset}
+          selectedSegment={inspectorSegment}
+          environment={environment}
+          exportBusy={exportBusy}
+          exportMessage={exportMessage}
+          sequenceSettings={project.sequence.settings}
+          clipMessage={transitionMessage}
+          voiceListening={voiceListening}
+          voiceStatus={voiceStatus}
+          voiceTranscript={voiceTranscript}
+          voiceLastCommand={voiceLastCommand}
+          voiceSuggestedCutFrames={voiceSuggestedCutFrames}
+          voiceMarkInFrame={voiceMarkInFrame}
+          voiceMarkOutFrame={voiceMarkOutFrame}
+          voiceBpm={voiceBpm}
+          voiceGridFrames={voiceGridFrames}
+          onToggleClipEnabled={(clipId) => {
+            pauseViewerPlayback();
+            toggleClipEnabled(clipId);
+          }}
+          onDetachLinkedClips={(clipId) => {
+            pauseViewerPlayback();
+            detachLinkedClips(clipId);
+          }}
+          onSetTransitionType={(edge, type) => {
+            pauseViewerPlayback();
+            setTransitionMessage(setSelectedClipTransitionType(edge, type));
+          }}
+          onSetTransitionDuration={(edge, durationFrames) => {
+            pauseViewerPlayback();
+            setTransitionMessage(
+              setSelectedClipTransitionDuration(edge, durationFrames)
+            );
+          }}
+          onExtractAudio={() => {
+            pauseViewerPlayback();
+            setTransitionMessage(extractAudioFromSelectedClip());
+          }}
+          onRippleDelete={() => {
+            pauseViewerPlayback();
+            removeSelectedClip();
+          }}
+          onToggleVoiceListening={() => {
+            voiceChopRef.current?.listenForCommands();
+          }}
+          onAnalyzeVoiceChops={() => {
+            const targetClip =
+              (inspectorSegment?.track.kind === "video" ? inspectorSegment : null) ??
+              activeSegment;
 
-          voiceChopRef.current?.applyAICuts(targetClip);
-        }}
-        onAcceptVoiceCuts={() => {
-          voiceChopRef.current?.processVoiceCommand("accept cuts");
-        }}
-        onClearVoiceCuts={() => {
-          setVoiceSuggestedCutFrames([]);
-          setVoiceStatus("Cleared AI cut suggestions.");
-        }}
-        onQuantizeVoiceCutsToBeat={() => {
-          voiceChopRef.current?.processVoiceCommand("quantize to beat");
-        }}
-        onQuantizeVoiceCutsToGrid={() => {
-          voiceChopRef.current?.processVoiceCommand("quantize to grid");
-        }}
-        onSetVoiceBpm={(bpm) => {
-          const nextBpm = Math.max(40, Math.min(240, Math.round(bpm)));
+            if (!targetClip) {
+              setVoiceStatus("Select a video clip or park the playhead on one before running AI chops.");
+              return;
+            }
 
-          setVoiceBpm(nextBpm);
-          voiceChopRef.current?.setBpm(nextBpm);
-        }}
-        onSetVoiceGridFrames={(gridFrames) => {
-          const nextGridFrames = Math.max(1, Math.round(gridFrames));
+            voiceChopRef.current?.applyAICuts(targetClip);
+          }}
+          onAcceptVoiceCuts={() => {
+            voiceChopRef.current?.processVoiceCommand("accept cuts");
+          }}
+          onClearVoiceCuts={() => {
+            setVoiceSuggestedCutFrames([]);
+            setVoiceStatus("Cleared AI cut suggestions.");
+          }}
+          onQuantizeVoiceCutsToBeat={() => {
+            voiceChopRef.current?.processVoiceCommand("quantize to beat");
+          }}
+          onQuantizeVoiceCutsToGrid={() => {
+            voiceChopRef.current?.processVoiceCommand("quantize to grid");
+          }}
+          onSetVoiceBpm={(bpm) => {
+            const nextBpm = Math.max(40, Math.min(240, Math.round(bpm)));
+            setVoiceBpm(nextBpm);
+            voiceChopRef.current?.setBpm(nextBpm);
+          }}
+          onSetVoiceGridFrames={(gridFrames) => {
+            const nextGridFrames = Math.max(1, Math.round(gridFrames));
+            setVoiceGridFrames(nextGridFrames);
+            voiceChopRef.current?.setGridFrames(nextGridFrames);
+          }}
+          onExport={handleExport}
+        />
 
-          setVoiceGridFrames(nextGridFrames);
-          voiceChopRef.current?.setGridFrames(nextGridFrames);
-        }}
-        onExport={handleExport}
-      />
-
-      <TimelinePanel
-        trackLayouts={trackLayouts}
-        selectedClipId={selectedClipId}
-        toolMode={toolMode}
-        playheadFrame={playback.playheadFrame}
-        suggestedCutFrames={voiceSuggestedCutFrames}
-        markInFrame={voiceMarkInFrame}
-        markOutFrame={voiceMarkOutFrame}
-        totalFrames={totalFrames}
-        sequenceFps={project.sequence.settings.fps}
-        onSetPlayheadFrame={handleSeek}
-        onSelectClip={selectClip}
-        onMoveClipTo={(clipId, trackId, startFrame) => {
-          pauseViewerPlayback();
-          moveClipTo(clipId, trackId, startFrame);
-        }}
-        onTrimClipStart={(clipId, trimStartFrames) => {
-          pauseViewerPlayback();
-          trimClipStart(clipId, trimStartFrames);
-        }}
-        onTrimClipEnd={(clipId, trimEndFrames) => {
-          pauseViewerPlayback();
-          trimClipEnd(clipId, trimEndFrames);
-        }}
-        onBladeCut={(clipId, frame) => {
-          pauseViewerPlayback();
-          splitClipAtFrame(clipId, frame);
-        }}
-      />
-    </main>
+        {/* ── TIMELINE ── */}
+        <TimelinePanel
+          trackLayouts={trackLayouts}
+          selectedClipId={selectedClipId}
+          toolMode={toolMode}
+          playheadFrame={playback.playheadFrame}
+          suggestedCutFrames={voiceSuggestedCutFrames}
+          markInFrame={voiceMarkInFrame}
+          markOutFrame={voiceMarkOutFrame}
+          totalFrames={totalFrames}
+          sequenceFps={project.sequence.settings.fps}
+          onSetPlayheadFrame={handleSeek}
+          onSelectClip={selectClip}
+          onMoveClipTo={(clipId, trackId, startFrame) => {
+            pauseViewerPlayback();
+            moveClipTo(clipId, trackId, startFrame);
+          }}
+          onTrimClipStart={(clipId, trimStartFrames) => {
+            pauseViewerPlayback();
+            trimClipStart(clipId, trimStartFrames);
+          }}
+          onTrimClipEnd={(clipId, trimEndFrames) => {
+            pauseViewerPlayback();
+            trimClipEnd(clipId, trimEndFrames);
+          }}
+          onBladeCut={(clipId, frame) => {
+            pauseViewerPlayback();
+            splitClipAtFrame(clipId, frame);
+          }}
+        />
+      </main>
     </div>
   );
 }
