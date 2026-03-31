@@ -122,9 +122,8 @@ button { cursor: pointer; }
 .app-shell {
   display: grid;
   grid-template-columns: var(--left-panel-width, 280px) 3px minmax(460px, 1fr) 3px var(--right-panel-width, 280px);
-  grid-template-rows: 38px minmax(300px, 0.62fr) minmax(180px, 0.38fr);
+  grid-template-rows: minmax(300px, 0.62fr) minmax(180px, 0.38fr);
   grid-template-areas:
-    "header     header        header        header        header"
     "media      left-resizer  viewer        right-resizer inspector"
     "timeline   timeline      timeline      timeline      timeline";
   gap: 1px;
@@ -947,3 +946,385 @@ kbd {
   .workspace-header, .panel-header, .transport-bar { flex-wrap: wrap; height: auto; padding: 6px 10px; }
   .timeline-row { grid-template-columns: 64px 1fr; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   APP MENUBAR  (top bar with brand + page tabs + status)
+   ══════════════════════════════════════════════════════════════════════════════ */
+.app-menubar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  min-height: 36px;
+  background: #111111;
+  border-bottom: 1px solid #000;
+  flex-shrink: 0;
+  padding: 0 10px;
+  gap: 0;
+  z-index: 200;
+  -webkit-app-region: drag;
+}
+.app-menubar * { -webkit-app-region: no-drag; }
+
+.menubar-brand {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 16px;
+  border-right: 1px solid rgba(255,255,255,0.07);
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.brand-logo {
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+.brand-name {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+/* Page tabs (Edit / Color / Effects) */
+.page-tabs {
+  display: flex;
+  height: 100%;
+  gap: 0;
+  flex: 1;
+}
+.page-tab {
+  padding: 0 18px;
+  height: 100%;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 80ms, border-color 80ms, background 80ms;
+}
+.page-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.page-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--text-hi);
+  background: rgba(224,120,32,0.05);
+}
+
+/* Status bar right side */
+.menubar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 12px;
+}
+.menubar-status .status-item { color: var(--text-muted); white-space: nowrap; }
+.menubar-status .status-sep  { color: var(--text-dim); }
+.bridge-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #333;
+  flex-shrink: 0;
+}
+.bridge-dot.ready { background: var(--success); box-shadow: 0 0 4px var(--success); }
+
+/* Settings button in menubar */
+.menubar-settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  margin-left: 6px;
+  transition: background 80ms, color 80ms;
+}
+.menubar-settings-btn:hover { background: var(--bg-item-hi); color: var(--text); border-color: var(--border-mid); }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   FULL-SCREEN PAGE LAYOUTS  (Color, Effects)
+   Each page fills the full remaining height and uses the same
+   3-column + timeline grid as the Edit page.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* The app-shell must fill when any page is active */
+.app-shell.page-color,
+.app-shell.page-effects {
+  display: grid;
+  grid-template-columns: var(--left-panel-width, 280px) 3px minmax(460px,1fr) 3px var(--right-panel-width, 320px);
+  grid-template-rows: minmax(300px, 0.62fr) minmax(180px, 0.38fr);
+  grid-template-areas:
+    "left  left-resizer  viewer  right-resizer  right"
+    "tl    tl            tl      tl             tl";
+  gap: 1px;
+  background: var(--separator);
+}
+
+/* Color page slots */
+.color-page-grading  { grid-area: left;     display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
+.color-page-viewer   { grid-area: viewer;   display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.color-page-timeline { grid-area: tl;       display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+
+/* Effects page slots */
+.effects-page-panel    { grid-area: left;     display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
+.effects-page-viewer   { grid-area: viewer;   display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.effects-page-timeline { grid-area: tl;       display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+
+/* Remove old wrapper divs that were collapsing the layout */
+.color-page, .effects-page {
+  display: contents;
+}
+
+/* Right side resizers on color/effects pages */
+.app-shell.page-color  .left-resizer,
+.app-shell.page-effects .left-resizer  { grid-area: left-resizer; }
+.app-shell.page-color  .right-resizer,
+.app-shell.page-effects .right-resizer { grid-area: right-resizer; display:none; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SETTINGS PANEL  (modal overlay)
+   ══════════════════════════════════════════════════════════════════════════════ */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-modal {
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 3px;
+  width: 560px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.8);
+}
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 40px;
+  background: #141414;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+.settings-modal-header h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.settings-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 2px;
+  line-height: 1;
+  transition: background 80ms, color 80ms;
+}
+.settings-modal-close:hover { background: rgba(255,255,255,0.07); color: var(--text); }
+.settings-modal-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0;
+}
+.settings-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.settings-section-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.settings-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.settings-row:last-child { margin-bottom: 0; }
+.settings-row label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.settings-input,
+.settings-select {
+  width: 100%;
+  padding: 5px 8px;
+  background: #111;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 2px;
+  color: var(--text);
+  font-size: 0.72rem;
+  transition: border-color 80ms;
+}
+.settings-input:focus,
+.settings-select:focus { outline: none; border-color: var(--accent); }
+.settings-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #141414;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+.settings-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3,1fr);
+  gap: 6px;
+}
+.settings-preset-btn {
+  padding: 6px 8px;
+  background: #111;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 2px;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  transition: background 80ms, border-color 80ms, color 80ms;
+}
+.settings-preset-btn:hover { background: var(--bg-item-hi); color: var(--text); border-color: var(--border-mid); }
+.settings-preset-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SPACEBAR HINT  under viewer
+   ══════════════════════════════════════════════════════════════════════════════ */
+.playback-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  background: var(--bg-header);
+  border-top: 1px solid var(--separator);
+  flex-shrink: 0;
+}
+.playback-hint kbd { font-size: 0.6rem; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PRODUCTION-QUALITY CLIP REDESIGN
+   Richer gradient, waveform-style audio, sharp labels
+   ══════════════════════════════════════════════════════════════════════════════ */
+.video-clip {
+  border: 1px solid rgba(200,100,20,0.6) !important;
+  background: linear-gradient(180deg,
+    rgba(255,140,40,0.22) 0%,
+    rgba(180,80,10,0.18) 40%,
+    rgba(120,50,5,0.25) 100%
+  ) !important;
+}
+.audio-clip {
+  border: 1px solid rgba(50,130,230,0.6) !important;
+  background: linear-gradient(180deg,
+    rgba(60,140,255,0.20) 0%,
+    rgba(30,90,200,0.15) 40%,
+    rgba(10,50,140,0.22) 100%
+  ) !important;
+}
+.timeline-clip.selected.video-clip {
+  border-color: var(--accent) !important;
+  background: linear-gradient(180deg,
+    rgba(255,160,60,0.36) 0%,
+    rgba(224,120,32,0.26) 100%
+  ) !important;
+  box-shadow: 0 0 0 1px rgba(224,120,32,0.5), 0 2px 12px rgba(224,120,32,0.25) !important;
+}
+.timeline-clip.selected.audio-clip {
+  border-color: var(--blue) !important;
+  background: linear-gradient(180deg,
+    rgba(80,160,255,0.36) 0%,
+    rgba(50,120,240,0.26) 100%
+  ) !important;
+  box-shadow: 0 0 0 1px rgba(74,158,255,0.5), 0 2px 12px rgba(74,158,255,0.25) !important;
+}
+
+/* Clip label text - sharper */
+.timeline-clip-content strong {
+  font-size: 0.67rem !important;
+  font-weight: 600 !important;
+  color: rgba(255,230,200,0.96) !important;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+.audio-clip .timeline-clip-content strong {
+  color: rgba(200,225,255,0.96) !important;
+}
+
+/* Track labels — bolder */
+.video-track-label { border-left: 3px solid var(--accent) !important; }
+.audio-track-label { border-left: 3px solid var(--blue) !important; }
+.track-name {
+  font-size: 0.66rem !important;
+  font-weight: 700 !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0.08em !important;
+}
+
+/* Timeline lane — subtle texture */
+.video-lane { background: #191919 !important; }
+.audio-lane { background: #14181e !important; }
+
+/* Empty track hint */
+.timeline-track-empty span {
+  color: rgba(255,255,255,0.12) !important;
+  font-size: 0.64rem !important;
+  font-style: italic;
+}
+
+/* Inspector card — slightly warmer */
+.inspector-card { background: #1c1c1c !important; }
+.inspector-card > strong { color: #e8e0d8 !important; }
+
+/* Media card — thumbnail frame */
+.media-card-preview {
+  border: 1px solid rgba(255,255,255,0.06) !important;
+  background-color: #0d0d0d !important;
+}
+
+/* Panel headers — slightly deeper */
+.panel-header { background: #161616 !important; border-bottom: 1px solid #0a0a0a !important; }
+
+/* Ruler ticks — more visible */
+.ruler-tick-line { background: rgba(255,255,255,0.18) !important; }
+.ruler-tick-label { color: rgba(255,255,255,0.35) !important; }
+
+/* Transport bar */
+.transport-bar { background: #161616 !important; border-top: 1px solid #0a0a0a !important; }
+
+/* Playhead — brighter orange line */
+.timeline-playhead { background: #ff9030 !important; box-shadow: 0 0 4px rgba(255,144,48,0.8) !important; }
+.timeline-playhead-handle { background: #ff9030 !important; }

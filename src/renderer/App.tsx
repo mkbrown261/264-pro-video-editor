@@ -23,6 +23,13 @@ import type { MaskTool } from "./components/MaskingCanvas";
 
 type AppPage = "edit" | "color" | "effects";
 
+interface ProjectSettings {
+  width: number;
+  height: number;
+  fps: number;
+  aspectRatio: string;
+}
+
 export default function App() {
   const viewerPanelRef = useRef<ViewerPanelHandle | null>(null);
 
@@ -95,6 +102,13 @@ export default function App() {
   const [resizeSide, setResizeSide] = useState<"left" | "right" | null>(null);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null);
   const [updaterDismissed, setUpdaterDismissed] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({
+    width: project.sequence.settings.width,
+    height: project.sequence.settings.height,
+    fps: project.sequence.settings.fps,
+    aspectRatio: "16:9"
+  });
 
   // Masking state
   const [activeMaskTool, setActiveMaskTool] = useState<MaskTool>("none");
@@ -384,6 +398,110 @@ export default function App() {
     );
   }
 
+  // ── Settings helpers ──────────────────────────────────────────────────────
+  function applyPreset(preset: string) {
+    const presets: Record<string, ProjectSettings> = {
+      "YouTube":    { width: 1920, height: 1080, fps: 30,  aspectRatio: "16:9" },
+      "YouTube 4K": { width: 3840, height: 2160, fps: 30,  aspectRatio: "16:9" },
+      "TikTok":     { width: 1080, height: 1920, fps: 30,  aspectRatio: "9:16" },
+      "Instagram":  { width: 1080, height: 1080, fps: 30,  aspectRatio: "1:1"  },
+      "Cinema 4K":  { width: 4096, height: 2160, fps: 24,  aspectRatio: "16:9" },
+      "Twitter":    { width: 1280, height: 720,  fps: 30,  aspectRatio: "16:9" },
+    };
+    if (presets[preset]) setSettingsDraft(presets[preset]);
+  }
+
+  function handleSaveSettings() {
+    // Save project to localStorage
+    const state = useEditorStore.getState();
+    try {
+      localStorage.setItem("264pro_project", JSON.stringify(state.project));
+    } catch {}
+    setShowSettings(false);
+  }
+
+  function handleLoadProject() {
+    try {
+      const raw = localStorage.getItem("264pro_project");
+      if (raw) {
+        const saved = JSON.parse(raw) as typeof project;
+        useEditorStore.getState().importAssets(saved.assets);
+        setExportMessage("✓ Project loaded from local storage.");
+      } else {
+        setExportMessage("No saved project found.");
+      }
+    } catch {
+      setExportMessage("Failed to load project.");
+    }
+    setShowSettings(false);
+  }
+
+  // ── Settings modal ─────────────────────────────────────────────────────────
+  function renderSettingsModal() {
+    if (!showSettings) return null;
+    const PRESETS = ["YouTube", "YouTube 4K", "TikTok", "Instagram", "Cinema 4K", "Twitter"];
+    const FPS_OPTIONS = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60];
+    const ASPECT_OPTIONS = ["16:9", "9:16", "1:1", "4:3", "21:9", "Custom"];
+    return (
+      <div className="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}>
+        <div className="settings-modal">
+          <div className="settings-modal-header">
+            <h2>Project Settings</h2>
+            <button className="settings-modal-close" onClick={() => setShowSettings(false)} type="button">✕</button>
+          </div>
+          <div className="settings-modal-body">
+            <div className="settings-section">
+              <div className="settings-section-title">Presets</div>
+              <div className="settings-preset-grid">
+                {PRESETS.map((p) => (
+                  <button key={p} className="settings-preset-btn" onClick={() => applyPreset(p)} type="button">{p}</button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-section">
+              <div className="settings-section-title">Resolution &amp; Frame Rate</div>
+              <div className="settings-row">
+                <label>Width (px)</label>
+                <input className="settings-input" type="number" value={settingsDraft.width}
+                  onChange={(e) => setSettingsDraft(d => ({...d, width: Number(e.target.value)}))} />
+              </div>
+              <div className="settings-row">
+                <label>Height (px)</label>
+                <input className="settings-input" type="number" value={settingsDraft.height}
+                  onChange={(e) => setSettingsDraft(d => ({...d, height: Number(e.target.value)}))} />
+              </div>
+              <div className="settings-row">
+                <label>Frame Rate</label>
+                <select className="settings-select" value={settingsDraft.fps}
+                  onChange={(e) => setSettingsDraft(d => ({...d, fps: Number(e.target.value)}))}>
+                  {FPS_OPTIONS.map((f) => <option key={f} value={f}>{f} fps</option>)}
+                </select>
+              </div>
+              <div className="settings-row">
+                <label>Aspect Ratio</label>
+                <select className="settings-select" value={settingsDraft.aspectRatio}
+                  onChange={(e) => setSettingsDraft(d => ({...d, aspectRatio: e.target.value}))}>
+                  {ASPECT_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="settings-section">
+              <div className="settings-section-title">Project Persistence</div>
+              <div className="inline-actions">
+                <button className="panel-action primary" onClick={handleSaveSettings} type="button">💾 Save Project</button>
+                <button className="panel-action" onClick={handleLoadProject} type="button">📂 Load Project</button>
+              </div>
+            </div>
+          </div>
+          <div className="settings-modal-footer">
+            <button className="panel-action muted" onClick={() => setShowSettings(false)} type="button">Cancel</button>
+            <button className="panel-action primary" onClick={handleSaveSettings} type="button">Apply</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const shellStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
     "--right-panel-width": `${rightPanelWidth}px`
@@ -393,6 +511,7 @@ export default function App() {
   return (
     <div className="app-root">
       {renderUpdaterBanner()}
+      {renderSettingsModal()}
 
       {/* ── TOP MENU BAR ── */}
       <header className="app-menubar">
@@ -422,6 +541,7 @@ export default function App() {
           <span className="status-item">{project.sequence.clips.length} clips</span>
           <span className="status-sep">·</span>
           <span className="status-item">{project.sequence.settings.width}×{project.sequence.settings.height} / {project.sequence.settings.fps}fps</span>
+          <button className="menubar-settings-btn" onClick={() => setShowSettings(true)} title="Settings" type="button">⚙️</button>
         </div>
       </header>
 
@@ -577,8 +697,22 @@ export default function App() {
 
         {/* ── COLOR PAGE ── */}
         {activePage === "color" && (
-          <div className="color-page">
-            {/* Left: Mini viewer */}
+          <>
+            {/* Left: Color grading panel */}
+            <div className="color-page-grading">
+              <ColorGradingPanel
+                selectedSegment={inspectorSegment}
+                colorGrade={inspectorSegment?.clip.colorGrade ?? null}
+                videoRef={{ current: viewerPanelRef.current?.getVideoRef() ?? null }}
+                onEnableGrade={() => { if (selectedClipId) enableColorGrade(selectedClipId); }}
+                onUpdateGrade={(grade) => { if (selectedClipId) setColorGrade(selectedClipId, grade); }}
+                onResetGrade={() => { if (selectedClipId) resetColorGrade(selectedClipId); }}
+              />
+            </div>
+
+            <div className="panel-resizer left-resizer" onMouseDown={(e) => { e.preventDefault(); setResizeSide("left"); }} role="separator" />
+
+            {/* Center: Viewer */}
             <div className="color-page-viewer">
               <ViewerPanel
                 ref={viewerPanelRef}
@@ -605,18 +739,6 @@ export default function App() {
               />
             </div>
 
-            {/* Center: Color grading panel */}
-            <div className="color-page-grading">
-              <ColorGradingPanel
-                selectedSegment={inspectorSegment}
-                colorGrade={inspectorSegment?.clip.colorGrade ?? null}
-                videoRef={{ current: viewerPanelRef.current?.getVideoRef() ?? null }}
-                onEnableGrade={() => { if (selectedClipId) enableColorGrade(selectedClipId); }}
-                onUpdateGrade={(grade) => { if (selectedClipId) setColorGrade(selectedClipId, grade); }}
-                onResetGrade={() => { if (selectedClipId) resetColorGrade(selectedClipId); }}
-              />
-            </div>
-
             {/* Bottom: Timeline */}
             <div className="color-page-timeline">
               <TimelinePanel
@@ -638,37 +760,12 @@ export default function App() {
                 onDropAsset={dropAssetAtFrame}
               />
             </div>
-          </div>
+          </>
         )}
 
         {/* ── EFFECTS PAGE ── */}
         {activePage === "effects" && (
-          <div className="effects-page">
-            <div className="effects-page-viewer">
-              <ViewerPanel
-                ref={viewerPanelRef}
-                activeSegment={activeSegment}
-                activeAudioSegment={activeAudioSegment}
-                segments={segments}
-                selectedAsset={selectedAsset}
-                playheadFrame={playback.playheadFrame}
-                totalFrames={totalFrames}
-                sequenceFps={project.sequence.settings.fps}
-                isPlaying={playback.isPlaying}
-                toolMode={toolMode}
-                activeMaskTool={activeMaskTool}
-                selectedMaskId={selectedMaskId}
-                onAddMask={handleAddMask}
-                onUpdateMask={handleUpdateMask}
-                onSelectMask={setSelectedMaskId}
-                onSetPlaybackPlaying={setPlaybackPlaying}
-                onSetToolMode={setToolMode}
-                onToggleBladeTool={toggleBladeTool}
-                onSplitAtPlayhead={splitSelectedClipAtPlayhead}
-                onSetPlayheadFrame={setPlayheadFrame}
-                onStepFrames={handleStepFrames}
-              />
-            </div>
+          <>
             <div className="effects-page-panel">
               <InspectorPanel
                 selectedAsset={selectedAsset}
@@ -739,6 +836,32 @@ export default function App() {
                 onExport={handleExport}
               />
             </div>
+            <div className="panel-resizer left-resizer" onMouseDown={(e) => { e.preventDefault(); setResizeSide("left"); }} role="separator" />
+            <div className="effects-page-viewer">
+              <ViewerPanel
+                ref={viewerPanelRef}
+                activeSegment={activeSegment}
+                activeAudioSegment={activeAudioSegment}
+                segments={segments}
+                selectedAsset={selectedAsset}
+                playheadFrame={playback.playheadFrame}
+                totalFrames={totalFrames}
+                sequenceFps={project.sequence.settings.fps}
+                isPlaying={playback.isPlaying}
+                toolMode={toolMode}
+                activeMaskTool={activeMaskTool}
+                selectedMaskId={selectedMaskId}
+                onAddMask={handleAddMask}
+                onUpdateMask={handleUpdateMask}
+                onSelectMask={setSelectedMaskId}
+                onSetPlaybackPlaying={setPlaybackPlaying}
+                onSetToolMode={setToolMode}
+                onToggleBladeTool={toggleBladeTool}
+                onSplitAtPlayhead={splitSelectedClipAtPlayhead}
+                onSetPlayheadFrame={setPlayheadFrame}
+                onStepFrames={handleStepFrames}
+              />
+            </div>
             <div className="effects-page-timeline">
               <TimelinePanel
                 trackLayouts={trackLayouts}
@@ -759,7 +882,7 @@ export default function App() {
                 onDropAsset={dropAssetAtFrame}
               />
             </div>
-          </div>
+          </>
         )}
       </main>
     </div>

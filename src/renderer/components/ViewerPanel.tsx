@@ -397,6 +397,15 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         {playbackMessage && (
           <div className="playback-message">{playbackMessage}</div>
         )}
+
+        <div className="playback-hint">
+          <kbd>Space</kbd> Play / Pause &nbsp;·&nbsp;
+          <kbd>J</kbd> Rev &nbsp;·&nbsp;
+          <kbd>K</kbd> Stop &nbsp;·&nbsp;
+          <kbd>L</kbd> Fwd &nbsp;·&nbsp;
+          <kbd>←</kbd><kbd>→</kbd> Step frame &nbsp;·&nbsp;
+          <kbd>B</kbd> Blade
+        </div>
       </section>
     );
   }
