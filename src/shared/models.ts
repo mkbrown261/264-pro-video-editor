@@ -13,6 +13,8 @@ export interface MediaAsset {
   width: number;
   height: number;
   hasAudio: boolean;
+  /** Normalised peak amplitudes [0..1], one value per ~100ms of source audio. */
+  waveformPeaks?: number[];
 }
 
 // ── Transitions ───────────────────────────────────────────────────────────────
@@ -175,6 +177,8 @@ export interface ColorGrade {
     temperature?: Keyframe<number>[];
     tint?: Keyframe<number>[];
   };
+  /** When true the grade is stored but not applied to the viewer */
+  bypass?: boolean;
 }
 
 // ── Effects ───────────────────────────────────────────────────────────────────
@@ -360,7 +364,8 @@ export function createDefaultColorGrade(): ColorGrade {
     lutPath: null,
     lutIntensity: 1,
     maskIds: [],
-    keyframes: {}
+    keyframes: {},
+    bypass: false
   };
 }
 

@@ -21,7 +21,7 @@ import {
 import { formatTimecode } from "../lib/format";
 import { usePlaybackController } from "../hooks/usePlaybackController";
 import { MaskingCanvas, type MaskTool } from "./MaskingCanvas";
-import { colorGradeToCSS } from "../lib/colorGradeRenderer";
+import { getGradeFilterStyle, GRADE_FILTER_ID } from "../lib/colorGradeRenderer";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -360,17 +360,19 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
     const currentMasks    = activeSegment?.clip.masks ?? [];
 
-    // ── Color grading via CSS filter ─────────────────────────────────────────
+    // ── Color grading via SVG feColorMatrix + CSS filters ──────────────────
     //
-    // The grade is applied as a CSS `filter` string directly on the <video>
-    // element. This approach:
-    //   • Never goes black — CSS filters cannot zero out a video frame
-    //   • No WebGL context to lose — zero canvas management
-    //   • GPU-accelerated by the browser compositor
-    //   • Instant — recalculated every React render, ~0ms overhead
-    //   • Works identically in Electron and all browsers
+    // Per-channel R/G/B grading (lift/gamma/gain/offset wheels) is handled
+    // by an SVG feColorMatrix injected as a hidden <svg> in the DOM.
+    // Global adjustments (exposure, contrast, saturation, temperature)
+    // are handled by a CSS filter string that references url(#grade-filter)
+    // followed by brightness/contrast/saturate/hue-rotate.
     //
-    const gradeFilter = colorGradeToCSS(colorGrade ?? null);
+    const gradeStyle  = useMemo(
+      () => getGradeFilterStyle(colorGrade ?? null),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [colorGrade]
+    );
     const hasGrade    = Boolean(colorGrade);
 
     // ── Mask SVG overlay ──────────────────────────────────────────────────────
@@ -384,6 +386,15 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         ref={panelRef}
         className={`panel viewer-panel${isFullscreen ? " viewer-panel-fullscreen" : ""}`}
       >
+        {/* ── Hidden SVG for per-channel grade filter ── */}
+        {gradeStyle.hasSvgEffect && (
+          <svg
+            style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}
+            aria-hidden="true"
+            dangerouslySetInnerHTML={{ __html: gradeStyle.svgFilter }}
+          />
+        )}
+
         {/* ── Stage ── */}
         <div ref={stageRef} className="viewer-stage">
           {previewAsset ? (
@@ -404,7 +415,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                 controls={false}
                 style={{
                   opacity: previewOpacity,
-                  filter:  gradeFilter,
+                  filter:  gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : undefined,
                   ...videoStyle,
                 }}
                 muted={true}

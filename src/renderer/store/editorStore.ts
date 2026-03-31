@@ -78,6 +78,7 @@ interface EditorStore {
 
   // ── Asset Management ──
   importAssets: (assets: MediaAsset[]) => void;
+  setAssetWaveform: (assetId: string, peaks: number[]) => void;
   appendAssetToTimeline: (assetId: string) => void;
   dropAssetAtFrame: (assetId: string, trackId: string, startFrame: number) => void;
   selectAsset: (assetId: string | null) => void;
@@ -138,6 +139,7 @@ interface EditorStore {
   addTrack: (kind: TimelineTrackKind) => void;
   removeTrack: (trackId: string) => void;
   updateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
+  duplicateTrack: (trackId: string) => void;
 
   // ── Markers ──
   addMarker: (marker: Omit<TimelineMarker, "id">) => void;
@@ -522,6 +524,17 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }
 
       return { project: nextProject, selectedAssetId, selectedClipId };
+    }));
+  },
+
+  setAssetWaveform: (assetId, peaks) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        assets: state.project.assets.map((a) =>
+          a.id === assetId ? { ...a, waveformPeaks: peaks } : a
+        )
+      }
     }));
   },
 
@@ -1292,6 +1305,36 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         }
       }
     })));
+  },
+
+  duplicateTrack: (trackId) => {
+    set(withUndo("Duplicate Track", (state) => {
+      const src = state.project.sequence.tracks.find((t) => t.id === trackId);
+      if (!src) return state;
+      const newTrackId = createId();
+      const newTrack: TimelineTrack = {
+        ...src,
+        id: newTrackId,
+        name: `${src.name} Copy`,
+      };
+      // Duplicate clips that belong to the source track
+      const clipsToClone = state.project.sequence.clips.filter((c) => c.trackId === trackId);
+      const newClips = clipsToClone.map((c) => ({ ...c, id: createId(), trackId: newTrackId, linkedGroupId: null }));
+      // Insert the new track directly after the source track
+      const trackIndex = state.project.sequence.tracks.findIndex((t) => t.id === trackId);
+      const tracks = [...state.project.sequence.tracks];
+      tracks.splice(trackIndex + 1, 0, newTrack);
+      return {
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            tracks,
+            clips: [...state.project.sequence.clips, ...newClips]
+          }
+        }
+      };
+    }));
   },
 
   // ── Markers ───────────────────────────────────────────────────────────────

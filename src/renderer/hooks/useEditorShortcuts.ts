@@ -17,6 +17,15 @@ interface EditorShortcutOptions {
   onRedo: () => void;
   onSave: () => void;
   onOpen: () => void;
+  // Extended shortcuts
+  onDuplicateSelectedClip?: () => void;
+  onFitTimeline?: () => void;
+  onExport?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onAddMarker?: () => void;
+  /** J = rewind (shuttle -1 speed), L = forward (shuttle +1 speed), K = pause */
+  onJKLShuttle?: (direction: -1 | 0 | 1) => void;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -54,7 +63,14 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onUndo,
         onRedo,
         onSave,
-        onOpen
+        onOpen,
+        onDuplicateSelectedClip,
+        onFitTimeline,
+        onExport,
+        onZoomIn,
+        onZoomOut,
+        onAddMarker,
+        onJKLShuttle,
       } = optionsRef.current;
 
       const key = event.key.toLowerCase();
@@ -97,6 +113,19 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           onSplitSelectedClip();
           return;
         }
+        // Cmd/Ctrl+D → duplicate selected clip
+        if (key === "d") {
+          event.preventDefault();
+          onDuplicateSelectedClip?.();
+          return;
+        }
+        // Cmd/Ctrl+E → export
+        if (key === "e") {
+          event.preventDefault();
+          onExport?.();
+          return;
+        }
+        // Cmd/Ctrl+Shift+Z handled above; Shift+Z (no modifier) → fit timeline
         return;
       }
 
@@ -109,8 +138,23 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         case " ":
         case "k":
           event.preventDefault();
-          onTogglePlayback();
+          if (key === "k" && onJKLShuttle) {
+            onJKLShuttle(0); // K = pause
+          } else {
+            onTogglePlayback();
+          }
           break;
+
+        // JKL shuttle
+        case "j":
+          event.preventDefault();
+          onJKLShuttle ? onJKLShuttle(-1) : onTogglePlayback();
+          break;
+        case "l":
+          event.preventDefault();
+          onJKLShuttle ? onJKLShuttle(1) : onTogglePlayback();
+          break;
+
         case "a":
           event.preventDefault();
           onSelectTool();
@@ -123,6 +167,31 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onToggleFullscreen();
           break;
+
+        // ] / [ zoom in / out
+        case "]":
+          event.preventDefault();
+          onZoomIn?.();
+          break;
+        case "[":
+          event.preventDefault();
+          onZoomOut?.();
+          break;
+
+        // Shift+Z → fit timeline to window
+        case "z":
+          if (event.shiftKey) {
+            event.preventDefault();
+            onFitTimeline?.();
+          }
+          break;
+
+        // M → add marker at playhead
+        case "m":
+          event.preventDefault();
+          onAddMarker?.();
+          break;
+
         case "arrowleft":
           event.preventDefault();
           onNudgePlayhead(event.shiftKey ? -sequenceFps : -1);

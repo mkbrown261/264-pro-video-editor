@@ -770,6 +770,15 @@ export function ColorGradingPanel({
           )}
           {colorGrade && (
             <>
+              {/* Bypass toggle: clicking hides/shows grade effect without deleting it */}
+              <button
+                className={`cgp-btn${colorGrade.bypass ? " cgp-bypass-on" : ""}`}
+                onClick={() => handleUpdate({ bypass: !colorGrade.bypass })}
+                type="button"
+                title={colorGrade.bypass ? "Grade bypassed — click to enable" : "Click to bypass grade"}
+              >
+                {colorGrade.bypass ? "⊘ Bypassed" : "✓ Active"}
+              </button>
               <button
                 className="cgp-btn"
                 onClick={() => setShowScopes((v) => !v)}

@@ -66,6 +66,29 @@ button { cursor: pointer; }
   background: var(--bg-app);
 }
 
+/* ── Toast notification ── */
+.app-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e2230;
+  border: 1px solid rgba(79,142,247,0.45);
+  border-radius: 8px;
+  color: #d0d4e0;
+  font-size: 0.82rem;
+  padding: 8px 20px;
+  z-index: 99999;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  pointer-events: none;
+  white-space: nowrap;
+  animation: toast-fadein 0.2s ease;
+}
+@keyframes toast-fadein {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* ── Top header ─────────────────────────────────────────────────────────────── */
 .workspace-header {
   grid-area: header;
@@ -4661,6 +4684,61 @@ kbd {
   cursor: pointer;
 }
 .ctx-speed-apply:hover { background: rgba(79,142,247,0.6); }
+
+/* ── Track context menu extensions ── */
+.ctx-menu-header {
+  padding: 5px 14px 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.38);
+  pointer-events: none;
+}
+.ctx-menu-item-danger {
+  color: #ff6b6b;
+}
+.ctx-menu-item-danger:hover {
+  background: rgba(255,80,80,0.18);
+  color: #ff9090;
+}
+
+/* ── Track rename popup ── */
+.track-rename-popup {
+  background: #1e2230;
+  border: 1px solid rgba(79,142,247,0.4);
+  border-radius: 8px;
+  padding: 14px 16px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  min-width: 200px;
+  z-index: 10001;
+  color: #d0d4e0;
+  font-size: 0.82rem;
+}
+.track-rename-input {
+  width: 100%;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(79,142,247,0.4);
+  border-radius: 4px;
+  color: #fff;
+  padding: 5px 8px;
+  font-size: 0.85rem;
+  outline: none;
+  box-sizing: border-box;
+}
+.track-rename-input:focus {
+  border-color: rgba(79,142,247,0.8);
+}
+
+/* ── Grade bypass button ── */
+.cgp-bypass-on {
+  background: rgba(255,100,60,0.18) !important;
+  border-color: rgba(255,100,60,0.4) !important;
+  color: #ff8060 !important;
+}
+.cgp-bypass-on:hover {
+  background: rgba(255,100,60,0.28) !important;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    ADD TRACK BUTTONS

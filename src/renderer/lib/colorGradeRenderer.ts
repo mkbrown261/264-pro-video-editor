@@ -573,146 +573,288 @@ export class ColorGradeRenderer {
   }
 }
 
-// ─── CSS Filter helper (primary rendering path) ───────────────────────────────
+// ─── SVG feColorMatrix helper (primary rendering path) ────────────────────────
 //
-// Converts a ColorGrade into a CSS `filter` string applied directly on the
-// <video> element.  This is the PRIMARY grading path in ViewerPanel because:
+// Converts a ColorGrade into an inline SVG <filter> definition string that is
+// applied to the <video> element via  filter: url(#grade-filter).
 //
-//  - Zero WebGL: no context loss, no CORS issues, no canvas display:none bugs
-//  - GPU-accelerated: browser compositor applies filters on the GPU layer
-//  - Instant: filter string recalculated on every React render (~0 ms)
-//  - Always visible: cannot produce an all-black image from neutral settings
+// SVG feColorMatrix type="matrix" supports true per-channel R/G/B math:
 //
-// Mapping from ColorGrade model to CSS filters:
+//   [ rr rg rb ra r_const ]   output.r = rr*r + rg*g + rb*b + ra*a + r_const
+//   [ gr gg gb ga g_const ]   output.g = gr*r + gg*g + gb*b + ga*a + g_const
+//   [ br bg bb ba b_const ]   output.b = br*r + bg*g + bb*b + ba*a + b_const
+//   [  0  0  0  1  0      ]   output.a = a  (alpha unchanged)
 //
-//   exposure   [-3..3 stops]   → brightness(2^exposure)
-//   contrast   [-1..1]         → contrast(1 + contrast)
-//   saturation [0..3]          → saturate(saturation)
-//   temperature[-100..100]     → hue-rotate (approximate warm/cool shift)
-//   tint       [-100..100]     → slight hue-rotate in opposite direction
-//   gamma      [-1..1 per ch]  → brightness of the luminance (average of r/g/b)
-//   lift       [-1..1 per ch]  → brightness shift (average of r/g/b)
-//   gain       [-1..1 per ch]  → brightness multiplier (average of r/g/b)
-//   offset     [-1..1 per ch]  → brightness additive (average of r/g/b)
+// Color wheel mapping (each wheel is {r,g,b} in [-1..1]):
 //
-// Wheel-to-brightness mapping (master luminance only; per-channel tint via
-// hue-rotate is not possible in CSS — full per-channel requires WebGL):
+//   gain    → per-channel multiply (diagonal of the matrix)
+//   lift    → per-channel shadow offset  (additive to the constant column)
+//   gamma   → per-channel midtone power  (applied as gain^(1/gamma_factor))
+//   offset  → per-channel global add     (constant column)
 //
-//   lift    master = avg(r,g,b) → add to brightness as (1 + liftMaster * 0.5)
-//   gamma   master             → brightness(2^(-gammaMaster))   (inverse: +gamma → brighter mids)
-//   gain    master             → multiply brightness by (1 + gainMaster)
-//   offset  master             → add to brightness as (1 + offsetMaster)
+// Global adjustments handled by CSS filter() on top:
+//   exposure    → brightness(2^stops)
+//   contrast    → contrast(1 + contrast)
+//   saturation  → saturate(value)
+//   temperature → approximate hue-rotate
+//   tint        → approximate hue-rotate
 //
-export function colorGradeToCSS(grade: ColorGrade | null): string {
-  if (!grade) return "none";
+// The SVG filter is rendered by the browser GPU compositor — same performance
+// as CSS filters, with full per-channel accuracy.
+//
 
-  const safe = (v: number, fallback = 0) => (Number.isFinite(v) ? v : fallback);
+/** Unique filter id used in the SVG and CSS url() reference */
+export const GRADE_FILTER_ID = "264pro-grade-filter";
 
-  // ── Exposure ─────────────────────────────────────────────────────────────
-  const exposure    = safe(grade.exposure, 0);
-  const expMult     = Math.pow(2, exposure);              // 2^stops
+/**
+ * Build an SVG <filter> element string for per-channel color grading.
+ * Returns the inner SVG markup to be placed inside a hidden <svg> in the DOM.
+ * Returns an empty string when grade is null (identity — no filter needed).
+ */
+export function buildGradeFilterSVG(grade: ColorGrade | null): string {
+  if (!grade) return "";
 
-  // ── Contrast ─────────────────────────────────────────────────────────────
-  const contrast    = safe(grade.contrast, 0);
-  const contrastVal = Math.max(0.01, 1 + contrast);       // 0.01..2
+  const safe = (v: number, fallback = 0) =>
+    Number.isFinite(v) ? v : fallback;
 
-  // ── Saturation ───────────────────────────────────────────────────────────
-  const saturation  = safe(grade.saturation, 1);
-  const satVal      = Math.max(0, saturation);            // 0..3
-
-  // ── Temperature/Tint → hue-rotate approximation ──────────────────────────
-  // temperature +100 = warm (red/yellow) ≈ -10deg hue shift
-  // temperature -100 = cool (blue)       ≈ +10deg hue shift
-  const temperature = safe(grade.temperature, 0);
-  const tint        = safe(grade.tint, 0);
-  const hueRot      = (-temperature * 0.10) + (tint * 0.05); // degrees
-
-  // ── Wheels → brightness + sepia/hue tinting ───────────────────────────────
-  // Lift (shadows), Gamma (midtones), Gain (highlights), Offset (global)
-  // Each wheel is RGBValue {r,g,b} in [-1,1].
-  //
-  // Brightness: use the luminance average for overall level adjustments
-  // Color tint: compute hue from (r-b, g-b) channel differences to detect
-  //   whether the wheel is pushing towards a warm or cool colour, then use
-  //   sepia() + hue-rotate() to replicate the tint.
-  //
+  // ── Wheels ────────────────────────────────────────────────────────────────
   const lift   = grade.lift   ?? { r: 0, g: 0, b: 0 };
   const gamma  = grade.gamma  ?? { r: 0, g: 0, b: 0 };
   const gain   = grade.gain   ?? { r: 0, g: 0, b: 0 };
   const offset = grade.offset ?? { r: 0, g: 0, b: 0 };
 
-  function wheelBrightness(w: typeof lift): number {
-    return (safe(w.r) + safe(w.g) + safe(w.b)) / 3;
-  }
+  // gain: scale each channel — maps [-1..1] to [0..2] multiply
+  const gainR = Math.max(0.001, 1 + safe(gain.r));
+  const gainG = Math.max(0.001, 1 + safe(gain.g));
+  const gainB = Math.max(0.001, 1 + safe(gain.b));
 
-  // Estimate hue-bias from a wheel: excess red → warm, excess blue → cool
-  // Returns degrees of hue-rotate that approximates the per-channel shift
-  function wheelHueDeg(w: typeof lift, scale: number): number {
-    const r = safe(w.r);
-    const g = safe(w.g);
-    const b = safe(w.b);
-    // Max-minus-median gives dominant channel direction
-    const rg = r - g;
-    const gb = g - b;
-    const rb = r - b;
-    // red excess → negative hue (warm), blue excess → positive (cool)
-    const bias = (rg * 0.5 - gb * 0.3 + rb * 0.2) * scale;
-    return bias * 60; // map [-1,1] range to roughly [-60,60] deg
-  }
+  // gamma: midtone power — maps [-1..1] to power exponent
+  // +gamma → brighter mids (exponent < 1), -gamma → darker (exponent > 1)
+  const gammaExpR = Math.max(0.1, 1 - safe(gamma.r) * 0.7);
+  const gammaExpG = Math.max(0.1, 1 - safe(gamma.g) * 0.7);
+  const gammaExpB = Math.max(0.1, 1 - safe(gamma.b) * 0.7);
 
-  const liftMaster   = wheelBrightness(lift);
-  const gammaMaster  = wheelBrightness(gamma);
-  const gainMaster   = wheelBrightness(gain);
-  const offsetMaster = wheelBrightness(offset);
+  // lift: shadow offset — maps [-1..1] to additive constant [-0.25..0.25]
+  const liftR = safe(lift.r) * 0.25;
+  const liftG = safe(lift.g) * 0.25;
+  const liftB = safe(lift.b) * 0.25;
 
-  const liftFactor   = Math.max(0.05, 1 + liftMaster   * 0.5);
-  const gammaFactor  = Math.max(0.05, 1 + gammaMaster  * 0.8);
-  const gainFactor   = Math.max(0.05, 1 + gainMaster);
-  const offsetFactor = Math.max(0.05, 1 + offsetMaster);
+  // offset: global add — maps [-1..1] to additive constant [-0.15..0.15]
+  const offsetR = safe(offset.r) * 0.15;
+  const offsetG = safe(offset.g) * 0.15;
+  const offsetB = safe(offset.b) * 0.15;
 
-  const brightnessCombined = expMult * liftFactor * gammaFactor * gainFactor * offsetFactor;
-  const brightnessVal       = Math.max(0.001, brightnessCombined);
+  // Combined constant column: lift + offset
+  const constR = liftR + offsetR;
+  const constG = liftG + offsetG;
+  const constB = liftB + offsetB;
 
-  // Per-wheel hue contribution (weighted by their tonal impact)
-  const liftHue   = wheelHueDeg(lift,   0.4);  // shadows: subtle
-  const gammaHue  = wheelHueDeg(gamma,  0.6);  // mids: moderate
-  const gainHue   = wheelHueDeg(gain,   0.5);  // highlights: moderate
-  const offsetHue = wheelHueDeg(offset, 0.3);  // global: gentle
+  // ── Temperature / Tint → hue-rotate approximation ─────────────────────────
+  const temperature = safe(grade.temperature, 0);
+  const tint        = safe(grade.tint, 0);
+  const hueRot      = (-temperature * 0.10) + (tint * 0.05);
 
-  // Combine all hue biases + temperature/tint
-  const totalHue = hueRot + liftHue + gammaHue + gainHue + offsetHue;
+  // ── Exposure + Contrast + Saturation → CSS filter (applied on top) ────────
+  const exposure    = safe(grade.exposure, 0);
+  const expMult     = Math.pow(2, exposure);
+  const contrastVal = Math.max(0.01, 1 + safe(grade.contrast, 0));
+  const satVal      = Math.max(0, safe(grade.saturation, 1));
 
-  // Sepia strength from color channel divergence (how strong is the tint?)
-  function wheelChromaStrength(w: typeof lift): number {
-    const r = safe(w.r); const g = safe(w.g); const b = safe(w.b);
-    const avg = (r + g + b) / 3;
-    return Math.min(1, Math.sqrt((r - avg) ** 2 + (g - avg) ** 2 + (b - avg) ** 2) * 3);
-  }
-  const chromaStrength = Math.min(0.6,
-    wheelChromaStrength(lift)   * 0.15 +
-    wheelChromaStrength(gamma)  * 0.20 +
-    wheelChromaStrength(gain)   * 0.15 +
-    wheelChromaStrength(offset) * 0.10
-  );
-
-  // Build filter string (only include non-identity values to keep it short)
-  const parts: string[] = [];
-
-  if (Math.abs(brightnessVal - 1) > 0.001)
-    parts.push(`brightness(${brightnessVal.toFixed(4)})`);
-
+  // Build CSS filter string for global adjustments
+  const cssFilters: string[] = [];
+  if (Math.abs(expMult - 1) > 0.001)
+    cssFilters.push(`brightness(${expMult.toFixed(4)})`);
   if (Math.abs(contrastVal - 1) > 0.001)
-    parts.push(`contrast(${contrastVal.toFixed(3)})`);
-
+    cssFilters.push(`contrast(${contrastVal.toFixed(3)})`);
   if (Math.abs(satVal - 1) > 0.001)
-    parts.push(`saturate(${satVal.toFixed(3)})`);
+    cssFilters.push(`saturate(${satVal.toFixed(3)})`);
+  if (Math.abs(hueRot) > 0.1)
+    cssFilters.push(`hue-rotate(${hueRot.toFixed(2)}deg)`);
 
-  // Apply sepia tint + hue-rotate together for per-channel colour grading effect
-  if (chromaStrength > 0.01) {
-    parts.push(`sepia(${chromaStrength.toFixed(3)})`);
+  // ── feColorMatrix for per-channel gain + lift + offset ────────────────────
+  // We apply gain as the diagonal multiplier. Gamma is handled via
+  // feComponentTransfer with feFuncR/G/B type="gamma".
+  // Matrix format (row-major, 4 rows × 5 cols):
+  //   R_out = gainR * R_in + constR
+  //   G_out = gainG * G_in + constG
+  //   B_out = gainB * B_in + constB
+  //   A_out = A_in
+  const matrixValues = [
+    `${gainR.toFixed(5)} 0 0 0 ${constR.toFixed(5)}`,
+    `0 ${gainG.toFixed(5)} 0 0 ${constG.toFixed(5)}`,
+    `0 0 ${gainB.toFixed(5)} 0 ${constB.toFixed(5)}`,
+    "0 0 0 1 0",
+  ].join(" ");
+
+  // Check if gamma is identity (all exponents ≈ 1.0) to skip the extra primitive
+  const gammaIsIdentity =
+    Math.abs(gammaExpR - 1) < 0.01 &&
+    Math.abs(gammaExpG - 1) < 0.01 &&
+    Math.abs(gammaExpB - 1) < 0.01;
+
+  // Check if color matrix is identity
+  const matrixIsIdentity =
+    Math.abs(gainR - 1) < 0.001 && Math.abs(gainG - 1) < 0.001 && Math.abs(gainB - 1) < 0.001 &&
+    Math.abs(constR) < 0.001 && Math.abs(constG) < 0.001 && Math.abs(constB) < 0.001;
+
+  const hasSvgEffect = !matrixIsIdentity || !gammaIsIdentity;
+
+  if (!hasSvgEffect && cssFilters.length === 0) return "";
+
+  // SVG filter primitives
+  const primitives: string[] = [];
+  if (!matrixIsIdentity) {
+    primitives.push(
+      `<feColorMatrix type="matrix" values="${matrixValues}"/>`
+    );
   }
-  if (Math.abs(totalHue) > 0.1)
-    parts.push(`hue-rotate(${totalHue.toFixed(2)}deg)`);
+  if (!gammaIsIdentity) {
+    primitives.push(
+      `<feComponentTransfer>` +
+      `<feFuncR type="gamma" exponent="${gammaExpR.toFixed(4)}"/>` +
+      `<feFuncG type="gamma" exponent="${gammaExpG.toFixed(4)}"/>` +
+      `<feFuncB type="gamma" exponent="${gammaExpB.toFixed(4)}"/>` +
+      `</feComponentTransfer>`
+    );
+  }
 
-  return parts.length > 0 ? parts.join(" ") : "none";
+  return {
+    svgFilter: primitives.length > 0
+      ? `<filter id="${GRADE_FILTER_ID}" color-interpolation-filters="linearRGB">${primitives.join("")}</filter>`
+      : "",
+    cssFilter: cssFilters.length > 0
+      ? cssFilters.join(" ")
+      : "none",
+    hasSvgEffect,
+  } as unknown as string; // overloaded — see getGradeFilterStyle() below
+}
+
+/** Result of grade filter computation */
+export interface GradeFilterStyle {
+  /** SVG <filter> markup to inject into a hidden <svg> */
+  svgFilter: string;
+  /** CSS filter string for global adjustments (brightness/contrast/sat/hue) */
+  cssFilter: string;
+  /** true if the SVG filter has any actual effect and should be referenced */
+  hasSvgEffect: boolean;
+}
+
+/**
+ * Compute per-channel grade filter data from a ColorGrade.
+ * Returns { svgFilter, cssFilter, hasSvgEffect }.
+ * When grade is null all fields are identity / empty.
+ */
+export function getGradeFilterStyle(grade: ColorGrade | null): GradeFilterStyle {
+  if (!grade || grade.bypass) {
+    return { svgFilter: "", cssFilter: "none", hasSvgEffect: false };
+  }
+
+  const safe = (v: number, fallback = 0) =>
+    Number.isFinite(v) ? v : fallback;
+
+  const lift   = grade.lift   ?? { r: 0, g: 0, b: 0 };
+  const gamma  = grade.gamma  ?? { r: 0, g: 0, b: 0 };
+  const gain   = grade.gain   ?? { r: 0, g: 0, b: 0 };
+  const offset = grade.offset ?? { r: 0, g: 0, b: 0 };
+
+  const gainR = Math.max(0.001, 1 + safe(gain.r));
+  const gainG = Math.max(0.001, 1 + safe(gain.g));
+  const gainB = Math.max(0.001, 1 + safe(gain.b));
+
+  const gammaExpR = Math.max(0.1, 1 - safe(gamma.r) * 0.7);
+  const gammaExpG = Math.max(0.1, 1 - safe(gamma.g) * 0.7);
+  const gammaExpB = Math.max(0.1, 1 - safe(gamma.b) * 0.7);
+
+  const liftR = safe(lift.r) * 0.25;
+  const liftG = safe(lift.g) * 0.25;
+  const liftB = safe(lift.b) * 0.25;
+
+  const offsetR = safe(offset.r) * 0.15;
+  const offsetG = safe(offset.g) * 0.15;
+  const offsetB = safe(offset.b) * 0.15;
+
+  const constR = liftR + offsetR;
+  const constG = liftG + offsetG;
+  const constB = liftB + offsetB;
+
+  const temperature = safe(grade.temperature, 0);
+  const tint        = safe(grade.tint, 0);
+  const hueRot      = (-temperature * 0.10) + (tint * 0.05);
+
+  const exposure    = safe(grade.exposure, 0);
+  const expMult     = Math.pow(2, exposure);
+  const contrastVal = Math.max(0.01, 1 + safe(grade.contrast, 0));
+  const satVal      = Math.max(0, safe(grade.saturation, 1));
+
+  const cssFilters: string[] = [];
+  if (Math.abs(expMult - 1) > 0.001)
+    cssFilters.push(`brightness(${expMult.toFixed(4)})`);
+  if (Math.abs(contrastVal - 1) > 0.001)
+    cssFilters.push(`contrast(${contrastVal.toFixed(3)})`);
+  if (Math.abs(satVal - 1) > 0.001)
+    cssFilters.push(`saturate(${satVal.toFixed(3)})`);
+  if (Math.abs(hueRot) > 0.1)
+    cssFilters.push(`hue-rotate(${hueRot.toFixed(2)}deg)`);
+
+  const matrixValues = [
+    `${gainR.toFixed(5)} 0 0 0 ${constR.toFixed(5)}`,
+    `0 ${gainG.toFixed(5)} 0 0 ${constG.toFixed(5)}`,
+    `0 0 ${gainB.toFixed(5)} 0 ${constB.toFixed(5)}`,
+    "0 0 0 1 0",
+  ].join(" ");
+
+  const gammaIsIdentity =
+    Math.abs(gammaExpR - 1) < 0.01 &&
+    Math.abs(gammaExpG - 1) < 0.01 &&
+    Math.abs(gammaExpB - 1) < 0.01;
+
+  const matrixIsIdentity =
+    Math.abs(gainR - 1) < 0.001 && Math.abs(gainG - 1) < 0.001 && Math.abs(gainB - 1) < 0.001 &&
+    Math.abs(constR) < 0.001 && Math.abs(constG) < 0.001 && Math.abs(constB) < 0.001;
+
+  const hasSvgEffect = !matrixIsIdentity || !gammaIsIdentity;
+
+  const primitives: string[] = [];
+  if (!matrixIsIdentity) {
+    primitives.push(
+      `<feColorMatrix type="matrix" values="${matrixValues}"/>`
+    );
+  }
+  if (!gammaIsIdentity) {
+    primitives.push(
+      `<feComponentTransfer>` +
+      `<feFuncR type="gamma" exponent="${gammaExpR.toFixed(4)}"/>` +
+      `<feFuncG type="gamma" exponent="${gammaExpG.toFixed(4)}"/>` +
+      `<feFuncB type="gamma" exponent="${gammaExpB.toFixed(4)}"/>` +
+      `</feComponentTransfer>`
+    );
+  }
+
+  const svgFilter = hasSvgEffect
+    ? `<filter id="${GRADE_FILTER_ID}" color-interpolation-filters="linearRGB">${primitives.join("")}</filter>`
+    : "";
+
+  // Build combined CSS filter: svg reference first (per-channel), then global adjustments
+  const allCss: string[] = [];
+  if (hasSvgEffect) allCss.push(`url(#${GRADE_FILTER_ID})`);
+  allCss.push(...cssFilters);
+
+  return {
+    svgFilter,
+    cssFilter: allCss.length > 0 ? allCss.join(" ") : "none",
+    hasSvgEffect,
+  };
+}
+
+// ─── Legacy CSS-only helper (kept for reference / unit tests) ─────────────────
+// NOTE: This function only handles global luminance — it does NOT support
+// per-channel R/G/B adjustments from lift/gamma/gain/offset wheels.
+// Use getGradeFilterStyle() for correct per-channel grading.
+//
+/** @deprecated Use getGradeFilterStyle() for full per-channel color accuracy */
+export function colorGradeToCSS(grade: ColorGrade | null): string {
+  if (!grade || grade.bypass) return "none";
+  // Delegate to the new implementation, returning only the CSS part
+  const { cssFilter } = getGradeFilterStyle(grade);
+  return cssFilter;
 }

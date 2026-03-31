@@ -8,6 +8,7 @@ import {
 } from "./components/ViewerPanel";
 import { ColorGradingPanel } from "./components/ColorGradingPanel";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
+import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
 import { VoiceChopAI } from "./lib/VoiceChopAI";
 import { useEditorStore } from "./store/editorStore";
 import {
@@ -81,6 +82,10 @@ export default function App() {
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
   const updateTrack = useEditorStore((s) => s.updateTrack);
   const addTrack = useEditorStore((s) => s.addTrack);
+  const removeTrack = useEditorStore((s) => s.removeTrack);
+  const duplicateTrack = useEditorStore((s) => s.duplicateTrack);
+  const addMarker = useEditorStore((s) => s.addMarker);
+  const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
 
   // Masks
   const addMaskToClip = useEditorStore((s) => s.addMaskToClip);
@@ -111,6 +116,8 @@ export default function App() {
     typeof window !== "undefined" && Boolean(window.editorApi)
   );
   const appShellRef = useRef<HTMLElement | null>(null);
+  // Timeline zoom controls — populated by TimelinePanel via onRegisterZoomControls
+  const timelineZoomRef = useRef<{ zoomIn: () => void; zoomOut: () => void; fitToWindow: () => void } | null>(null);
   const [leftPanelWidth, setLeftPanelWidth] = useState(280);
   const [rightPanelWidth, setRightPanelWidth] = useState(320);
   const [resizeSide, setResizeSide] = useState<"left" | "right" | null>(null);
@@ -118,6 +125,14 @@ export default function App() {
   const [isResizingTimeline, setIsResizingTimeline] = useState(false);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null);
   const [updaterDismissed, setUpdaterDismissed] = useState(false);
+  // ── Toast notifications ────────────────────────────────────────────────────
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function showToast(msg: string) {
+    setToastMessage(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToastMessage(null), 3500);
+  }
 
   // ── Save Confirmation Modal ────────────────────────────────────────────────
   type SaveConfirmAction = "new" | "open" | "close";
@@ -453,8 +468,24 @@ export default function App() {
     onUndo: undo,
     onRedo: redo,
     onSave: () => void handleSaveProject(),
-    onOpen: () => void handleOpenProject()
+    onOpen: () => void handleOpenProject(),
+    onDuplicateSelectedClip: () => { if (selectedClipId) { pauseViewerPlayback(); duplicateClip(selectedClipId); } },
+    onFitTimeline: () => timelineZoomRef.current?.fitToWindow(),
+    onExport: () => void handleExport(),
+    onZoomIn: () => timelineZoomRef.current?.zoomIn(),
+    onZoomOut: () => timelineZoomRef.current?.zoomOut(),
+    onAddMarker: () => addMarker({ frame: playback.playheadFrame, label: "", color: "#f7c948" }),
+    onJKLShuttle: (direction) => {
+      if (direction === 0) {
+        pauseViewerPlayback();
+      } else {
+        handleTogglePlayback();
+      }
+    },
   });
+
+  // ── Waveform peak extraction (background, per-asset) ─────────────────────
+  useWaveformExtractor({ assets: project.assets, setAssetWaveform });
 
   // ── VoiceChopAI init ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -505,6 +536,24 @@ export default function App() {
     });
     return unsub;
   }, [projectDirty]);
+
+  // ── Auto-save every 5 minutes when project is dirty ───────────────────────
+  const AUTO_SAVE_MS = 5 * 60 * 1000; // 5 minutes
+  const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (autoSaveRef.current) clearInterval(autoSaveRef.current);
+    autoSaveRef.current = setInterval(async () => {
+      if (!projectDirty) return;
+      try {
+        await handleSaveProject();
+        showToast("✓ Auto-saved");
+      } catch {
+        // silent — don't interrupt the user
+      }
+    }, AUTO_SAVE_MS);
+    return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectDirty, currentProjectPath]);
 
   // ── Updater + bridge ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -833,6 +882,13 @@ export default function App() {
       {renderSettingsModal()}
       {renderRecentPanel()}
 
+      {/* ── Toast notification ── */}
+      {toastMessage && (
+        <div className="app-toast" role="status" aria-live="polite">
+          {toastMessage}
+        </div>
+      )}
+
       {/* ── TOP MENU BAR ── */}
       <header className="app-menubar">
         <div className="menubar-brand">
@@ -1086,6 +1142,10 @@ export default function App() {
                 setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
               }}
               onAddTrack={(kind) => addTrack(kind)}
+              onRemoveTrack={(trackId) => removeTrack(trackId)}
+              onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
+              onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
+              onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
             />
           </>
         )}
@@ -1183,6 +1243,10 @@ export default function App() {
                   setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
                 }}
                 onAddTrack={(kind) => addTrack(kind)}
+              onRemoveTrack={(trackId) => removeTrack(trackId)}
+              onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
+              onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
+              onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               />
             </div>
           </>
@@ -1322,6 +1386,10 @@ export default function App() {
                   setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
                 }}
                 onAddTrack={(kind) => addTrack(kind)}
+              onRemoveTrack={(trackId) => removeTrack(trackId)}
+              onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
+              onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
+              onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               />
             </div>
           </>

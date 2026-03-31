@@ -29,6 +29,17 @@ interface ContextMenu {
   speed: number;
 }
 
+// ── Track context menu state ──────────────────────────────────────────────────
+interface TrackContextMenu {
+  x: number;
+  y: number;
+  trackId: string;
+  trackKind: TimelineTrackKind;
+  isMuted: boolean;
+  isLocked: boolean;
+  isSolo: boolean;
+}
+
 interface DragState {
   clipId: string;
   trackKind: TimelineTrackKind;
@@ -91,6 +102,11 @@ interface TimelinePanelProps {
   onSetClipSpeed?: (clipId: string, speed: number) => void;
   onAddFade?: (clipId: string, edge: "in" | "out") => void;
   onAddTrack?: (kind: TimelineTrackKind) => void;
+  onRemoveTrack?: (trackId: string) => void;
+  onRenameTrack?: (trackId: string, name: string) => void;
+  onDuplicateTrack?: (trackId: string) => void;
+  /** Called once on mount with zoom control functions */
+  onRegisterZoomControls?: (controls: { zoomIn: () => void; zoomOut: () => void; fitToWindow: () => void }) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -131,6 +147,10 @@ export function TimelinePanel({
   onSetClipSpeed,
   onAddFade,
   onAddTrack,
+  onRemoveTrack,
+  onRenameTrack,
+  onDuplicateTrack,
+  onRegisterZoomControls,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -191,6 +211,9 @@ export function TimelinePanel({
   // ── Context menu ──────────────────────────────────────────────────────────
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [speedInput, setSpeedInput] = useState<string>("1.0");
+  const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
+  const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState<string>("");
 
   // Close context menu on outside click
   useEffect(() => {
@@ -202,6 +225,17 @@ export function TimelinePanel({
     window.addEventListener("mousedown", handler);
     return () => window.removeEventListener("mousedown", handler);
   }, [contextMenu]);
+
+  // Close track context menu on outside click
+  useEffect(() => {
+    if (!trackContextMenu) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".timeline-context-menu")) setTrackContextMenu(null);
+    };
+    window.addEventListener("mousedown", handler);
+    return () => window.removeEventListener("mousedown", handler);
+  }, [trackContextMenu]);
 
   const timelineFrames = Math.max(totalFrames + sequenceFps * 4, sequenceFps * 10);
   const canvasWidth    = Math.max(timelineFrames * pixelsPerFrame, 960);
@@ -231,6 +265,23 @@ export function TimelinePanel({
     requestAnimationFrame(() => { if (timelineEditorRef.current) timelineEditorRef.current.scrollLeft = nextScroll; });
   }
 
+  // Register zoom controls with parent (for keyboard shortcuts)
+  useEffect(() => {
+    if (!onRegisterZoomControls) return;
+    onRegisterZoomControls({
+      zoomIn:  () => setZoom(ppfRef.current * 1.4),
+      zoomOut: () => setZoom(ppfRef.current / 1.4),
+      fitToWindow: () => {
+        const editor = timelineEditorRef.current;
+        if (!editor) return;
+        const w = editor.clientWidth - LABEL_W;
+        const frames = Math.max(timelineFrames, 1);
+        setZoom(Math.max(MIN_PPF, Math.min(MAX_PPF, w / frames)));
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onRegisterZoomControls]);
+
   // ── Playhead scrub ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isScrubbingPlayhead) return;
@@ -255,13 +306,16 @@ export function TimelinePanel({
     const onMove = (e: MouseEvent) => {
       const rawDelta = Math.round((e.clientX - trimState.anchorX) / ppfRef.current);
       const { snapEnabled: se, snapDivIdx: sdi } = snapRef.current;
-      const delta = snapFrame(rawDelta, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor) - snapFrame(0, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+      // Apply snap to the absolute trim value, not to the delta
       if (trimState.edge === "start") {
-        propsRef.current.onTrimClipStart(trimState.clipId, trimState.trimStartFrames + rawDelta);
+        const rawTrim = trimState.trimStartFrames + rawDelta;
+        const snappedTrim = snapFrame(rawTrim, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+        propsRef.current.onTrimClipStart(trimState.clipId, snappedTrim);
       } else {
-        propsRef.current.onTrimClipEnd(trimState.clipId, trimState.trimEndFrames - rawDelta);
+        const rawTrim = trimState.trimEndFrames - rawDelta;
+        const snappedTrim = snapFrame(rawTrim, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+        propsRef.current.onTrimClipEnd(trimState.clipId, snappedTrim);
       }
-      void delta; // used for snap in future
     };
     const onUp = () => setTrimState(null);
     window.addEventListener("mousemove", onMove);
@@ -379,6 +433,54 @@ export function TimelinePanel({
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [dragState]);
 
+  // ── Track context menu renderer ───────────────────────────────────────────
+  function renderTrackContextMenu() {
+    if (!trackContextMenu) return null;
+    const { x, y, trackId, trackKind, isMuted, isLocked, isSolo } = trackContextMenu;
+    return (
+      <div
+        className="timeline-context-menu"
+        style={{ position: "fixed", left: x, top: y, zIndex: 9999 }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <div className="ctx-menu-header">{trackKind === "video" ? "🎬" : "🔊"} Track Actions</div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" onClick={() => {
+          setRenamingTrackId(trackId);
+          setRenameValue("");
+          setTrackContextMenu(null);
+        }}>✏ Rename Track</div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" onClick={() => {
+          onUpdateTrack(trackId, { muted: !isMuted });
+          setTrackContextMenu(null);
+        }}>{isMuted ? "🔊 Unmute Track" : "🔇 Mute Track"}</div>
+        <div className="ctx-menu-item" onClick={() => {
+          onUpdateTrack(trackId, { solo: !isSolo });
+          setTrackContextMenu(null);
+        }}>{isSolo ? "⊗ Un-solo Track" : "◎ Solo Track"}</div>
+        <div className="ctx-menu-item" onClick={() => {
+          onUpdateTrack(trackId, { locked: !isLocked });
+          setTrackContextMenu(null);
+        }}>{isLocked ? "🔓 Unlock Track" : "🔒 Lock Track"}</div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" onClick={() => {
+          onAddTrack?.(trackKind);
+          setTrackContextMenu(null);
+        }}>+ Add {trackKind === "video" ? "Video" : "Audio"} Track</div>
+        <div className="ctx-menu-item" onClick={() => {
+          onDuplicateTrack?.(trackId);
+          setTrackContextMenu(null);
+        }}>⧉ Duplicate Track</div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item ctx-menu-item-danger" onClick={() => {
+          onRemoveTrack?.(trackId);
+          setTrackContextMenu(null);
+        }}>🗑 Delete Track</div>
+      </div>
+    );
+  }
+
   // ── Context menu renderer ─────────────────────────────────────────────────
   function renderContextMenu() {
     if (!contextMenu) return null;
@@ -473,6 +575,50 @@ export function TimelinePanel({
   return (
     <section className="panel timeline-panel">
       {renderContextMenu()}
+      {renderTrackContextMenu()}
+
+      {/* Inline track rename input (shown over the track label) */}
+      {renamingTrackId && (() => {
+        const layout = trackLayouts.find((l) => l.track.id === renamingTrackId);
+        if (!layout) { setRenamingTrackId(null); return null; }
+        return (
+          <div
+            className="track-rename-overlay"
+            style={{ position: "fixed", zIndex: 10000, inset: 0, background: "transparent" }}
+            onClick={() => setRenamingTrackId(null)}
+          >
+            <div
+              className="track-rename-popup"
+              style={{ position: "fixed", left: LABEL_W / 2, top: "50%", transform: "translateY(-50%)" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <label style={{ display: "block", marginBottom: 6, fontSize: 12 }}>Rename track:</label>
+              <input
+                className="track-rename-input"
+                autoFocus
+                defaultValue={layout.track.name}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const name = renameValue.trim() || layout.track.name;
+                    onRenameTrack ? onRenameTrack(renamingTrackId, name) : onUpdateTrack(renamingTrackId, { name });
+                    setRenamingTrackId(null);
+                  }
+                  if (e.key === "Escape") setRenamingTrackId(null);
+                }}
+              />
+              <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+                <button className="ctx-speed-apply" type="button" onClick={() => {
+                  const name = renameValue.trim() || layout.track.name;
+                  onRenameTrack ? onRenameTrack(renamingTrackId, name) : onUpdateTrack(renamingTrackId, { name });
+                  setRenamingTrackId(null);
+                }}>Rename</button>
+                <button className="ctx-speed-apply" type="button" onClick={() => setRenamingTrackId(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── TOOLBAR ──────────────────────────────────────────────────────── */}
       <div className="panel-header timeline-header">
@@ -626,6 +772,19 @@ export function TimelinePanel({
                     width: LABEL_W,
                     borderLeft: `3px solid ${layout.track.color ?? (layout.track.kind === "video" ? "#4f8ef7" : "#2fc77a")}`
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setContextMenu(null);
+                    setTrackContextMenu({
+                      x: e.clientX, y: e.clientY,
+                      trackId: layout.track.id,
+                      trackKind: layout.track.kind,
+                      isMuted: layout.track.muted ?? false,
+                      isLocked: layout.track.locked ?? false,
+                      isSolo: layout.track.solo ?? false,
+                    });
+                  }}
                 >
                   <div className="track-label-top">
                     <span className="track-name" title={layout.track.name}>{layout.track.name}</span>
@@ -670,6 +829,21 @@ export function TimelinePanel({
                   data-track-id={layout.track.id}
                   data-track-kind={layout.track.kind}
                   style={{ width: canvasWidth, opacity: isMuted ? 0.45 : 1 }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // Only open track menu if click was NOT on a clip element
+                    if ((e.target as HTMLElement).closest(".timeline-clip")) return;
+                    setContextMenu(null);
+                    setTrackContextMenu({
+                      x: e.clientX, y: e.clientY,
+                      trackId: layout.track.id,
+                      trackKind: layout.track.kind,
+                      isMuted: layout.track.muted ?? false,
+                      isLocked: layout.track.locked ?? false,
+                      isSolo: layout.track.solo ?? false,
+                    });
+                  }}
                   onDragOver={(e) => {
                     if (e.dataTransfer.types.includes("application/x-asset-id") && !isLocked) {
                       e.preventDefault();
@@ -868,6 +1042,44 @@ export function TimelinePanel({
                             });
                           }}
                         />
+
+                        {/* ── Audio waveform (audio track clips only) ── */}
+                        {segment.track.kind === "audio" && segment.asset.waveformPeaks?.length ? (() => {
+                          const peaks = segment.asset.waveformPeaks!;
+                          const h = Math.max(20, trackH - 8);
+                          const w = clipWidth;
+                          const half = h / 2;
+                          const durationSrc = segment.durationSeconds * (segment.clip.speed ?? 1);
+                          const totalSrc = segment.asset.durationSeconds || 1;
+                          const startRatio = (segment.clip.trimStartFrames ?? 0) / ((totalSrc * sequenceFps) || 1) * (segment.clip.speed ?? 1);
+                          const endRatio = Math.min(1, startRatio + (durationSrc / totalSrc));
+                          const startIdx = Math.floor(startRatio * peaks.length);
+                          const endIdx = Math.max(startIdx + 1, Math.ceil(endRatio * peaks.length));
+                          const slice = peaks.slice(startIdx, endIdx);
+                          if (!slice.length) return null;
+                          const step = w / slice.length;
+                          let d = `M0,${half.toFixed(1)}`;
+                          for (let i = 0; i < slice.length; i++) {
+                            const amp = Math.max(0.02, slice[i]) * half * 0.9;
+                            d += ` L${(i * step).toFixed(1)},${(half - amp).toFixed(1)}`;
+                          }
+                          for (let i = slice.length - 1; i >= 0; i--) {
+                            const amp = Math.max(0.02, slice[i]) * half * 0.9;
+                            d += ` L${(i * step).toFixed(1)},${(half + amp).toFixed(1)}`;
+                          }
+                          d += " Z";
+                          return (
+                            <svg
+                              className="clip-waveform"
+                              width={w}
+                              height={h}
+                              style={{ position: "absolute", top: 2, left: 0, pointerEvents: "none" }}
+                              aria-hidden="true"
+                            >
+                              <path d={d} fill="rgba(47,199,122,0.35)" />
+                            </svg>
+                          );
+                        })() : null}
 
                         {/* Transition in pill */}
                         {segment.clip.transitionIn && (

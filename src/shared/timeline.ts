@@ -246,9 +246,15 @@ function filterPlayableSegments(
   segments: TimelineSegment[],
   trackKind: TimelineTrackKind
 ): TimelineSegment[] {
-  return segments.filter(
-    (segment) => segment.track.kind === trackKind && segment.clip.isEnabled
+  const kindSegments = segments.filter(
+    (segment) => segment.track.kind === trackKind && segment.clip.isEnabled && !segment.track.muted
   );
+  // Solo: if any track of this kind has solo=true, only play those solo tracks
+  const hasSolo = kindSegments.some((s) => s.track.solo);
+  if (hasSolo) {
+    return kindSegments.filter((s) => s.track.solo);
+  }
+  return kindSegments;
 }
 
 export function findPlayableSegmentAtFrame(
