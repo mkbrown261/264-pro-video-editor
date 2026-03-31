@@ -237,6 +237,9 @@ export function TimelinePanel({
   const [isScrubbingPlayhead, setIsScrubbingPlayhead] = useState(false);
   const [dragState, setDragState]                   = useState<DragState | null>(null);
   const [ghostInfo, setGhostInfo]                   = useState<GhostInfo | null>(null);
+  // Ref in sync with ghostInfo so onUp reads the LATEST intent without re-resolving.
+  // This fixes fast drag+release landing in wrong zone.
+  const ghostInfoRef = useRef<GhostInfo | null>(null);
   const [dropTargetTrackId, setDropTargetTrackId]   = useState<string | null>(null);
 
   // ── Track reorder drag ────────────────────────────────────────────────────
@@ -404,65 +407,78 @@ export function TimelinePanel({
     /**
      * Core intent resolver.
      *
-     * Rules (in priority order):
-     *  1. If cursor Y is in the TOP 40% of a same-kind track row  → INSERT_ABOVE_TRACK
-     *  2. If cursor Y is in the MIDDLE 20% of a same-kind track row → DRAG_ON_TRACK
-     *  3. If cursor Y is in the BOTTOM 40% of a same-kind track row:
-     *       - if there is a next same-kind row → INSERT_ABOVE_TRACK (insert before the next)
-     *       - else → INSERT_BELOW_BOTTOM
-     *  4. Cursor above ALL track rows                              → INSERT_ABOVE_TOP
-     *  5. Cursor below ALL track rows                             → INSERT_BELOW_BOTTOM
-     *  6. Cursor between rows of DIFFERENT kinds (gap zone):
-     *       nearest same-kind row by Y-center distance → same logic as rule 1-3
+     * Priority order:
+     *  1. Cursor ABOVE all rows                          → INSERT_ABOVE_TOP
+     *  2. Cursor in TOP 40% of a same-kind lane         → INSERT_ABOVE_TRACK
+     *  3. Cursor in BOTTOM 60% of a same-kind lane      → DRAG_ON_TRACK
+     *  4. Cursor BELOW all rows                         → INSERT_BELOW_BOTTOM
+     *  5. Cursor in gap (different-kind rows):
+     *       nearest same-kind lane center → 40/60 split → INSERT_ABOVE/DRAG_ON
+     *
+     * onUp uses ghostInfoRef (last seen intent) so fast drag+release still
+     * honours whatever was shown in the ghost preview.
      */
     function resolveGhostAt(clientX: number, clientY: number): GhostInfo | null {
-      // All lane elements, sorted top-to-bottom by their rendered position
       const allLanes = Array.from(document.querySelectorAll<HTMLElement>(".timeline-lane"))
-        .map((el) => ({ el, r: el.getBoundingClientRect(), kind: el.dataset.trackKind as TimelineTrackKind, trackId: el.dataset.trackId ?? "" }))
+        .map((el) => ({
+          el,
+          r: el.getBoundingClientRect(),
+          kind: el.dataset.trackKind as TimelineTrackKind,
+          trackId: el.dataset.trackId ?? "",
+        }))
         .sort((a, b) => a.r.top - b.r.top);
 
       if (allLanes.length === 0) return null;
 
-      const editor  = timelineEditorRef.current;
+      const editor     = timelineEditorRef.current;
       const scrollLeft = editor?.scrollLeft ?? 0;
       const { snapEnabled: se, snapDivIdx: sdi } = snapRef.current;
       const fps = propsRef.current.sequenceFps;
 
-      /** Convert cursor X to a snapped frame number relative to a lane rect */
+      /**
+       * clientX → snapped frame.
+       * The lane's r.left is the left edge of the lane *in the viewport*.
+       * Adding scrollLeft restores the portion that has scrolled out of view.
+       * Subtracting offsetX accounts for where inside the clip the user clicked.
+       */
       function laneFrame(r: DOMRect): number {
         const px = clientX - r.left + scrollLeft - dragState.offsetX;
         return snapFrame(Math.max(0, Math.round(px / ppfRef.current)), se, fps, SNAP_DIVISIONS[sdi].factor);
       }
 
-      /** Frame using the rows container origin (used when no specific lane) */
-      function rowsFrame(): number {
-        const rowsEl = document.querySelector(".timeline-rows") as HTMLElement | null;
-        const rr = rowsEl?.getBoundingClientRect();
-        if (!rr) return 0;
-        const px = clientX - rr.left - LABEL_W + scrollLeft - dragState.offsetX;
-        return snapFrame(Math.max(0, Math.round(px / ppfRef.current)), se, fps, SNAP_DIVISIONS[sdi].factor);
+      /** Fallback: use the first lane as frame reference when cursor is outside all lanes. */
+      function fallbackFrame(): number {
+        return laneFrame(allLanes[0].r);
       }
 
-      // Only lanes matching the dragged clip's kind
       const kindLanes = allLanes.filter((l) => l.kind === dragState.trackKind);
-
-      // Build global track index map (position of each trackId in the full sorted lane list)
       const globalIndexOf = (trackId: string) => allLanes.findIndex((l) => l.trackId === trackId);
 
-      // ── Check if cursor is directly over a same-kind lane ──────────────────
+      const topOfAll    = allLanes[0].r.top;
+      const bottomOfAll = allLanes[allLanes.length - 1].r.bottom;
+
+      // ── Rule 1: Cursor ABOVE every row → INSERT_ABOVE_TOP ─────────────────
+      if (clientY < topOfAll) {
+        return {
+          intent: "INSERT_ABOVE_TOP",
+          frame: fallbackFrame(),
+          trackId: "",
+          newTrackKind: dragState.trackKind,
+          insertBeforeTrackId: kindLanes.length > 0 ? kindLanes[0].trackId : "",
+          insertIndex: 0,
+        };
+      }
+
+      // ── Rule 2-3: Cursor directly over a same-kind lane ──────────────────
       for (let i = 0; i < kindLanes.length; i++) {
         const { r, trackId } = kindLanes[i];
         if (clientY < r.top || clientY > r.bottom) continue;
 
-        // Cursor is inside this lane — decide intent by vertical zone.
-        // Rule: top HALF → INSERT ABOVE, bottom HALF → DRAG ON TRACK
-        // (No bottom-insert zone — use "below all tracks" region for that)
         const relY = clientY - r.top;
         const h    = r.bottom - r.top;
-        const half = h * 0.5;
 
-        if (relY < half) {
-          // TOP HALF → INSERT ABOVE this track
+        // TOP 40% → INSERT ABOVE this track
+        if (relY < h * 0.40) {
           const gIdx = globalIndexOf(trackId);
           return {
             intent: "INSERT_ABOVE_TRACK",
@@ -474,7 +490,7 @@ export function TimelinePanel({
           };
         }
 
-        // BOTTOM HALF → DRAG ON TRACK (move clip to this track)
+        // BOTTOM 60% → DRAG ON TRACK
         return {
           intent: "DRAG_ON_TRACK",
           frame: laneFrame(r),
@@ -485,26 +501,11 @@ export function TimelinePanel({
         };
       }
 
-      // ── Cursor is NOT over any same-kind lane ──────────────────────────────
-      const topOfAll    = allLanes[0].r.top;
-      const bottomOfAll = allLanes[allLanes.length - 1].r.bottom;
-
-      if (clientY < topOfAll) {
-        // Above every track → insert at very top
-        return {
-          intent: "INSERT_ABOVE_TOP",
-          frame: rowsFrame(),
-          trackId: "",
-          newTrackKind: dragState.trackKind,
-          insertBeforeTrackId: kindLanes.length > 0 ? kindLanes[0].trackId : "",
-          insertIndex: 0,
-        };
-      }
-
+      // ── Rule 4: Below ALL rows → INSERT_BELOW_BOTTOM ─────────────────────
       if (clientY > bottomOfAll) {
         return {
           intent: "INSERT_BELOW_BOTTOM",
-          frame: rowsFrame(),
+          frame: fallbackFrame(),
           trackId: "",
           newTrackKind: dragState.trackKind,
           insertBeforeTrackId: "",
@@ -512,8 +513,7 @@ export function TimelinePanel({
         };
       }
 
-      // Cursor is in a gap between rows of different kinds (e.g. between video and audio rows).
-      // Find the nearest same-kind lane by Y-center and apply the 50/50 split rule.
+      // ── Rule 5: Cursor in gap between different-kind rows ─────────────────
       if (kindLanes.length > 0) {
         let nearest = kindLanes[0];
         let nearestDist = Infinity;
@@ -522,10 +522,8 @@ export function TimelinePanel({
           const d = Math.abs(clientY - center);
           if (d < nearestDist) { nearestDist = d; nearest = kl; }
         }
-        // Is cursor above or below the nearest lane's center?
         const center = (nearest.r.top + nearest.r.bottom) / 2;
         if (clientY < center) {
-          // Above the center of nearest lane → INSERT ABOVE it
           const gIdx = globalIndexOf(nearest.trackId);
           return {
             intent: "INSERT_ABOVE_TRACK",
@@ -536,7 +534,6 @@ export function TimelinePanel({
             insertIndex: Math.max(0, gIdx),
           };
         } else {
-          // Below the center → DRAG ON TRACK (drop onto nearest lane)
           return {
             intent: "DRAG_ON_TRACK",
             frame: laneFrame(nearest.r),
@@ -553,12 +550,16 @@ export function TimelinePanel({
 
     const onMove = (e: MouseEvent) => {
       const g = resolveGhostAt(e.clientX, e.clientY);
-      if (g) console.log("[drag-move] intent:", g.intent, "insertBeforeTrackId:", g.insertBeforeTrackId, "insertIndex:", g.insertIndex);
+      // Keep ref in sync — onUp reads this instead of re-resolving at mouseup
+      ghostInfoRef.current = g;
       setGhostInfo(g);
     };
 
-    const onUp = (e: MouseEvent) => {
-      const g = resolveGhostAt(e.clientX, e.clientY);
+    const onUp = (_e: MouseEvent) => {
+      // Use the last-seen ghost intent (ref), not a fresh resolve at mouseup coords.
+      // This ensures fast drag+release honours the preview the user saw, not the
+      // exact zone the pointer happened to be in at the instant they released.
+      const g = ghostInfoRef.current;
       console.log("[drag-drop] onUp intent:", g?.intent, "insertIndex:", g?.insertIndex, "trackId:", g?.trackId, "frame:", g?.frame);
       if (g) {
         if (g.intent === "DRAG_ON_TRACK") {
@@ -569,6 +570,7 @@ export function TimelinePanel({
           propsRef.current.onAddTracksAndMoveClip?.(dragState.clipId, g.frame, g.insertIndex);
         }
       }
+      ghostInfoRef.current = null;
       setDragState(null);
       setGhostInfo(null);
     };
@@ -1250,7 +1252,9 @@ export function TimelinePanel({
                             durationFrames: segment.durationFrames,
                           });
                           // Initialize ghost at current position (DRAG_ON_TRACK)
-                          setGhostInfo({ intent: "DRAG_ON_TRACK", frame: segment.startFrame, trackId: layout.track.id, newTrackKind: layout.track.kind, insertBeforeTrackId: "", insertIndex: -1 });
+                          const initialGhost: GhostInfo = { intent: "DRAG_ON_TRACK", frame: segment.startFrame, trackId: layout.track.id, newTrackKind: layout.track.kind, insertBeforeTrackId: "", insertIndex: -1 };
+                          ghostInfoRef.current = initialGhost;
+                          setGhostInfo(initialGhost);
                         }}
                         onContextMenu={(event) => {
                           event.preventDefault();

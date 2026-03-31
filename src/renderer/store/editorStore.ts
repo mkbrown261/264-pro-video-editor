@@ -1360,45 +1360,62 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const linkedClips = clip.linkedGroupId
         ? seq.clips.filter((c) => c.linkedGroupId === clip.linkedGroupId)
         : [clip];
-      const videoClip = linkedClips.find((c) => {
+
+      // Determine the "primary" clip kind from the dragged clip's track
+      const draggedTrack = seq.tracks.find((tr) => tr.id === clip.trackId);
+      const draggedKind = draggedTrack?.kind ?? "video";
+
+      // Separate by kind
+      const videoClipsInGroup = linkedClips.filter((c) => {
         const t = seq.tracks.find((tr) => tr.id === c.trackId);
         return t?.kind === "video";
-      }) ?? clip;
-      const audioClips = linkedClips.filter((c) => c.id !== videoClip.id);
+      });
+      const audioClipsInGroup = linkedClips.filter((c) => {
+        const t = seq.tracks.find((tr) => tr.id === c.trackId);
+        return t?.kind === "audio";
+      });
 
-      // 3. Build new video track
+      // "Primary" clip drives the frame calculation (same kind as dragged clip)
+      const primaryClip = draggedKind === "video"
+        ? (videoClipsInGroup[0] ?? clip)
+        : (audioClipsInGroup[0] ?? clip);
+
+      const needVideoTrack = videoClipsInGroup.length > 0;
+      const needAudioTrack = audioClipsInGroup.length > 0;
+
+      // 3. Build new video track (if needed)
       const vCount = seq.tracks.filter((t) => t.kind === "video").length;
       const newVideoTrackId = createId();
-      const newVideoTrack: TimelineTrack = {
+      const newVideoTrack: TimelineTrack | null = needVideoTrack ? {
         id: newVideoTrackId,
         name: `V${vCount + 1}`,
         kind: "video",
         muted: false, locked: false, solo: false,
         height: 56,
         color: "#4f8ef7"
-      };
+      } : null;
 
-      // 4. Build new audio track (only if there are linked audio clips)
+      // 4. Build new audio track (if needed)
+      const aCount = seq.tracks.filter((t) => t.kind === "audio").length;
       const newAudioTrackId = createId();
-      const needAudio = audioClips.length > 0;
-      const newAudioTrack: TimelineTrack | null = needAudio ? {
+      const newAudioTrack: TimelineTrack | null = needAudioTrack ? {
         id: newAudioTrackId,
-        name: `A${seq.tracks.filter((t) => t.kind === "audio").length + 1}`,
+        name: `A${aCount + 1}`,
         kind: "audio",
         muted: false, locked: false, solo: false,
         height: 44,
         color: "#2fc77a"
       } : null;
 
-      // 5. Compute frame delta
-      const frameDelta = startFrame - videoClip.startFrame;
+      // 5. Compute frame delta (relative to primary clip's start)
+      const frameDelta = startFrame - primaryClip.startFrame;
 
-      // 6. Rewrite clips: move video → newVideoTrack, audio → newAudioTrack
+      // 6. Rewrite clips: move each to appropriate new track
       const updatedClips = seq.clips.map((c) => {
-        if (c.id === videoClip.id) {
+        if (needVideoTrack && videoClipsInGroup.some((v) => v.id === c.id)) {
           return { ...c, trackId: newVideoTrackId, startFrame: Math.max(0, c.startFrame + frameDelta) };
         }
-        if (needAudio && audioClips.some((a) => a.id === c.id)) {
+        if (needAudioTrack && audioClipsInGroup.some((a) => a.id === c.id)) {
           return { ...c, trackId: newAudioTrackId, startFrame: Math.max(0, c.startFrame + frameDelta) };
         }
         return c;
@@ -1410,8 +1427,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const clamped = Math.max(0, Math.min(insertIndex, seq.tracks.length));
       const newTracks = [
         ...seq.tracks.slice(0, clamped),
-        newVideoTrack,
-        // Insert audio track immediately after the video track so they stay paired
+        // Insert video track first (if present), then audio track below it
+        ...(newVideoTrack ? [newVideoTrack] : []),
         ...(newAudioTrack ? [newAudioTrack] : []),
         ...seq.tracks.slice(clamped),
       ];
@@ -1421,7 +1438,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           ...state.project,
           sequence: { ...seq, tracks: newTracks, clips: updatedClips }
         },
-        [newVideoTrackId, ...(needAudio ? [newAudioTrackId] : [])]
+        [
+          ...(needVideoTrack ? [newVideoTrackId] : []),
+          ...(needAudioTrack ? [newAudioTrackId] : [])
+        ]
       );
 
       return {

@@ -3518,7 +3518,7 @@ kbd {
   animation: ghostPulse 0.8s ease-in-out infinite;
 }
 .ghost-new-track-label {
-  padding: 0 16px;
+  padding: 0 0 0 108px;
   font-size: 0.7rem;
   color: var(--blue);
   font-weight: 600;
@@ -4656,19 +4656,7 @@ kbd {
   50%      { opacity: 1;   }
 }
 
-/* New track ghost */
-.timeline-new-track-ghost {
-  position: relative;
-  height: 52px;
-  background: rgba(79,142,247,0.08);
-  border: 1.5px dashed rgba(79,142,247,0.6);
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  margin: 2px 0;
-  animation: ghostPulse 0.8s ease-in-out infinite;
-}
+/* New track ghost (DUPLICATE REMOVED — definition is above at line ~3509) */
 .ghost-new-track-label {
   padding-left: 108px;
   font-size: 0.68rem;
