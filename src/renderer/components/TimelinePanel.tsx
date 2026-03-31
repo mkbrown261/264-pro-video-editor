@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { EditorTool, TimelineTrack, TimelineTrackKind } from "../../shared/models";
 import {
   getClipTransitionDurationFrames,
@@ -874,16 +874,25 @@ export function TimelinePanel({
 
       {/* ── SCROLLABLE CANVAS ──────────────────────────────────────────────── */}
       <div
-        ref={timelineEditorRef}
-        className="timeline-editor"
-        onWheel={(event) => {
-          if (event.ctrlKey || event.metaKey) {
-            event.preventDefault();
-            setZoom(ppfRef.current + (event.deltaY > 0 ? -0.8 : 0.8), event.clientX);
-          } else {
-            event.currentTarget.scrollLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+        ref={(el) => {
+          // Attach a non-passive wheel listener so we can call preventDefault for zoom
+          if (el && el !== timelineEditorRef.current) {
+            const prev = timelineEditorRef.current;
+            if (prev) prev.removeEventListener("wheel", (prev as HTMLDivElement & { _wheelHandler?: EventListener })._wheelHandler ?? (() => {}));
+            const handler = (event: WheelEvent) => {
+              if (event.ctrlKey || event.metaKey) {
+                event.preventDefault();
+                setZoom(ppfRef.current + (event.deltaY > 0 ? -0.8 : 0.8), event.clientX);
+              } else {
+                el.scrollLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+              }
+            };
+            (el as HTMLDivElement & { _wheelHandler?: EventListener })._wheelHandler = handler as EventListener;
+            el.addEventListener("wheel", handler, { passive: false });
           }
+          (timelineEditorRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
         }}
+        className="timeline-editor"
       >
         {/* ── RULER ──────────────────────────────────────────────────────── */}
         <div
@@ -971,7 +980,7 @@ export function TimelinePanel({
               ghostInfo.insertBeforeTrackId === layout.track.id;
 
             return (
-              <>
+              <React.Fragment key={layout.track.id}>
                 {/* Ghost row inserted immediately before this track row */}
                 {showGhostAbove && dragState && (
                   <div className="timeline-new-track-ghost" key={`ghost-${layout.track.id}`}>
@@ -1433,7 +1442,7 @@ export function TimelinePanel({
                   );
                 })()}
               </div>
-              </>
+              </React.Fragment>
             );
           })}
 
