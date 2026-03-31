@@ -522,8 +522,9 @@ export default function App() {
   }
 
   return (
-    <main ref={appShellRef} className="app-shell" style={shellStyle}>
+    <div className="app-root">
       {renderUpdaterBanner()}
+      <main ref={appShellRef} className="app-shell" style={shellStyle}>
       <header className="workspace-header">
         <div>
           <p className="eyebrow">264 Pro Video Editor</p>
@@ -706,5 +707,6 @@ export default function App() {
         }}
       />
     </main>
+    </div>
   );
 }

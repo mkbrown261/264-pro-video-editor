@@ -54,6 +54,13 @@ kbd {
   font-weight: 600;
 }
 
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns:
@@ -68,7 +75,8 @@ kbd {
     "media left-resizer viewer right-resizer inspector"
     "timeline timeline timeline timeline timeline";
   gap: 12px;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   padding: 12px;
 }
 
