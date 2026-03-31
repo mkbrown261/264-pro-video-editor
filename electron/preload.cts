@@ -23,6 +23,11 @@ export interface UpdaterStatus {
   message?: string;
 }
 
+export interface OpenProjectResult {
+  json: string;
+  filePath: string;
+}
+
 const editorApi = {
   openMediaFiles: (): Promise<MediaAsset[]> =>
     ipcRenderer.invoke("media:open-files"),
@@ -37,11 +42,17 @@ const editorApi = {
       callback(status);
     };
     ipcRenderer.on("updater:status", listener);
-    // Return a cleanup function the renderer can call on unmount
     return () => {
       ipcRenderer.removeListener("updater:status", listener);
     };
-  }
+  },
+  // ── Project persistence (.264proj) ────────────────────────────────────────
+  saveProject: (json: string, suggestedName: string): Promise<string | null> =>
+    ipcRenderer.invoke("project:save", json, suggestedName),
+  openProject: (): Promise<OpenProjectResult | null> =>
+    ipcRenderer.invoke("project:open"),
+  saveProjectAs: (json: string, filePath: string): Promise<string> =>
+    ipcRenderer.invoke("project:save-as", json, filePath)
 };
 
 contextBridge.exposeInMainWorld("editorApi", editorApi);

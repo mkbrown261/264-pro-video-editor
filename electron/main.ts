@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -342,4 +342,47 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
 
 ipcMain.handle("export:render", async (_event, request: ExportRequest) => {
   return exportSequence(request);
+});
+
+// ── Project persistence (.264proj) ───────────────────────────────────────────
+
+ipcMain.handle("project:save", async (event, json: string, suggestedName: string) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: "Save Project",
+    defaultPath: suggestedName.endsWith(".264proj") ? suggestedName : `${suggestedName}.264proj`,
+    filters: [
+      { name: "264 Pro Project", extensions: ["264proj"] },
+      { name: "All Files", extensions: ["*"] }
+    ]
+  };
+  const result = window
+    ? await dialog.showSaveDialog(window, dialogOptions)
+    : await dialog.showSaveDialog(dialogOptions);
+  if (result.canceled || !result.filePath) return null;
+  await writeFile(result.filePath, json, "utf-8");
+  return result.filePath;
+});
+
+ipcMain.handle("project:open", async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    title: "Open Project",
+    properties: ["openFile"] as ("openFile" | "openDirectory" | "multiSelections")[],
+    filters: [
+      { name: "264 Pro Project", extensions: ["264proj"] },
+      { name: "All Files", extensions: ["*"] }
+    ]
+  };
+  const result = window
+    ? await dialog.showOpenDialog(window, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || !result.filePaths[0]) return null;
+  const json = await readFile(result.filePaths[0], "utf-8");
+  return { json, filePath: result.filePaths[0] };
+});
+
+ipcMain.handle("project:save-as", async (event, json: string, filePath: string) => {
+  await writeFile(filePath, json, "utf-8");
+  return filePath;
 });

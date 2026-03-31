@@ -22,6 +22,11 @@ export interface UpdaterStatus {
   message?: string;
 }
 
+export interface OpenProjectResult {
+  json: string;
+  filePath: string;
+}
+
 declare global {
   interface Window {
     editorApi: {
@@ -30,6 +35,10 @@ declare global {
       exportSequence: (request: ExportRequest) => Promise<ExportResponse>;
       getEnvironmentStatus: () => Promise<EnvironmentStatus>;
       onUpdaterStatus: (callback: (status: UpdaterStatus) => void) => () => void;
+      // Project persistence
+      saveProject: (json: string, suggestedName: string) => Promise<string | null>;
+      openProject: () => Promise<OpenProjectResult | null>;
+      saveProjectAs: (json: string, filePath: string) => Promise<string>;
     };
   }
 }

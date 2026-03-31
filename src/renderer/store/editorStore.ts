@@ -34,6 +34,30 @@ import {
 
 type EditorProjectState = ReturnType<typeof createEmptyProject>;
 
+// ── Undo/Redo Command ─────────────────────────────────────────────────────────
+
+/**
+ * A Command captures the full "before" and "after" snapshots of the
+ * mutable editor state so undo/redo can precisely restore either.
+ * Only project + selection + playback are included — UI-only state
+ * (activePage, toolMode, environment) is intentionally excluded.
+ */
+interface UndoableSnapshot {
+  project: EditorProjectState;
+  selectedAssetId: string | null;
+  selectedClipId: string | null;
+  playbackFrame: number;
+}
+
+interface Command {
+  /** Short human-readable label for display / debugging */
+  label: string;
+  before: UndoableSnapshot;
+  after: UndoableSnapshot;
+}
+
+const MAX_UNDO = 50;
+
 interface EditorStore {
   project: EditorProjectState;
   selectedAssetId: string | null;
@@ -45,6 +69,12 @@ interface EditorStore {
     isPlaying: boolean;
     playheadFrame: number;
   };
+
+  // ── Undo/Redo ──
+  undoStack: Command[];
+  redoStack: Command[];
+  canUndo: boolean;
+  canRedo: boolean;
 
   // ── Asset Management ──
   importAssets: (assets: MediaAsset[]) => void;
@@ -121,6 +151,14 @@ interface EditorStore {
   toggleBladeTool: () => void;
   setActivePage: (page: EditorPage) => void;
   setEnvironment: (environment: EnvironmentStatus) => void;
+
+  // ── Undo/Redo actions ──
+  undo: () => void;
+  redo: () => void;
+
+  // ── Project persistence ──
+  loadProjectFromData: (project: EditorProjectState) => void;
+  getCurrentProjectSnapshot: () => EditorProjectState;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -328,9 +366,62 @@ function updateClipInState(
   };
 }
 
+// ── Undo/redo helpers ─────────────────────────────────────────────────────────
+
+/** Capture the undoable portion of the current state */
+function snapshot(state: EditorStore): UndoableSnapshot {
+  return {
+    project: state.project,
+    selectedAssetId: state.selectedAssetId,
+    selectedClipId: state.selectedClipId,
+    playbackFrame: state.playback.playheadFrame
+  };
+}
+
+/** Apply a snapshot back to the store (undo or redo) */
+function applySnapshot(state: EditorStore, snap: UndoableSnapshot): Partial<EditorStore> {
+  return {
+    project: snap.project,
+    selectedAssetId: snap.selectedAssetId,
+    selectedClipId: snap.selectedClipId,
+    playback: { ...state.playback, playheadFrame: snap.playbackFrame }
+  };
+}
+
+/**
+ * Higher-order helper: run a mutation, capture before/after snapshots,
+ * push to undoStack, and clear redoStack.
+ * Returns a Zustand set-compatible function.
+ */
+function withUndo(
+  label: string,
+  mutate: (state: EditorStore) => Partial<EditorStore> | EditorStore
+) {
+  return (state: EditorStore): Partial<EditorStore> => {
+    const before = snapshot(state);
+    const partial = mutate(state) as Partial<EditorStore>;
+    // If nothing changed, skip recording
+    if (partial === state) return {};
+
+    const merged: EditorStore = { ...state, ...partial };
+    const after = snapshot(merged);
+
+    const cmd: Command = { label, before, after };
+    const newUndo = [...state.undoStack, cmd].slice(-MAX_UNDO);
+
+    return {
+      ...partial,
+      undoStack: newUndo,
+      redoStack: [],
+      canUndo: true,
+      canRedo: false
+    };
+  };
+}
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 
-export const useEditorStore = create<EditorStore>((set) => ({
+export const useEditorStore = create<EditorStore>((set, get) => ({
   project: createEmptyProject(),
   selectedAssetId: null,
   selectedClipId: null,
@@ -338,12 +429,65 @@ export const useEditorStore = create<EditorStore>((set) => ({
   activePage: "edit",
   environment: null,
   playback: { isPlaying: false, playheadFrame: 0 },
+  undoStack: [],
+  redoStack: [],
+  canUndo: false,
+  canRedo: false,
+
+  // ── Undo / Redo ───────────────────────────────────────────────────────────
+
+  undo: () => {
+    set((state) => {
+      if (!state.undoStack.length) return state;
+      const stack = [...state.undoStack];
+      const cmd = stack.pop()!;
+      return {
+        ...applySnapshot(state, cmd.before),
+        undoStack: stack,
+        redoStack: [...state.redoStack, cmd],
+        canUndo: stack.length > 0,
+        canRedo: true
+      };
+    });
+  },
+
+  redo: () => {
+    set((state) => {
+      if (!state.redoStack.length) return state;
+      const stack = [...state.redoStack];
+      const cmd = stack.pop()!;
+      return {
+        ...applySnapshot(state, cmd.after),
+        undoStack: [...state.undoStack, cmd],
+        redoStack: stack,
+        canUndo: true,
+        canRedo: stack.length > 0
+      };
+    });
+  },
+
+  // ── Project persistence ───────────────────────────────────────────────────
+
+  loadProjectFromData: (project) => {
+    set({
+      project,
+      selectedAssetId: project.assets[0]?.id ?? null,
+      selectedClipId: project.sequence.clips[0]?.id ?? null,
+      playback: { isPlaying: false, playheadFrame: 0 },
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false
+    });
+  },
+
+  getCurrentProjectSnapshot: () => get().project,
 
   // ── Asset management ──────────────────────────────────────────────────────
 
   importAssets: (assets) => {
     if (!assets.length) return;
-    set((state) => {
+    set(withUndo("Import Assets", (state) => {
       const existingByPath = new Map(state.project.assets.map((a) => [a.sourcePath, a]));
       const imported = assets.map((a) => {
         const existing = existingByPath.get(a.sourcePath);
@@ -372,11 +516,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
       }
 
       return { project: nextProject, selectedAssetId, selectedClipId };
-    });
+    }));
   },
 
   appendAssetToTimeline: (assetId) => {
-    set((state) => {
+    set(withUndo("Append Asset", (state) => {
       const asset = state.project.assets.find((a) => a.id === assetId);
       if (!asset) return state;
       let nextProject = withAssetSequenceDefaults(state.project, asset);
@@ -393,20 +537,18 @@ export const useEditorStore = create<EditorStore>((set) => ({
         selectedClipId,
         playback: { isPlaying: false, playheadFrame: clampPlayhead(nextProject, clips[0].startFrame) }
       };
-    });
+    }));
   },
 
   selectAsset: (assetId) => set({ selectedAssetId: assetId }),
 
   dropAssetAtFrame: (assetId, trackId, startFrame) => {
-    set((state) => {
+    set(withUndo("Drop Asset", (state) => {
       const asset = state.project.assets.find((a) => a.id === assetId);
       if (!asset) return state;
       let nextProject = withAssetSequenceDefaults(state.project, asset);
-      // Find the track to know its kind
       const track = nextProject.sequence.tracks.find((t) => t.id === trackId);
       if (!track) return state;
-      // Build clips: video clip on the dropped track, matching audio if asset has audio
       const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;
       const videoClip = createEmptyClip(asset.id, trackId, startFrame, { linkedGroupId });
       const newClips: TimelineClip[] = [videoClip];
@@ -426,7 +568,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
         selectedClipId: videoClip.id,
         playback: { isPlaying: false, playheadFrame: clampPlayhead(nextProject, startFrame) }
       };
-    });
+    }));
   },
 
   selectClip: (clipId) => {
@@ -441,17 +583,17 @@ export const useEditorStore = create<EditorStore>((set) => ({
   // ── Clip Movement ─────────────────────────────────────────────────────────
 
   moveClip: (clipId, direction) => {
-    set((state) => {
+    set(withUndo("Move Clip", (state) => {
       const delta = state.project.sequence.settings.fps * direction;
       return applyClipMutation(state, clipId, (clip) => ({
         ...clip,
         startFrame: Math.max(0, clip.startFrame + delta)
       }));
-    });
+    }));
   },
 
   moveClipTo: (clipId, trackId, startFrame) => {
-    set((state) => {
+    set(withUndo("Move Clip", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip) return state;
       const linked = getLinkedClips(state.project, clipId);
@@ -478,11 +620,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
         selectedAssetId: clip.assetId,
         playback: { ...state.playback, playheadFrame: clampPlayhead(next, state.playback.playheadFrame) }
       };
-    });
+    }));
   },
 
   trimClipStart: (clipId, nextTrim) => {
-    set((state) => {
+    set(withUndo("Trim Start", (state) => {
       const selectedClip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!selectedClip) return state;
       const selectedAsset = state.project.assets.find((a) => a.id === selectedClip.assetId);
@@ -495,11 +637,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
         const nd = nc - clip.trimStartFrames;
         return { ...clip, startFrame: Math.max(0, clip.startFrame + nd), trimStartFrames: nc };
       });
-    });
+    }));
   },
 
   trimClipEnd: (clipId, nextTrim) => {
-    set((state) => {
+    set(withUndo("Trim End", (state) => {
       const selectedClip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!selectedClip) return state;
       const selectedAsset = state.project.assets.find((a) => a.id === selectedClip.assetId);
@@ -511,22 +653,22 @@ export const useEditorStore = create<EditorStore>((set) => ({
         ...clip,
         trimEndFrames: clampTrimEnd(clip, asset, fps, clip.trimEndFrames + delta)
       }));
-    });
+    }));
   },
 
   splitSelectedClipAtPlayhead: () => {
-    set((state) => {
+    set(withUndo("Split Clip", (state) => {
       if (!state.selectedClipId) return state;
       return splitStateAtFrame(state, state.selectedClipId, state.playback.playheadFrame);
-    });
+    }));
   },
 
   splitClipAtFrame: (clipId, frame) => {
-    set((state) => splitStateAtFrame(state, clipId, frame));
+    set(withUndo("Split Clip", (state) => splitStateAtFrame(state, clipId, frame)));
   },
 
   removeSelectedClip: () => {
-    set((state) => {
+    set(withUndo("Delete Clip", (state) => {
       if (!state.selectedClipId) return state;
       const linked = getLinkedClips(state.project, state.selectedClipId);
       if (!linked.length) return state;
@@ -570,20 +712,20 @@ export const useEditorStore = create<EditorStore>((set) => ({
           playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
         }
       };
-    });
+    }));
   },
 
   toggleClipEnabled: (clipId) => {
-    set((state) => {
+    set(withUndo("Toggle Clip", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip) return state;
       const next = !clip.isEnabled;
       return applyClipMutation(state, clipId, (c) => ({ ...c, isEnabled: next }));
-    });
+    }));
   },
 
   detachLinkedClips: (clipId) => {
-    set((state) => {
+    set(withUndo("Detach Clips", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip?.linkedGroupId) return state;
       return {
@@ -597,7 +739,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
           }
         }
       };
-    });
+    }));
   },
 
   // ── Transitions ───────────────────────────────────────────────────────────
@@ -616,7 +758,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
     );
     if (tDur < 1) return "Clip is too short for that transition.";
 
-    set((s) => {
+    set(withUndo("Apply Transition", (s) => {
       const t = getTransitionTargetClip(s.project, s.selectedClipId!);
       if (!t) return s;
       return {
@@ -635,7 +777,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
         selectedClipId: t.id,
         selectedAssetId: t.assetId
       };
-    });
+    }));
     return `${type} ${edge === "in" ? "in" : "out"} transition added.`;
   },
 
@@ -655,7 +797,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
     );
     if (tDur < 1) return "Clip too short for that transition.";
 
-    set((s) => {
+    set(withUndo("Set Transition Type", (s) => {
       const t = getTransitionTargetClip(s.project, s.selectedClipId!);
       if (!t) return s;
       return {
@@ -674,7 +816,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
         selectedClipId: t.id,
         selectedAssetId: t.assetId
       };
-    });
+    }));
     return `Transition type updated to ${type}.`;
   },
 
@@ -693,7 +835,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
       dur
     );
 
-    set((s) => {
+    set(withUndo("Set Transition Duration", (s) => {
       const t = getTransitionTargetClip(s.project, s.selectedClipId!);
       if (!t) return s;
       return {
@@ -713,16 +855,16 @@ export const useEditorStore = create<EditorStore>((set) => ({
         selectedClipId: t.id,
         selectedAssetId: t.assetId
       };
-    });
+    }));
     return tDur > 0 ? `Transition duration updated.` : `Transition cleared.`;
   },
 
   clearTransition: (clipId, edge) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Clear Transition", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       transitionIn: edge === "in" ? null : c.transitionIn,
       transitionOut: edge === "out" ? null : c.transitionOut
-    })));
+    }))));
   },
 
   // ── Audio ─────────────────────────────────────────────────────────────────
@@ -742,7 +884,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
     if (existingAudio) {
       if (!target.linkedGroupId && !existingAudio.linkedGroupId) return "Audio is already extracted.";
-      set((s) => {
+      set(withUndo("Extract Audio", (s) => {
         const t2 = getTransitionTargetClip(s.project, s.selectedClipId!);
         if (!t2?.linkedGroupId) return s;
         return {
@@ -756,14 +898,14 @@ export const useEditorStore = create<EditorStore>((set) => ({
             }
           }
         };
-      });
+      }));
       return "Audio extracted and independent from video.";
     }
 
     const audioTrackId = getPrimaryTrackId(state.project, "audio");
     if (!audioTrackId) return "No audio track available.";
 
-    set((s) => {
+    set(withUndo("Extract Audio", (s) => {
       const t2 = getTransitionTargetClip(s.project, s.selectedClipId!);
       if (!t2) return s;
       const audioClip = createEmptyClip(t2.assetId, audioTrackId, t2.startFrame);
@@ -778,122 +920,122 @@ export const useEditorStore = create<EditorStore>((set) => ({
         [audioTrackId]
       );
       return { project: next };
-    });
+    }));
     return "Audio extracted onto audio track.";
   },
 
   setClipVolume: (clipId, volume) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Set Volume", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       volume: Math.max(0, Math.min(2, volume))
-    })));
+    }))));
   },
 
   setClipSpeed: (clipId, speed) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Set Speed", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       speed: Math.max(0.1, Math.min(4, speed))
-    })));
+    }))));
   },
 
   // ── Masks ─────────────────────────────────────────────────────────────────
 
   addMaskToClip: (clipId, mask) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Add Mask", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       masks: [...c.masks, mask]
-    })));
+    }))));
   },
 
   updateMask: (clipId, maskId, updates) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Update Mask", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       masks: c.masks.map((m) => (m.id === maskId ? { ...m, ...updates } : m))
-    })));
+    }))));
   },
 
   removeMask: (clipId, maskId) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Remove Mask", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       masks: c.masks.filter((m) => m.id !== maskId)
-    })));
+    }))));
   },
 
   reorderMasks: (clipId, fromIdx, toIdx) => {
-    set((state) => updateClipInState(state, clipId, (c) => {
+    set(withUndo("Reorder Masks", (state) => updateClipInState(state, clipId, (c) => {
       const masks = [...c.masks];
       const [removed] = masks.splice(fromIdx, 1);
       masks.splice(toIdx, 0, removed);
       return { ...c, masks };
-    }));
+    })));
   },
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
   addEffectToClip: (clipId, effect) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Add Effect", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       effects: [...c.effects, { ...effect, order: c.effects.length }]
-    })));
+    }))));
   },
 
   updateEffect: (clipId, effectId, updates) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Update Effect", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       effects: c.effects.map((e) => (e.id === effectId ? { ...e, ...updates } : e))
-    })));
+    }))));
   },
 
   removeEffect: (clipId, effectId) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Remove Effect", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       effects: c.effects.filter((e) => e.id !== effectId).map((e, i) => ({ ...e, order: i }))
-    })));
+    }))));
   },
 
   toggleEffect: (clipId, effectId) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Toggle Effect", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       effects: c.effects.map((e) => (e.id === effectId ? { ...e, enabled: !e.enabled } : e))
-    })));
+    }))));
   },
 
   reorderEffects: (clipId, fromIdx, toIdx) => {
-    set((state) => updateClipInState(state, clipId, (c) => {
+    set(withUndo("Reorder Effects", (state) => updateClipInState(state, clipId, (c) => {
       const effects = [...c.effects];
       const [removed] = effects.splice(fromIdx, 1);
       effects.splice(toIdx, 0, removed);
       return { ...c, effects: effects.map((e, i) => ({ ...e, order: i })) };
-    }));
+    })));
   },
 
   // ── Color Grading ─────────────────────────────────────────────────────────
 
   enableColorGrade: (clipId) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Enable Color Grade", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       colorGrade: c.colorGrade ?? createDefaultColorGrade()
-    })));
+    }))));
   },
 
   setColorGrade: (clipId, grade) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Color Grade", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       colorGrade: { ...(c.colorGrade ?? createDefaultColorGrade()), ...grade }
-    })));
+    }))));
   },
 
   resetColorGrade: (clipId) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Reset Color Grade", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       colorGrade: createDefaultColorGrade()
-    })));
+    }))));
   },
 
   // ── Background Removal ────────────────────────────────────────────────────
 
   setBackgroundRemoval: (clipId, config) => {
-    set((state) => updateClipInState(state, clipId, (c) => ({
+    set(withUndo("Background Removal", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
       aiBackgroundRemoval: {
         ...(c.aiBackgroundRemoval ?? {
@@ -907,11 +1049,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
         }),
         ...config
       }
-    })));
+    }))));
   },
 
   toggleBackgroundRemoval: (clipId) => {
-    set((state) => updateClipInState(state, clipId, (c) => {
+    set(withUndo("Toggle BG Removal", (state) => updateClipInState(state, clipId, (c) => {
       if (!c.aiBackgroundRemoval) {
         return {
           ...c,
@@ -927,15 +1069,14 @@ export const useEditorStore = create<EditorStore>((set) => ({
         };
       }
       return { ...c, aiBackgroundRemoval: { ...c.aiBackgroundRemoval, enabled: !c.aiBackgroundRemoval.enabled } };
-    }));
+    })));
   },
 
   // ── Beat Sync ─────────────────────────────────────────────────────────────
 
   setBeatSync: (clipId, config) => {
     if (clipId === null) {
-      // Set on sequence
-      set((state) => ({
+      set(withUndo("Set Beat Sync", (state) => ({
         project: {
           ...state.project,
           sequence: {
@@ -953,9 +1094,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
             }
           }
         }
-      }));
+      })));
     } else {
-      set((state) => updateClipInState(state, clipId, (c) => ({
+      set(withUndo("Set Beat Sync", (state) => updateClipInState(state, clipId, (c) => ({
         ...c,
         beatSync: {
           ...(c.beatSync ?? {
@@ -968,27 +1109,27 @@ export const useEditorStore = create<EditorStore>((set) => ({
           }),
           ...config
         }
-      })));
+      }))));
     }
   },
 
   clearBeatSync: (clipId) => {
     if (clipId === null) {
-      set((state) => ({
+      set(withUndo("Clear Beat Sync", (state) => ({
         project: {
           ...state.project,
           sequence: { ...state.project.sequence, beatSync: null }
         }
-      }));
+      })));
     } else {
-      set((state) => updateClipInState(state, clipId, (c) => ({ ...c, beatSync: null })));
+      set(withUndo("Clear Beat Sync", (state) => updateClipInState(state, clipId, (c) => ({ ...c, beatSync: null }))));
     }
   },
 
   // ── Tracks ────────────────────────────────────────────────────────────────
 
   addTrack: (kind) => {
-    set((state) => {
+    set(withUndo("Add Track", (state) => {
       const count = state.project.sequence.tracks.filter((t) => t.kind === kind).length;
       const label = kind === "video" ? "V" : "A";
       const newTrack: TimelineTrack = {
@@ -1010,11 +1151,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
           }
         }
       };
-    });
+    }));
   },
 
   removeTrack: (trackId) => {
-    set((state) => ({
+    set(withUndo("Remove Track", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -1023,11 +1164,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
           clips: state.project.sequence.clips.filter((c) => c.trackId !== trackId)
         }
       }
-    }));
+    })));
   },
 
   updateTrack: (trackId, updates) => {
-    set((state) => ({
+    set(withUndo("Update Track", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -1037,13 +1178,13 @@ export const useEditorStore = create<EditorStore>((set) => ({
           )
         }
       }
-    }));
+    })));
   },
 
   // ── Markers ───────────────────────────────────────────────────────────────
 
   addMarker: (marker) => {
-    set((state) => ({
+    set(withUndo("Add Marker", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -1054,11 +1195,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
           ]
         }
       }
-    }));
+    })));
   },
 
   removeMarker: (markerId) => {
-    set((state) => ({
+    set(withUndo("Remove Marker", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -1066,7 +1207,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
           markers: state.project.sequence.markers.filter((m) => m.id !== markerId)
         }
       }
-    }));
+    })));
   },
 
   // ── Playhead ─────────────────────────────────────────────────────────────

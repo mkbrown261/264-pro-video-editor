@@ -1070,6 +1070,55 @@ kbd {
 }
 .bridge-dot.ready { background: var(--success); box-shadow: 0 0 4px var(--success); }
 
+/* Undo/Redo + Save/Open action buttons in menubar */
+.menubar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+.menubar-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 80ms, color 80ms, border-color 80ms;
+}
+.menubar-action-btn:hover:not(:disabled) {
+  background: var(--bg-item-hi);
+  color: var(--text);
+  border-color: var(--border-mid);
+}
+.menubar-action-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+.menubar-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.08);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Settings path note */
+.settings-path-note {
+  margin-top: 6px;
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
 /* Settings button in menubar */
 .menubar-settings-btn {
   display: flex;

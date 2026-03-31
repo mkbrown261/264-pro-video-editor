@@ -11,6 +11,10 @@ interface EditorShortcutOptions {
   onSeekToStart: () => void;
   onSeekToEnd: () => void;
   onRemoveSelectedClip: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onSave: () => void;
+  onOpen: () => void;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -43,21 +47,55 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onNudgePlayhead,
         onSeekToStart,
         onSeekToEnd,
-        onRemoveSelectedClip
+        onRemoveSelectedClip,
+        onUndo,
+        onRedo,
+        onSave,
+        onOpen
       } = optionsRef.current;
 
       const key = event.key.toLowerCase();
       const isModifier = event.metaKey || event.ctrlKey;
 
-      // Cmd/Ctrl+B → split
-      if (isModifier && key === "b") {
-        event.preventDefault();
-        onSplitSelectedClip();
+      if (isModifier) {
+        // Cmd/Ctrl+Z → undo
+        if (key === "z" && !event.shiftKey) {
+          event.preventDefault();
+          onUndo();
+          return;
+        }
+        // Cmd/Ctrl+Shift+Z → redo
+        if (key === "z" && event.shiftKey) {
+          event.preventDefault();
+          onRedo();
+          return;
+        }
+        // Cmd/Ctrl+Y → redo (Windows convention)
+        if (key === "y") {
+          event.preventDefault();
+          onRedo();
+          return;
+        }
+        // Cmd/Ctrl+S → save
+        if (key === "s" && !event.shiftKey) {
+          event.preventDefault();
+          onSave();
+          return;
+        }
+        // Cmd/Ctrl+O → open
+        if (key === "o") {
+          event.preventDefault();
+          onOpen();
+          return;
+        }
+        // Cmd/Ctrl+B → split
+        if (key === "b") {
+          event.preventDefault();
+          onSplitSelectedClip();
+          return;
+        }
         return;
       }
-
-      // Ignore other modifier combos
-      if (isModifier) return;
 
       switch (key) {
         case " ":

@@ -17,6 +17,7 @@ import {
   type TimelineSegment,
   getTotalDurationFrames
 } from "../shared/timeline";
+import { serializeProject, deserializeProject } from "../shared/projectSerializer";
 import type { UpdaterStatus } from "./vite-env";
 import type { ClipMask } from "../shared/models";
 import type { MaskTool } from "./components/MaskingCanvas";
@@ -42,6 +43,8 @@ export default function App() {
   const toolMode = useEditorStore((s) => s.toolMode);
   const environment = useEditorStore((s) => s.environment);
   const playback = useEditorStore((s) => s.playback);
+  const canUndo = useEditorStore((s) => s.canUndo);
+  const canRedo = useEditorStore((s) => s.canRedo);
 
   const importAssets = useEditorStore((s) => s.importAssets);
   const appendAssetToTimeline = useEditorStore((s) => s.appendAssetToTimeline);
@@ -69,6 +72,9 @@ export default function App() {
   const setEnvironment = useEditorStore((s) => s.setEnvironment);
   const setClipVolume = useEditorStore((s) => s.setClipVolume);
   const setClipSpeed = useEditorStore((s) => s.setClipSpeed);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
+  const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
 
   // Masks
   const addMaskToClip = useEditorStore((s) => s.addMaskToClip);
@@ -111,6 +117,11 @@ export default function App() {
     fps: project.sequence.settings.fps,
     aspectRatio: "16:9"
   });
+
+  // Project file path (for Save vs Save As)
+  const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
+  const [projectDirty, setProjectDirty] = useState(false);
+  const createdAtRef = useRef<string>(new Date().toISOString());
 
   // Masking state
   const [activeMaskTool, setActiveMaskTool] = useState<MaskTool>("none");
@@ -160,6 +171,11 @@ export default function App() {
   const selectedAsset =
     project.assets.find((a) => a.id === selectedAssetId) ?? inspectorSegment?.asset ?? null;
 
+  // Mark project as dirty on any change
+  useEffect(() => {
+    setProjectDirty(true);
+  }, [project]);
+
   // ── Keep refs in sync ──────────────────────────────────────────────────────
   useEffect(() => {
     timelineStateRef.current = {
@@ -172,7 +188,6 @@ export default function App() {
   });
 
   // Sync colorPageVideoRef with the ViewerPanel's video element on every render
-  // so ScopeCanvas always reads from the live video element.
   useEffect(() => {
     colorPageVideoRef.current = viewerPanelRef.current?.getVideoRef() ?? null;
   });
@@ -255,6 +270,100 @@ export default function App() {
     updateMask(selectedClipId, maskId, updates);
   }, [selectedClipId, updateMask]);
 
+  // ── Project Save / Load ────────────────────────────────────────────────────
+
+  async function handleSaveProject() {
+    if (!window.editorApi) {
+      // Fallback: save to localStorage
+      try {
+        const json = serializeProject(project, createdAtRef.current);
+        localStorage.setItem("264pro_project_v2", json);
+        setExportMessage("✓ Project saved to local storage.");
+        setProjectDirty(false);
+      } catch {
+        setExportMessage("Failed to save project.");
+      }
+      return;
+    }
+
+    try {
+      if (currentProjectPath) {
+        await window.editorApi.saveProjectAs(
+          serializeProject(project, createdAtRef.current),
+          currentProjectPath
+        );
+        setExportMessage(`✓ Saved to ${currentProjectPath}`);
+      } else {
+        const json = serializeProject(project, createdAtRef.current);
+        const saved = await window.editorApi.saveProject(json, project.name);
+        if (saved) {
+          setCurrentProjectPath(saved);
+          setExportMessage(`✓ Saved to ${saved}`);
+        }
+      }
+      setProjectDirty(false);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : "Save failed.");
+    }
+  }
+
+  async function handleSaveProjectAs() {
+    if (!window.editorApi) { setExportMessage("Save requires Electron."); return; }
+    try {
+      const json = serializeProject(project, createdAtRef.current);
+      const saved = await window.editorApi.saveProject(json, project.name);
+      if (saved) {
+        setCurrentProjectPath(saved);
+        setProjectDirty(false);
+        setExportMessage(`✓ Saved as ${saved}`);
+      }
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : "Save failed.");
+    }
+  }
+
+  async function handleOpenProject() {
+    if (!window.editorApi) {
+      // Fallback: load from localStorage
+      try {
+        const raw = localStorage.getItem("264pro_project_v2");
+        if (raw) {
+          const { project: loaded, warnings } = deserializeProject(raw);
+          loadProjectFromData(loaded);
+          createdAtRef.current = new Date().toISOString();
+          setProjectDirty(false);
+          setExportMessage(warnings.length ? `⚠ Loaded (${warnings[0]})` : "✓ Project loaded.");
+        } else {
+          // Try legacy format
+          const legacyRaw = localStorage.getItem("264pro_project");
+          if (legacyRaw) {
+            const saved = JSON.parse(legacyRaw) as typeof project;
+            importAssets(saved.assets);
+            setExportMessage("✓ Legacy project loaded.");
+          } else {
+            setExportMessage("No saved project found.");
+          }
+        }
+      } catch {
+        setExportMessage("Failed to load project.");
+      }
+      return;
+    }
+
+    try {
+      const result = await window.editorApi.openProject();
+      if (!result) return;
+      const { project: loaded, warnings } = deserializeProject(result.json);
+      loadProjectFromData(loaded);
+      setCurrentProjectPath(result.filePath);
+      createdAtRef.current = new Date().toISOString();
+      setProjectDirty(false);
+      setExportMessage(warnings.length ? `⚠ Loaded (${warnings.join(", ")})` : "✓ Project loaded.");
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : "Load failed.");
+    }
+  }
+
   // ── Shortcuts ──────────────────────────────────────────────────────────────
   useEditorShortcuts({
     sequenceFps: project.sequence.settings.fps,
@@ -266,7 +375,11 @@ export default function App() {
     onNudgePlayhead: handleStepFrames,
     onSeekToStart: () => handleSeek(0),
     onSeekToEnd: () => handleSeek(Math.max(totalFrames - 1, 0)),
-    onRemoveSelectedClip: () => { pauseViewerPlayback(); removeSelectedClip(); }
+    onRemoveSelectedClip: () => { pauseViewerPlayback(); removeSelectedClip(); },
+    onUndo: undo,
+    onRedo: redo,
+    onSave: () => void handleSaveProject(),
+    onOpen: () => void handleOpenProject()
   });
 
   // ── VoiceChopAI init ───────────────────────────────────────────────────────
@@ -420,27 +533,6 @@ export default function App() {
   }
 
   function handleSaveSettings() {
-    // Save project to localStorage
-    const state = useEditorStore.getState();
-    try {
-      localStorage.setItem("264pro_project", JSON.stringify(state.project));
-    } catch {}
-    setShowSettings(false);
-  }
-
-  function handleLoadProject() {
-    try {
-      const raw = localStorage.getItem("264pro_project");
-      if (raw) {
-        const saved = JSON.parse(raw) as typeof project;
-        useEditorStore.getState().importAssets(saved.assets);
-        setExportMessage("✓ Project loaded from local storage.");
-      } else {
-        setExportMessage("No saved project found.");
-      }
-    } catch {
-      setExportMessage("Failed to load project.");
-    }
     setShowSettings(false);
   }
 
@@ -494,16 +586,26 @@ export default function App() {
               </div>
             </div>
             <div className="settings-section">
-              <div className="settings-section-title">Project Persistence</div>
+              <div className="settings-section-title">Project File</div>
               <div className="inline-actions">
-                <button className="panel-action primary" onClick={handleSaveSettings} type="button">💾 Save Project</button>
-                <button className="panel-action" onClick={handleLoadProject} type="button">📂 Load Project</button>
+                <button className="panel-action primary" onClick={() => void handleSaveProject()} type="button">
+                  💾 {currentProjectPath ? "Save" : "Save As…"}
+                </button>
+                <button className="panel-action" onClick={() => void handleSaveProjectAs()} type="button">
+                  📋 Save As…
+                </button>
+                <button className="panel-action" onClick={() => void handleOpenProject()} type="button">
+                  📂 Open Project…
+                </button>
               </div>
+              {currentProjectPath && (
+                <div className="settings-path-note">{currentProjectPath}{projectDirty ? " •" : ""}</div>
+              )}
             </div>
           </div>
           <div className="settings-modal-footer">
-            <button className="panel-action muted" onClick={() => setShowSettings(false)} type="button">Cancel</button>
-            <button className="panel-action primary" onClick={handleSaveSettings} type="button">Apply</button>
+            <button className="panel-action muted" onClick={() => setShowSettings(false)} type="button">Close</button>
+            <button className="panel-action primary" onClick={handleSaveSettings} type="button">Done</button>
           </div>
         </div>
       </div>
@@ -541,6 +643,45 @@ export default function App() {
             </button>
           ))}
         </nav>
+
+        {/* Undo/Redo + Save/Open in the menu bar */}
+        <div className="menubar-actions">
+          <button
+            className="menubar-action-btn"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (⌘Z)"
+            type="button"
+          >
+            ↩ Undo
+          </button>
+          <button
+            className="menubar-action-btn"
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (⌘⇧Z)"
+            type="button"
+          >
+            ↪ Redo
+          </button>
+          <span className="menubar-sep" />
+          <button
+            className="menubar-action-btn"
+            onClick={() => void handleSaveProject()}
+            title="Save Project (⌘S)"
+            type="button"
+          >
+            💾{projectDirty ? " •" : ""}
+          </button>
+          <button
+            className="menubar-action-btn"
+            onClick={() => void handleOpenProject()}
+            title="Open Project (⌘O)"
+            type="button"
+          >
+            📂
+          </button>
+        </div>
 
         <div className="menubar-status">
           <span className={`bridge-dot${bridgeReady ? " ready" : ""}`} title={bridgeReady ? "Electron bridge ready" : "No bridge"} />
@@ -732,9 +873,7 @@ export default function App() {
               role="separator"
             />
 
-            {/* Right: Viewer — shows the INSPECTED/SELECTED clip with its live grade.
-                Use inspectorSegment (selected clip) not activeSegment (playhead position)
-                so grade changes on the selected clip appear in the viewer immediately. */}
+            {/* Right: Viewer — shows the INSPECTED/SELECTED clip with its live grade */}
             <div className="color-page-viewer">
               <ViewerPanel
                 ref={viewerPanelRef}
@@ -762,7 +901,7 @@ export default function App() {
               />
             </div>
 
-            {/* Bottom: Timeline (spans full width) */}
+            {/* Bottom: Timeline */}
             <div className="color-page-timeline">
               <TimelinePanel
                 trackLayouts={trackLayouts}
