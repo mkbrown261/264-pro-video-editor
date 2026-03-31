@@ -1,7 +1,6 @@
 import {
   forwardRef,
   useEffect,
-  useImperativeHandle,
   useRef,
   useState,
   type CSSProperties
@@ -9,6 +8,7 @@ import {
 import type {
   ClipMask,
   ClipTransitionType,
+  ColorGrade,
   EditorTool,
   MediaAsset
 } from "../../shared/models";
@@ -19,6 +19,8 @@ import {
 import { formatTimecode } from "../lib/format";
 import { usePlaybackController } from "../hooks/usePlaybackController";
 import { MaskingCanvas, type MaskTool } from "./MaskingCanvas";
+import { ColorGradeRenderer } from "../lib/colorGradeRenderer";
+import { useImperativeHandle } from "react";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -38,6 +40,8 @@ interface ViewerPanelProps {
   sequenceFps: number;
   isPlaying: boolean;
   toolMode: EditorTool;
+  // Color grade for the current active clip (may be null)
+  colorGrade?: ColorGrade | null;
   // Masking
   activeMaskTool: MaskTool;
   selectedMaskId: string | null;
@@ -151,6 +155,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     sequenceFps,
     isPlaying,
     toolMode,
+    colorGrade,
     activeMaskTool,
     selectedMaskId,
     onAddMask,
@@ -163,13 +168,16 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onSetPlayheadFrame,
     onStepFrames
   }, ref) {
-    const panelRef = useRef<HTMLElement | null>(null);
-    const videoRef = useRef<HTMLVideoElement | null>(null);
-    const audioRef = useRef<HTMLAudioElement | null>(null);
-    const stageRef = useRef<HTMLDivElement | null>(null);
+    const panelRef  = useRef<HTMLElement | null>(null);
+    const videoRef  = useRef<HTMLVideoElement | null>(null);
+    const audioRef  = useRef<HTMLAudioElement | null>(null);
+    const stageRef  = useRef<HTMLDivElement | null>(null);
+    const gradeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const rendererRef    = useRef<ColorGradeRenderer | null>(null);
+
     const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
-    const [isFullscreen, setIsFullscreen] = useState(false);
-    const [stageSize, setStageSize] = useState({ w: 960, h: 540 });
+    const [isFullscreen, setIsFullscreen]  = useState(false);
+    const [stageSize, setStageSize]        = useState({ w: 960, h: 540 });
 
     const { togglePlayback, pausePlayback, stopPlayback } = usePlaybackController({
       videoRef,
@@ -204,15 +212,13 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       getVideoRef: () => videoRef.current
     }), [pausePlayback, stopPlayback, togglePlayback]);
 
-    // Track stage size for mask canvas
+    // ── Track stage size for mask canvas ──────────────────────────────────────
     useEffect(() => {
       const stage = stageRef.current;
       if (!stage) return;
       const observer = new ResizeObserver((entries) => {
         const entry = entries[0];
-        if (entry) {
-          setStageSize({ w: entry.contentRect.width, h: entry.contentRect.height });
-        }
+        if (entry) setStageSize({ w: entry.contentRect.width, h: entry.contentRect.height });
       });
       observer.observe(stage);
       return () => observer.disconnect();
@@ -234,14 +240,43 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       }
     }, [activeSegment, selectedAsset?.id, selectedAsset?.previewUrl]);
 
-    const previewAsset = activeSegment?.asset ?? selectedAsset ?? null;
-    const timelineReady = totalFrames > 0;
+    // ── WebGL grade renderer lifecycle ─────────────────────────────────────────
+    // Create renderer when the grade canvas mounts; destroy on unmount.
+    useEffect(() => {
+      const canvas = gradeCanvasRef.current;
+      if (!canvas) return;
+
+      const renderer = new ColorGradeRenderer(canvas);
+      rendererRef.current = renderer;
+      renderer.start();
+
+      return () => {
+        renderer.dispose();
+        rendererRef.current = null;
+      };
+    }, []);
+
+    // Keep renderer's video reference in sync
+    useEffect(() => {
+      rendererRef.current?.setVideo(videoRef.current);
+    });
+
+    // Push grade updates to renderer immediately (called every render)
+    useEffect(() => {
+      rendererRef.current?.setGrade(colorGrade ?? null);
+    }, [colorGrade]);
+
+    // ── Derived display state ──────────────────────────────────────────────────
+    const previewAsset   = activeSegment?.asset ?? selectedAsset ?? null;
+    const timelineReady  = totalFrames > 0;
     const previewOpacity = getPreviewOpacity(activeSegment, playheadFrame);
     const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
     const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    const currentMasks   = activeSegment?.clip.masks ?? [];
 
-    // Current clip masks for overlay
-    const currentMasks = activeSegment?.clip.masks ?? [];
+    // When a color grade is active, hide the raw <video> and show only the graded <canvas>.
+    // When no grade, show the <video> directly (zero overhead).
+    const hasGrade = Boolean(colorGrade);
 
     return (
       <section
@@ -251,15 +286,35 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         {/* Stage */}
         <div ref={stageRef} className="viewer-stage">
           {previewAsset ? (
-            <video
-              ref={videoRef}
-              className="viewer-video"
-              controls={!timelineReady}
-              style={{ opacity: previewOpacity, ...videoStyle }}
-              muted={timelineReady}
-              playsInline
-              preload="metadata"
-            />
+            <>
+              {/* Raw video — hidden when graded (canvas replaces it visually) */}
+              <video
+                ref={videoRef}
+                className="viewer-video"
+                controls={!timelineReady}
+                style={{
+                  opacity: hasGrade ? 0 : previewOpacity,
+                  ...videoStyle,
+                  // When graded, still occupy space (canvas is positioned on top)
+                  position: hasGrade ? "absolute" : undefined,
+                  pointerEvents: hasGrade ? "none" : undefined,
+                }}
+                muted={timelineReady}
+                playsInline
+                preload="metadata"
+              />
+
+              {/* WebGL-graded canvas — visible only when a grade is applied */}
+              <canvas
+                ref={gradeCanvasRef}
+                className="viewer-grade-canvas"
+                style={{
+                  display: hasGrade ? "block" : "none",
+                  opacity: previewOpacity,
+                  ...videoStyle,
+                }}
+              />
+            </>
           ) : (
             <div className="viewer-empty">
               <div className="viewer-empty-icon">▶</div>
@@ -343,6 +398,12 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           </div>
 
           <div className="transport-right">
+            {/* Grade indicator badge */}
+            {hasGrade && (
+              <span className="viewer-grade-badge" title="Color grade active">
+                ● GRADE
+              </span>
+            )}
             <button
               className={`transport-btn tool-btn${toolMode === "select" ? " active" : ""}`}
               onClick={() => onSetToolMode("select")}

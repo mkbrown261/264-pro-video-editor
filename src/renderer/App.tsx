@@ -590,6 +590,7 @@ export default function App() {
               sequenceFps={project.sequence.settings.fps}
               isPlaying={playback.isPlaying}
               toolMode={toolMode}
+              colorGrade={activeSegment?.clip.colorGrade ?? null}
               activeMaskTool={activeMaskTool}
               selectedMaskId={selectedMaskId}
               onAddMask={handleAddMask}
@@ -731,7 +732,7 @@ export default function App() {
               role="separator"
             />
 
-            {/* Right: Viewer */}
+            {/* Right: Viewer — always shows live grade for the active clip */}
             <div className="color-page-viewer">
               <ViewerPanel
                 ref={viewerPanelRef}
@@ -744,6 +745,7 @@ export default function App() {
                 sequenceFps={project.sequence.settings.fps}
                 isPlaying={playback.isPlaying}
                 toolMode={toolMode}
+                colorGrade={activeSegment?.clip.colorGrade ?? null}
                 activeMaskTool="none"
                 selectedMaskId={null}
                 onAddMask={() => {}}
@@ -868,6 +870,7 @@ export default function App() {
                 sequenceFps={project.sequence.settings.fps}
                 isPlaying={playback.isPlaying}
                 toolMode={toolMode}
+                colorGrade={activeSegment?.clip.colorGrade ?? null}
                 activeMaskTool={activeMaskTool}
                 selectedMaskId={selectedMaskId}
                 onAddMask={handleAddMask}
