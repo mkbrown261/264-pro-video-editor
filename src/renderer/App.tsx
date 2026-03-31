@@ -24,7 +24,9 @@ import type { ClipMask } from "../shared/models";
 import { createEmptyProject } from "../shared/models";
 import type { MaskTool } from "./components/MaskingCanvas";
 
-type AppPage = "edit" | "color" | "effects";
+// Imp 8: Only "edit" | "color" — effects merged into edit inspector
+type AppPage = "edit" | "color";
+type LayoutPreset = "edit" | "color" | "audio";
 
 interface ProjectSettings {
   width: number;
@@ -120,13 +122,41 @@ export default function App() {
   const appShellRef = useRef<HTMLElement | null>(null);
   // Timeline zoom controls — populated by TimelinePanel via onRegisterZoomControls
   const timelineZoomRef = useRef<{ zoomIn: () => void; zoomOut: () => void; fitToWindow: () => void } | null>(null);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(280);
-  const [rightPanelWidth, setRightPanelWidth] = useState(320);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(220);
+  const [rightPanelWidth, setRightPanelWidth] = useState(300);
   const [resizeSide, setResizeSide] = useState<"left" | "right" | null>(null);
-  const [timelineHeight, setTimelineHeight] = useState(220);
+  const [timelineHeight, setTimelineHeight] = useState(() => {
+    try { return Number(localStorage.getItem("264pro_timeline_height") ?? "220") || 220; } catch { return 220; }
+  });
   const [isResizingTimeline, setIsResizingTimeline] = useState(false);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null);
   const [updaterDismissed, setUpdaterDismissed] = useState(false);
+
+  // Imp 1: Collapsible panels (persist to localStorage)
+  const [mediaPoolOpen, setMediaPoolOpen] = useState(() => {
+    try { return localStorage.getItem("264pro_media_pool_open") !== "false"; } catch { return true; }
+  });
+  const [inspectorOpen, setInspectorOpen] = useState(() => {
+    try { return localStorage.getItem("264pro_inspector_open") !== "false"; } catch { return true; }
+  });
+
+  // Imp 9: Layout preset
+  const [, setLayoutPreset] = useState<LayoutPreset>("edit");
+
+  // Imp 6: Dual viewer
+  const [dualViewer, setDualViewer] = useState(false);
+  const [sourceFrame, setSourceFrame] = useState(0);
+  const [sourcePlaying, setSourcePlaying] = useState(false);
+  const sourceVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // File dropdown (Imp 10)
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const fileMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Timecode editing (Imp 4)
+  const [timecodeEditing, setTimecodeEditing] = useState(false);
+  const [timecodeInput, setTimecodeInput] = useState("");
+
   // ── Toast notifications ────────────────────────────────────────────────────
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -470,7 +500,9 @@ export default function App() {
     onUndo: undo,
     onRedo: redo,
     onSave: () => void handleSaveProject(),
+    onSaveAs: () => void handleSaveProjectAs(),
     onOpen: () => void handleOpenProject(),
+    onNewProject: handleNewProject,
     onDuplicateSelectedClip: () => { if (selectedClipId) { pauseViewerPlayback(); duplicateClip(selectedClipId); } },
     onFitTimeline: () => timelineZoomRef.current?.fitToWindow(),
     onExport: () => void handleExport(),
@@ -484,10 +516,55 @@ export default function App() {
         handleTogglePlayback();
       }
     },
+    onToggleMediaPool: () => {
+      setMediaPoolOpen((v) => {
+        const next = !v;
+        try { localStorage.setItem("264pro_media_pool_open", String(next)); } catch {}
+        return next;
+      });
+    },
+    onToggleInspector: () => {
+      setInspectorOpen((v) => {
+        const next = !v;
+        try { localStorage.setItem("264pro_inspector_open", String(next)); } catch {}
+        return next;
+      });
+    },
+    onToggleDualViewer: () => setDualViewer((v) => !v),
+    onLayoutPreset: (preset) => {
+      setLayoutPreset(preset);
+      if (preset === "color") {
+        setActivePage("color");
+        setMediaPoolOpen(false);
+        setInspectorOpen(false);
+      } else if (preset === "audio") {
+        setActivePage("edit");
+        setMediaPoolOpen(true);
+        setInspectorOpen(false);
+      } else {
+        setActivePage("edit");
+        setMediaPoolOpen(true);
+        setInspectorOpen(true);
+      }
+    },
+    onMarkIn: () => setVoiceMarkInFrame(playback.playheadFrame),
+    onMarkOut: () => setVoiceMarkOutFrame(playback.playheadFrame),
   });
 
   // ── Waveform peak extraction (background, per-asset) ─────────────────────
   useWaveformExtractor({ assets: project.assets, setAssetWaveform });
+
+  // ── File menu click-outside close ─────────────────────────────────────────
+  useEffect(() => {
+    if (!fileMenuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (fileMenuRef.current && !fileMenuRef.current.contains(e.target as Node)) {
+        setFileMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [fileMenuOpen]);
 
   // ── VoiceChopAI init ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -871,12 +948,46 @@ export default function App() {
   }
 
   const shellStyle = {
-    "--left-panel-width": `${leftPanelWidth}px`,
-    "--right-panel-width": `${rightPanelWidth}px`,
+    "--left-panel-width": mediaPoolOpen ? `${leftPanelWidth}px` : "0px",
+    "--right-panel-width": inspectorOpen ? `${rightPanelWidth}px` : "0px",
     "--timeline-height": `${timelineHeight}px`
   } as CSSProperties;
 
-  // ── Page content ───────────────────────────────────────────────────────────
+  // Helper: format frames as HH:MM:SS:FF timecode
+  function framesToTimecode(frame: number, fps: number): string {
+    const f = Math.max(0, Math.round(frame));
+    const totalSec = Math.floor(f / fps);
+    const ff = f % fps;
+    const ss = totalSec % 60;
+    const mm = Math.floor(totalSec / 60) % 60;
+    const hh = Math.floor(totalSec / 3600);
+    return [
+      String(hh).padStart(2, "0"),
+      String(mm).padStart(2, "0"),
+      String(ss).padStart(2, "0"),
+      String(ff).padStart(2, "0")
+    ].join(":");
+  }
+
+  function handleTimecodeSubmit(raw: string) {
+    // Parse HH:MM:SS:FF or SS:FF or integer frames
+    const parts = raw.trim().split(":").map(Number);
+    let frame = 0;
+    const fps = project.sequence.settings.fps;
+    if (parts.length === 4) {
+      frame = ((parts[0] * 3600 + parts[1] * 60 + parts[2]) * fps) + parts[3];
+    } else if (parts.length === 3) {
+      frame = ((parts[0] * 60 + parts[1]) * fps) + parts[2];
+    } else if (parts.length === 2) {
+      frame = parts[0] * fps + parts[1];
+    } else if (parts.length === 1 && !isNaN(parts[0])) {
+      frame = parts[0];
+    }
+    if (!isNaN(frame)) handleSeek(Math.max(0, Math.min(totalFrames - 1, Math.round(frame))));
+    setTimecodeEditing(false);
+  }
+
+  // ── Page content —————————————————————————————————————————————————————──────
   return (
     <div className="app-root">
       {renderUpdaterBanner()}
@@ -898,21 +1009,47 @@ export default function App() {
           <span className="brand-name">Pro</span>
         </div>
 
-        {/* Page tabs */}
-        <nav className="page-tabs">
-          {(["edit", "color", "effects"] as const).map((page) => (
-            <button
-              key={page}
-              className={`page-tab${activePage === page ? " active" : ""}`}
-              onClick={() => setActivePage(page)}
-              type="button"
-            >
-              {page.charAt(0).toUpperCase() + page.slice(1)}
-            </button>
-          ))}
-        </nav>
+        {/* Imp 10: File dropdown */}
+        <div className="file-menu-wrapper" ref={fileMenuRef}>
+          <button
+            className={`menubar-action-btn file-menu-btn${fileMenuOpen ? " active" : ""}`}
+            onClick={() => setFileMenuOpen((v) => !v)}
+            title="File"
+            type="button"
+          >
+            File ▾
+          </button>
+          {fileMenuOpen && (
+            <div className="file-menu-dropdown">
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); handleNewProject(); }} type="button">
+                <span className="fmi-icon">➕</span> New Project <span className="fmi-kbd">⌘N</span>
+              </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleOpenProject(); }} type="button">
+                <span className="fmi-icon">📂</span> Open… <span className="fmi-kbd">⌘O</span>
+              </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShowRecentPanel(true); }} type="button">
+                <span className="fmi-icon">🕒</span> Open Recent…
+              </button>
+              <div className="file-menu-sep" />
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleSaveProject(); }} type="button">
+                <span className="fmi-icon">💾</span> Save{projectDirty ? " •" : ""} <span className="fmi-kbd">⌘S</span>
+              </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleSaveProjectAs(); }} type="button">
+                <span className="fmi-icon">📎</span> Save As… <span className="fmi-kbd">⌘⇧S</span>
+              </button>
+              <div className="file-menu-sep" />
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleExport(); }} type="button">
+                <span className="fmi-icon">🎥</span> Export… <span className="fmi-kbd">⌘E</span>
+              </button>
+              <div className="file-menu-sep" />
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShowSettings(true); }} type="button">
+                <span className="fmi-icon">⚙️</span> Settings…
+              </button>
+            </div>
+          )}
+        </div>
 
-        {/* Undo/Redo + File actions in the menu bar */}
+        {/* Undo/Redo */}
         <div className="menubar-actions">
           <button
             className="menubar-action-btn"
@@ -932,30 +1069,77 @@ export default function App() {
           >
             ↪ Redo
           </button>
-          <span className="menubar-sep" />
+        </div>
+
+        {/* Page tabs */}
+        <nav className="page-tabs">
+          {(["edit", "color"] as const).map((page) => (
+            <button
+              key={page}
+              className={`page-tab${activePage === page ? " active" : ""}`}
+              onClick={() => setActivePage(page)}
+              type="button"
+            >
+              {page.charAt(0).toUpperCase() + page.slice(1)}
+            </button>
+          ))}
+        </nav>
+
+        {/* Imp 4: Large centered timecode */}
+        <div className="menubar-timecode-wrap">
+          {timecodeEditing ? (
+            <input
+              className="timecode-input"
+              autoFocus
+              defaultValue={framesToTimecode(playback.playheadFrame, project.sequence.settings.fps)}
+              onBlur={(e) => handleTimecodeSubmit(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleTimecodeSubmit((e.target as HTMLInputElement).value);
+                if (e.key === "Escape") setTimecodeEditing(false);
+              }}
+            />
+          ) : (
+            <button
+              className="timecode-display"
+              onClick={() => { setTimecodeEditing(true); setTimecodeInput(framesToTimecode(playback.playheadFrame, project.sequence.settings.fps)); }}
+              title="Click to jump to timecode"
+              type="button"
+            >
+              {framesToTimecode(playback.playheadFrame, project.sequence.settings.fps)}
+            </button>
+          )}
+          <span className="timecode-total">/ {framesToTimecode(totalFrames, project.sequence.settings.fps)}</span>
+        </div>
+
+        {/* Panel toggle buttons (Imp 1) */}
+        <div className="menubar-panel-toggles">
           <button
-            className="menubar-action-btn"
-            onClick={handleNewProject}
-            title="New Project"
+            className={`panel-toggle-btn${mediaPoolOpen ? " on" : ""}`}
+            onClick={() => {
+              setMediaPoolOpen((v) => {
+                const next = !v;
+                try { localStorage.setItem("264pro_media_pool_open", String(next)); } catch {}
+                return next;
+              });
+            }}
+            title="Toggle Media Pool (F1)"
             type="button"
           >
-            ＋ New
+            ▧ Media
           </button>
           <button
-            className="menubar-action-btn"
-            onClick={() => void handleSaveProject()}
-            title="Save Project (⌘S)"
+            className={`panel-toggle-btn${inspectorOpen ? " on" : ""}`}
+            onClick={() => {
+              setInspectorOpen((v) => {
+                const next = !v;
+                try { localStorage.setItem("264pro_inspector_open", String(next)); } catch {}
+                return next;
+              });
+            }}
+            title="Toggle Inspector (F2)"
             type="button"
           >
-            💾{projectDirty ? " •" : ""}
-          </button>
-          <button
-            className="menubar-action-btn"
-            onClick={() => setShowRecentPanel(true)}
-            title="Open Project / Recent"
-            type="button"
-          >
-            📂 Open
+            Inspector ▦
           </button>
         </div>
 
@@ -965,33 +1149,87 @@ export default function App() {
           <span className="status-sep">·</span>
           <span className="status-item">{project.sequence.clips.length} clips</span>
           <span className="status-sep">·</span>
-          <span className="status-item">{project.sequence.settings.width}×{project.sequence.settings.height} / {project.sequence.settings.fps}fps</span>
-          <button className="menubar-settings-btn" onClick={() => setShowSettings(true)} title="Settings" type="button">⚙️</button>
+          <span className="status-item">{project.sequence.settings.width}×{project.sequence.settings.height}/{project.sequence.settings.fps}fps</span>
         </div>
       </header>
 
       {/* ── MAIN WORKSPACE ── */}
       <main ref={appShellRef} className={`app-shell page-${activePage}`} style={shellStyle}>
 
+        {/* Imp 7: Vertical Tool Toolbar */}
+        {activePage === "edit" && (
+          <div className="tool-toolbar">
+            <button
+              className={`tool-btn${toolMode === "select" ? " active" : ""}`}
+              onClick={() => setToolMode("select")}
+              title="Select (A / V)"
+              type="button"
+            >
+              ⤴️
+              <span className="tool-btn-label">Select</span>
+            </button>
+            <button
+              className={`tool-btn${toolMode === "blade" ? " active" : ""}`}
+              onClick={toggleBladeTool}
+              title="Blade (B)"
+              type="button"
+            >
+              ✂️
+              <span className="tool-btn-label">Blade</span>
+            </button>
+            <div className="tool-toolbar-sep" />
+            <button
+              className="tool-btn"
+              onClick={() => timelineZoomRef.current?.zoomIn()}
+              title="Zoom In (])"
+              type="button"
+            >
+              🔍+
+              <span className="tool-btn-label">Zoom+</span>
+            </button>
+            <button
+              className="tool-btn"
+              onClick={() => timelineZoomRef.current?.zoomOut()}
+              title="Zoom Out ([)"
+              type="button"
+            >
+              🔍−
+              <span className="tool-btn-label">Zoom−</span>
+            </button>
+            <button
+              className="tool-btn"
+              onClick={() => timelineZoomRef.current?.fitToWindow()}
+              title="Fit Timeline (Shift+Z)"
+              type="button"
+            >
+              □
+              <span className="tool-btn-label">Fit</span>
+            </button>
+          </div>
+        )}
+
         {/* ── EDIT PAGE ── */}
         {activePage === "edit" && (
           <>
-            <MediaPool
-              assets={project.assets}
-              selectedAssetId={selectedAssetId}
-              selectedSegment={inspectorSegment}
-              transitionMessage={transitionMessage}
-              onImport={handleImport}
-              onSelectAsset={selectAsset}
-              onAppendAsset={appendAssetToTimeline}
-              onApplyTransition={(edge) => {
+            {/* Imp 1: Collapsible Media Pool wrapper */}
+            <div className={`panel-collapse-wrap media-collapse${mediaPoolOpen ? " open" : " closed"}`}>
+              <MediaPool
+                assets={project.assets}
+                selectedAssetId={selectedAssetId}
+                selectedSegment={inspectorSegment}
+                transitionMessage={transitionMessage}
+                onImport={handleImport}
+                onSelectAsset={selectAsset}
+                onAppendAsset={appendAssetToTimeline}
+                onApplyTransition={(edge) => {
                 pauseViewerPlayback();
                 setTransitionMessage(applyTransitionToSelectedClip(edge));
               }}
-            />
+              />
+            </div>
 
             <div
-              className="panel-resizer left-resizer"
+              className={`panel-resizer left-resizer${mediaPoolOpen ? "" : " panel-resizer-hidden"}`}
               onMouseDown={(e) => { e.preventDefault(); setResizeSide("left"); }}
               role="separator"
             />
@@ -1022,13 +1260,15 @@ export default function App() {
             />
 
             <div
-              className="panel-resizer right-resizer"
+              className={`panel-resizer right-resizer${inspectorOpen ? "" : " panel-resizer-hidden"}`}
               onMouseDown={(e) => { e.preventDefault(); setResizeSide("right"); }}
               role="separator"
             />
 
-            <InspectorPanel
-              selectedAsset={selectedAsset}
+            {/* Imp 1: Collapsible Inspector wrapper */}
+            <div className={`panel-collapse-wrap inspector-collapse${inspectorOpen ? " open" : " closed"}`}>
+              <InspectorPanel
+                selectedAsset={selectedAsset}
               selectedSegment={inspectorSegment}
               environment={environment}
               exportBusy={exportBusy}
@@ -1098,7 +1338,8 @@ export default function App() {
               onSetVoiceBpm={(bpm) => { const v = Math.max(40, Math.min(240, Math.round(bpm))); setVoiceBpm(v); voiceChopRef.current?.setBpm(v); }}
               onSetVoiceGridFrames={(g) => { const v = Math.max(1, Math.round(g)); setVoiceGridFrames(v); voiceChopRef.current?.setGridFrames(v); }}
               onExport={handleExport}
-            />
+              />
+            </div>{/* /inspector-collapse */}
 
             {/* Timeline resize handle */}
             <div
@@ -1208,6 +1449,13 @@ export default function App() {
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
               />
+              {/* Imp 5 / Imp 12: Persistent Scopes Strip */}
+              <div className="color-scopes-strip">
+                <div className="scope-block">Waveform</div>
+                <div className="scope-block">Parade</div>
+                <div className="scope-block">Vectorscope</div>
+                <div className="scope-block">Histogram</div>
+              </div>
             </div>
 
             {/* Bottom: Timeline */}
@@ -1258,150 +1506,6 @@ export default function App() {
           </>
         )}
 
-        {/* ── EFFECTS PAGE ── */}
-        {activePage === "effects" && (
-          <>
-            <div className="effects-page-panel">
-              <InspectorPanel
-                selectedAsset={selectedAsset}
-                selectedSegment={inspectorSegment}
-                environment={environment}
-                exportBusy={exportBusy}
-                exportMessage={exportMessage}
-                clipMessage={transitionMessage}
-                sequenceSettings={project.sequence.settings}
-                voiceListening={voiceListening}
-                voiceStatus={voiceStatus}
-                voiceTranscript={voiceTranscript}
-                voiceLastCommand={voiceLastCommand}
-                voiceSuggestedCutFrames={voiceSuggestedCutFrames}
-                voiceMarkInFrame={voiceMarkInFrame}
-                voiceMarkOutFrame={voiceMarkOutFrame}
-                voiceBpm={voiceBpm}
-                voiceGridFrames={voiceGridFrames}
-                detectedBpm={detectedBpm}
-                detectedBeatFrames={detectedBeatFrames}
-                activeMaskTool={activeMaskTool}
-                selectedMaskId={selectedMaskId}
-                onSetActiveMaskTool={setActiveMaskTool}
-                onSelectMask={setSelectedMaskId}
-                onAddMask={handleAddMask}
-                onUpdateMask={handleUpdateMask}
-                onRemoveMask={(maskId) => { if (selectedClipId) removeMask(selectedClipId, maskId); }}
-                onAddEffect={(effect) => { if (selectedClipId) addEffectToClip(selectedClipId, effect); }}
-                onUpdateEffect={(effectId, updates) => { if (selectedClipId) updateEffect(selectedClipId, effectId, updates); }}
-                onRemoveEffect={(effectId) => { if (selectedClipId) removeEffect(selectedClipId, effectId); }}
-                onToggleEffect={(effectId) => { if (selectedClipId) toggleEffect(selectedClipId, effectId); }}
-                onReorderEffects={(from, to) => { if (selectedClipId) reorderEffects(selectedClipId, from, to); }}
-                onToggleBackgroundRemoval={() => { if (selectedClipId) toggleBackgroundRemoval(selectedClipId); }}
-                onSetBackgroundRemoval={(config) => { if (selectedClipId) setBackgroundRemoval(selectedClipId, config); }}
-                onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
-                onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
-                onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
-                onSetTransitionType={(edge, type) => {
-                  pauseViewerPlayback();
-                  setTransitionMessage(setSelectedClipTransitionType(edge, type));
-                }}
-                onSetTransitionDuration={(edge, dur) => {
-                  pauseViewerPlayback();
-                  setTransitionMessage(setSelectedClipTransitionDuration(edge, dur));
-                }}
-                onExtractAudio={() => { pauseViewerPlayback(); setTransitionMessage(extractAudioFromSelectedClip()); }}
-                onRippleDelete={() => { pauseViewerPlayback(); removeSelectedClip(); }}
-                onSetClipVolume={(vol) => { if (selectedClipId) setClipVolume(selectedClipId, vol); }}
-                onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
-                onToggleVoiceListening={() => voiceChopRef.current?.listenForCommands()}
-                onAnalyzeVoiceChops={() => {
-                  const target = (inspectorSegment?.track.kind === "video" ? inspectorSegment : null) ?? activeSegment;
-                  if (target) voiceChopRef.current?.applyAICuts(target);
-                }}
-                onDetectBpm={() => {
-                  const target = (inspectorSegment?.track.kind === "video" ? inspectorSegment : null) ?? activeSegment;
-                  if (target) void voiceChopRef.current?.detectAndApplyBpm(target);
-                }}
-                onBeatSync={(mode) => {
-                  const target = (inspectorSegment?.track.kind === "video" ? inspectorSegment : null) ?? activeSegment;
-                  if (target) void voiceChopRef.current?.beatSyncEdit(target, mode);
-                }}
-                onAcceptVoiceCuts={() => voiceChopRef.current?.processVoiceCommand("accept cuts")}
-                onClearVoiceCuts={() => { setVoiceSuggestedCutFrames([]); }}
-                onQuantizeVoiceCutsToBeat={() => voiceChopRef.current?.processVoiceCommand("quantize to beat")}
-                onQuantizeVoiceCutsToGrid={() => voiceChopRef.current?.processVoiceCommand("quantize to grid")}
-                onSetVoiceBpm={(bpm) => { const v = Math.max(40, Math.min(240, Math.round(bpm))); setVoiceBpm(v); voiceChopRef.current?.setBpm(v); }}
-                onSetVoiceGridFrames={(g) => { const v = Math.max(1, Math.round(g)); setVoiceGridFrames(v); voiceChopRef.current?.setGridFrames(v); }}
-                onExport={handleExport}
-              />
-            </div>
-            <div className="panel-resizer left-resizer" onMouseDown={(e) => { e.preventDefault(); setResizeSide("left"); }} role="separator" />
-            <div className="effects-page-viewer">
-              <ViewerPanel
-                ref={viewerPanelRef}
-                activeSegment={activeSegment}
-                activeAudioSegment={activeAudioSegment}
-                segments={segments}
-                selectedAsset={selectedAsset}
-                playheadFrame={playback.playheadFrame}
-                totalFrames={totalFrames}
-                sequenceFps={project.sequence.settings.fps}
-                isPlaying={playback.isPlaying}
-                toolMode={toolMode}
-                colorGrade={activeSegment?.clip.colorGrade ?? null}
-                activeMaskTool={activeMaskTool}
-                selectedMaskId={selectedMaskId}
-                onAddMask={handleAddMask}
-                onUpdateMask={handleUpdateMask}
-                onSelectMask={setSelectedMaskId}
-                onSetPlaybackPlaying={setPlaybackPlaying}
-                onSetToolMode={setToolMode}
-                onToggleBladeTool={toggleBladeTool}
-                onSplitAtPlayhead={splitSelectedClipAtPlayhead}
-                onSetPlayheadFrame={setPlayheadFrame}
-                onStepFrames={handleStepFrames}
-              />
-            </div>
-            <div className="effects-page-timeline">
-              <TimelinePanel
-                trackLayouts={trackLayouts}
-                selectedClipId={selectedClipId}
-                toolMode={toolMode}
-                playheadFrame={playback.playheadFrame}
-                suggestedCutFrames={[]}
-                markInFrame={null}
-                markOutFrame={null}
-                totalFrames={totalFrames}
-                sequenceFps={project.sequence.settings.fps}
-                onSetPlayheadFrame={handleSeek}
-                onSelectClip={selectClip}
-                onMoveClipTo={(clipId, trackId, frame) => { pauseViewerPlayback(); moveClipTo(clipId, trackId, frame); }}
-                onTrimClipStart={(clipId, trim) => { pauseViewerPlayback(); trimClipStart(clipId, trim); }}
-                onTrimClipEnd={(clipId, trim) => { pauseViewerPlayback(); trimClipEnd(clipId, trim); }}
-                onBladeCut={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
-                onDropAsset={(assetId, trackId, frame) => { pauseViewerPlayback(); dropAssetAtFrame(assetId, trackId, frame); }}
-                onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
-                onSetTransitionDuration={(clipId, edge, dur) => setTransitionMessage(setSelectedClipTransitionDuration(edge, dur))}
-                onDeleteClip={(clipId) => { pauseViewerPlayback(); removeClipById(clipId); }}
-                onDuplicateClip={(clipId) => { pauseViewerPlayback(); duplicateClip(clipId); }}
-                onSplitClip={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
-                onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
-                onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
-                onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
-                onSetClipSpeed={(clipId, spd) => setClipSpeed(clipId, spd)}
-                onAddFade={(clipId, edge) => {
-                  pauseViewerPlayback();
-                  selectClip(clipId);
-                  setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
-                }}
-                onAddTrack={(kind) => addTrack(kind)}
-              onRemoveTrack={(trackId) => removeTrack(trackId)}
-              onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
-              onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
-              onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
-              onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
-              onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
-              />
-            </div>
-          </>
-        )}
       </main>
     </div>
   );

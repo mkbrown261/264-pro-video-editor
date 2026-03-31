@@ -16,7 +16,9 @@ interface EditorShortcutOptions {
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
+  onSaveAs?: () => void;
   onOpen: () => void;
+  onNewProject?: () => void;
   // Extended shortcuts
   onDuplicateSelectedClip?: () => void;
   onFitTimeline?: () => void;
@@ -26,6 +28,15 @@ interface EditorShortcutOptions {
   onAddMarker?: () => void;
   /** J = rewind (shuttle -1 speed), L = forward (shuttle +1 speed), K = pause */
   onJKLShuttle?: (direction: -1 | 0 | 1) => void;
+  // Panel toggles
+  onToggleMediaPool?: () => void;
+  onToggleInspector?: () => void;
+  onToggleDualViewer?: () => void;
+  // Layout presets
+  onLayoutPreset?: (preset: "edit" | "color" | "audio") => void;
+  // Mark in/out
+  onMarkIn?: () => void;
+  onMarkOut?: () => void;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -63,7 +74,9 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onUndo,
         onRedo,
         onSave,
+        onSaveAs,
         onOpen,
+        onNewProject,
         onDuplicateSelectedClip,
         onFitTimeline,
         onExport,
@@ -71,6 +84,12 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onZoomOut,
         onAddMarker,
         onJKLShuttle,
+        onToggleMediaPool,
+        onToggleInspector,
+        onToggleDualViewer,
+        onLayoutPreset,
+        onMarkIn,
+        onMarkOut,
       } = optionsRef.current;
 
       const key = event.key.toLowerCase();
@@ -101,10 +120,22 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           onSave();
           return;
         }
+        // Cmd/Ctrl+Shift+S → save as
+        if (key === "s" && event.shiftKey) {
+          event.preventDefault();
+          onSaveAs?.();
+          return;
+        }
         // Cmd/Ctrl+O → open
         if (key === "o") {
           event.preventDefault();
           onOpen();
+          return;
+        }
+        // Cmd/Ctrl+N → new project
+        if (key === "n") {
+          event.preventDefault();
+          onNewProject?.();
           return;
         }
         // Cmd/Ctrl+B → split
@@ -124,6 +155,17 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onExport?.();
           return;
+        }
+        // Cmd/Ctrl+, → project settings (handled via File menu in App)
+        if (key === ",") {
+          event.preventDefault();
+          return;
+        }
+        // Ctrl+Shift+1/2/3 → layout presets
+        if (event.shiftKey) {
+          if (key === "1") { event.preventDefault(); onLayoutPreset?.("edit"); return; }
+          if (key === "2") { event.preventDefault(); onLayoutPreset?.("color"); return; }
+          if (key === "3") { event.preventDefault(); onLayoutPreset?.("audio"); return; }
         }
         // Cmd/Ctrl+Shift+Z handled above; Shift+Z (no modifier) → fit timeline
         return;
@@ -159,6 +201,10 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onSelectTool();
           break;
+        case "v":
+          event.preventDefault();
+          onSelectTool();
+          break;
         case "b":
           event.preventDefault();
           onToggleBladeTool();
@@ -166,6 +212,26 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         case "f":
           event.preventDefault();
           onToggleFullscreen();
+          break;
+        case "f1":
+          event.preventDefault();
+          onToggleMediaPool?.();
+          break;
+        case "f2":
+          event.preventDefault();
+          onToggleInspector?.();
+          break;
+        case "`":
+          event.preventDefault();
+          onToggleDualViewer?.();
+          break;
+        case "i":
+          event.preventDefault();
+          onMarkIn?.();
+          break;
+        case "o":
+          event.preventDefault();
+          onMarkOut?.();
           break;
 
         // ] / [ zoom in / out
