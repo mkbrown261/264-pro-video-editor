@@ -25,20 +25,13 @@ jobs:
       - name: Bump patch version and tag
         id: bump
         run: |
-          # Read current version from package.json
           CURRENT=$(node -p "require('./package.json').version")
-          echo "Current version: $CURRENT"
-
-          # Split and increment patch
           MAJOR=$(echo $CURRENT | cut -d. -f1)
           MINOR=$(echo $CURRENT | cut -d. -f2)
           PATCH=$(echo $CURRENT | cut -d. -f3)
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+          NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
           NEW_TAG="v$NEW_VERSION"
-          echo "New version: $NEW_VERSION"
 
-          # Write new version into package.json
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -46,23 +39,21 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
           "
 
-          # Commit the version bump back to main
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json
           git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
           git push origin main
 
-          # Tag the new commit
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
 
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "new_tag=$NEW_TAG"         >> $GITHUB_OUTPUT
 
-  # ─── Step 2: build macOS ─────────────────────────────────────────────
-  build-mac:
-    name: Build macOS (arm64 + x64)
+  # ─── Step 2a: macOS arm64 ────────────────────────────────────────────
+  build-mac-arm64:
+    name: Build macOS (arm64)
     needs: version
     runs-on: macos-15
     steps:
@@ -76,18 +67,39 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-
       - run: npm run build
 
-      - name: Package macOS (arm64 then x64)
+      - name: Package macOS arm64
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: |
-          npx electron-builder --mac --arm64 --publish always
-          npx electron-builder --mac --x64 --publish always
+        run: npx electron-builder --mac --arm64 --publish always
 
-  # ─── Step 3: build Windows ───────────────────────────────────────────
+  # ─── Step 2b: macOS x64 ──────────────────────────────────────────────
+  build-mac-x64:
+    name: Build macOS (x64)
+    needs: version
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.new_tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Package macOS x64
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npx electron-builder --mac --x64 --publish always
+
+  # ─── Step 2c: Windows x64 ────────────────────────────────────────────
   build-win:
     name: Build Windows (x64)
     needs: version
@@ -103,7 +115,6 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-
       - run: npm run build
 
       - name: Package Windows x64
