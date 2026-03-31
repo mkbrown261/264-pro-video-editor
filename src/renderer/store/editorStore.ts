@@ -91,8 +91,11 @@ interface EditorStore {
   splitSelectedClipAtPlayhead: () => void;
   splitClipAtFrame: (clipId: string, frame: number) => void;
   removeSelectedClip: () => void;
+  removeClipById: (clipId: string) => void;
+  duplicateClip: (clipId: string) => void;
   toggleClipEnabled: (clipId: string) => void;
   detachLinkedClips: (clipId: string) => void;
+  relinkClips: (clipId: string) => void;
 
   // ── Transitions ──
   applyTransitionToSelectedClip: (edge: "in" | "out", type?: ClipTransitionType) => string | null;
@@ -738,6 +741,113 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             )
           }
         }
+      };
+    }));
+  },
+
+  relinkClips: (clipId) => {
+    set(withUndo("Relink Clips", (state) => {
+      const clip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+      // Find audio counterpart with same assetId at same startFrame (or close)
+      const counterpart = state.project.sequence.clips.find((c) => {
+        if (c.id === clipId) return false;
+        if (c.assetId !== clip.assetId) return false;
+        if (c.linkedGroupId) return false; // already linked to something else
+        // Check same start frame (within 2 frames tolerance)
+        return Math.abs(c.startFrame - clip.startFrame) <= 2;
+      });
+      if (!counterpart) return state;
+      const newGroupId = createId();
+      return {
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            clips: state.project.sequence.clips.map((c) => {
+              if (c.id === clipId || c.id === counterpart.id) {
+                return { ...c, linkedGroupId: newGroupId };
+              }
+              return c;
+            })
+          }
+        }
+      };
+    }));
+  },
+
+  removeClipById: (clipId) => {
+    set(withUndo("Delete Clip", (state) => {
+      const linked = getLinkedClips(state.project, clipId);
+      if (!linked.length) return state;
+      const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+      const segsById = new Map(segs.map((s) => [s.clip.id, s]));
+      const linkedIds = new Set(linked.map((c) => c.id));
+      const trackIds = linked.map((c) => c.trackId);
+      const removedByTrack = new Map<string, Array<{ dur: number; start: number }>>();
+      for (const clip of linked) {
+        const seg = segsById.get(clip.id);
+        if (!seg) continue;
+        const arr = removedByTrack.get(clip.trackId) ?? [];
+        arr.push({ dur: seg.durationFrames, start: seg.startFrame });
+        removedByTrack.set(clip.trackId, arr);
+      }
+      const next = resolveTracks(
+        {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            clips: state.project.sequence.clips
+              .filter((c) => !linkedIds.has(c.id))
+              .map((c) => {
+                const removed = removedByTrack.get(c.trackId);
+                if (!removed?.length) return c;
+                const ripple = removed.reduce((t, r) => r.start < c.startFrame ? t + r.dur : t, 0);
+                return ripple > 0 ? { ...c, startFrame: Math.max(0, c.startFrame - ripple) } : c;
+              })
+          }
+        },
+        trackIds
+      );
+      const nextSegs = buildTimelineSegments(next.sequence, next.assets);
+      const fallback = findPlayableSegmentAtFrame(nextSegs, state.playback.playheadFrame, "video") ?? nextSegs[0] ?? null;
+      return {
+        project: next,
+        selectedClipId: fallback?.clip.id ?? null,
+        selectedAssetId: fallback?.asset.id ?? state.selectedAssetId,
+        playback: {
+          isPlaying: nextSegs.length ? state.playback.isPlaying : false,
+          playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
+        }
+      };
+    }));
+  },
+
+  duplicateClip: (clipId) => {
+    set(withUndo("Duplicate Clip", (state) => {
+      const clip = state.project.sequence.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+      const seg = buildTimelineSegments(state.project.sequence, state.project.assets).find((s) => s.clip.id === clipId);
+      if (!seg) return state;
+      // Place duplicate right after the original
+      const newStartFrame = seg.endFrame;
+      const newLinkedGroupId = clip.linkedGroupId ? createId() : null;
+      const linked = clip.linkedGroupId ? getLinkedClips(state.project, clipId) : [clip];
+      const newClips = linked.map((lc) => ({
+        ...lc,
+        id: createId(),
+        startFrame: newStartFrame,
+        linkedGroupId: newLinkedGroupId
+      }));
+      return {
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            clips: [...state.project.sequence.clips, ...newClips]
+          }
+        },
+        selectedClipId: newClips[0].id
       };
     }));
   },

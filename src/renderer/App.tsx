@@ -58,8 +58,11 @@ export default function App() {
   const splitSelectedClipAtPlayhead = useEditorStore((s) => s.splitSelectedClipAtPlayhead);
   const splitClipAtFrame = useEditorStore((s) => s.splitClipAtFrame);
   const removeSelectedClip = useEditorStore((s) => s.removeSelectedClip);
+  const removeClipById = useEditorStore((s) => s.removeClipById);
+  const duplicateClip = useEditorStore((s) => s.duplicateClip);
   const toggleClipEnabled = useEditorStore((s) => s.toggleClipEnabled);
   const detachLinkedClips = useEditorStore((s) => s.detachLinkedClips);
+  const relinkClips = useEditorStore((s) => s.relinkClips);
   const applyTransitionToSelectedClip = useEditorStore((s) => s.applyTransitionToSelectedClip);
   const setSelectedClipTransitionDuration = useEditorStore((s) => s.setSelectedClipTransitionDuration);
   const setSelectedClipTransitionType = useEditorStore((s) => s.setSelectedClipTransitionType);
@@ -77,6 +80,7 @@ export default function App() {
   const redo = useEditorStore((s) => s.redo);
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
   const updateTrack = useEditorStore((s) => s.updateTrack);
+  const addTrack = useEditorStore((s) => s.addTrack);
 
   // Masks
   const addMaskToClip = useEditorStore((s) => s.addMaskToClip);
@@ -891,6 +895,7 @@ export default function App() {
               onSetBackgroundRemoval={(config) => { if (selectedClipId) setBackgroundRemoval(selectedClipId, config); }}
               onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
               onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
+              onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
               onSetTransitionType={(edge, type) => {
                 pauseViewerPlayback();
                 setTransitionMessage(setSelectedClipTransitionType(edge, type));
@@ -951,6 +956,19 @@ export default function App() {
                 pauseViewerPlayback();
                 setTransitionMessage(setSelectedClipTransitionDuration(edge, dur));
               }}
+              onDeleteClip={(clipId) => { pauseViewerPlayback(); removeClipById(clipId); }}
+              onDuplicateClip={(clipId) => { pauseViewerPlayback(); duplicateClip(clipId); }}
+              onSplitClip={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+              onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
+              onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
+              onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
+              onSetClipSpeed={(clipId, spd) => setClipSpeed(clipId, spd)}
+              onAddFade={(clipId, edge) => {
+                pauseViewerPlayback();
+                selectClip(clipId);
+                setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
+              }}
+              onAddTrack={(kind) => addTrack(kind)}
             />
           </>
         )}
@@ -1035,6 +1053,19 @@ export default function App() {
                   pauseViewerPlayback();
                   setTransitionMessage(setSelectedClipTransitionDuration(edge, dur));
                 }}
+                onDeleteClip={(clipId) => { pauseViewerPlayback(); removeClipById(clipId); }}
+                onDuplicateClip={(clipId) => { pauseViewerPlayback(); duplicateClip(clipId); }}
+                onSplitClip={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+                onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
+                onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
+                onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
+                onSetClipSpeed={(clipId, spd) => setClipSpeed(clipId, spd)}
+                onAddFade={(clipId, edge) => {
+                  pauseViewerPlayback();
+                  selectClip(clipId);
+                  setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
+                }}
+                onAddTrack={(kind) => addTrack(kind)}
               />
             </div>
           </>
@@ -1079,6 +1110,7 @@ export default function App() {
                 onSetBackgroundRemoval={(config) => { if (selectedClipId) setBackgroundRemoval(selectedClipId, config); }}
                 onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
                 onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
+                onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
                 onSetTransitionType={(edge, type) => {
                   pauseViewerPlayback();
                   setTransitionMessage(setSelectedClipTransitionType(edge, type));

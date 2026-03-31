@@ -18,6 +18,17 @@ export const SNAP_DIVISIONS = [
   { label: "1/16", factor: 0.0625 }
 ];
 
+// ── Context menu state ────────────────────────────────────────────────────────
+interface ContextMenu {
+  x: number;
+  y: number;
+  clipId: string;
+  clipKind: TimelineTrackKind;
+  isLinked: boolean;
+  isEnabled: boolean;
+  speed: number;
+}
+
 interface DragState {
   clipId: string;
   trackKind: TimelineTrackKind;
@@ -70,6 +81,16 @@ interface TimelinePanelProps {
   onDropAsset: (assetId: string, trackId: string, startFrame: number) => void;
   onUpdateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   onSetTransitionDuration: (clipId: string, edge: "in" | "out", durationFrames: number) => void;
+  // Context menu actions
+  onDeleteClip?: (clipId: string) => void;
+  onDuplicateClip?: (clipId: string) => void;
+  onSplitClip?: (clipId: string, frame: number) => void;
+  onToggleClipEnabled?: (clipId: string) => void;
+  onDetachLinkedClips?: (clipId: string) => void;
+  onRelinkClips?: (clipId: string) => void;
+  onSetClipSpeed?: (clipId: string, speed: number) => void;
+  onAddFade?: (clipId: string, edge: "in" | "out") => void;
+  onAddTrack?: (kind: TimelineTrackKind) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -100,7 +121,16 @@ export function TimelinePanel({
   onBladeCut,
   onDropAsset,
   onUpdateTrack,
-  onSetTransitionDuration
+  onSetTransitionDuration,
+  onDeleteClip,
+  onDuplicateClip,
+  onSplitClip,
+  onToggleClipEnabled,
+  onDetachLinkedClips,
+  onRelinkClips,
+  onSetClipSpeed,
+  onAddFade,
+  onAddTrack,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -155,6 +185,21 @@ export function TimelinePanel({
 
   // ── Track height resize ───────────────────────────────────────────────────
   const [trackHeightDrag, setTrackHeightDrag] = useState<{ trackId: string; anchorY: number; origHeight: number } | null>(null);
+
+  // ── Context menu ──────────────────────────────────────────────────────────
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [speedInput, setSpeedInput] = useState<string>("1.0");
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".timeline-context-menu")) setContextMenu(null);
+    };
+    window.addEventListener("mousedown", handler);
+    return () => window.removeEventListener("mousedown", handler);
+  }, [contextMenu]);
 
   const timelineFrames = Math.max(totalFrames + sequenceFps * 4, sequenceFps * 10);
   const canvasWidth    = Math.max(timelineFrames * pixelsPerFrame, 960);
@@ -317,8 +362,10 @@ export function TimelinePanel({
       if (g && !g.isNewTrack) {
         propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
       }
-      // New track creation is handled in App layer — here we just drop on same track at ghost frame
+      // New track creation — call onAddTrack then move clip to whatever track was just added
       if (g?.isNewTrack) {
+        // We can't know the new trackId here synchronously, so just move clip to its original track at new frame
+        // App layer handles creating the track separately via the ghost UI
         propsRef.current.onMoveClipTo(dragState.clipId, dragState.originalTrackId, g.frame);
       }
       setDragState(null);
@@ -329,6 +376,74 @@ export function TimelinePanel({
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [dragState]);
+
+  // ── Context menu renderer ─────────────────────────────────────────────────
+  function renderContextMenu() {
+    if (!contextMenu) return null;
+    const { x, y, clipId, isLinked, isEnabled, speed } = contextMenu;
+    const frameAtPlayhead = playheadFrame;
+    return (
+      <div
+        className="timeline-context-menu"
+        style={{ position: "fixed", left: x, top: y, zIndex: 9999 }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <div className="ctx-menu-item" onClick={() => { onSplitClip?.(clipId, frameAtPlayhead); setContextMenu(null); }}>
+          ✂ Split at Playhead
+        </div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" onClick={() => { onDuplicateClip?.(clipId); setContextMenu(null); }}>
+          ⧉ Duplicate
+        </div>
+        <div className="ctx-menu-item" onClick={() => { onDeleteClip?.(clipId); setContextMenu(null); }}>
+          🗑 Delete
+        </div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" onClick={() => { onToggleClipEnabled?.(clipId); setContextMenu(null); }}>
+          {isEnabled ? "⊘ Disable Clip" : "✓ Enable Clip"}
+        </div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" onClick={() => { onAddFade?.(clipId, "in"); setContextMenu(null); }}>
+          ◁ Add Fade In
+        </div>
+        <div className="ctx-menu-item" onClick={() => { onAddFade?.(clipId, "out"); setContextMenu(null); }}>
+          ▷ Add Fade Out
+        </div>
+        <div className="ctx-menu-sep" />
+        {isLinked ? (
+          <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); setContextMenu(null); }}>
+            🔗 Unlink Audio/Video
+          </div>
+        ) : (
+          <div className="ctx-menu-item" onClick={() => { onRelinkClips?.(clipId); setContextMenu(null); }}>
+            🔗 Relink Audio/Video
+          </div>
+        )}
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item ctx-menu-speed-row">
+          <span>⚡ Speed:</span>
+          <input
+            className="ctx-speed-input"
+            type="number"
+            min={0.1} max={4} step={0.05}
+            value={speedInput}
+            onChange={(e) => setSpeedInput(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <span>×</span>
+          <button
+            className="ctx-speed-apply"
+            type="button"
+            onClick={() => {
+              const spd = Math.max(0.1, Math.min(4, parseFloat(speedInput) || speed));
+              onSetClipSpeed?.(clipId, spd);
+              setContextMenu(null);
+            }}
+          >Apply</button>
+        </div>
+      </div>
+    );
+  }
 
   // ── Ruler ticks ───────────────────────────────────────────────────────────
   function renderRulerTicks() {
@@ -355,6 +470,7 @@ export function TimelinePanel({
 
   return (
     <section className="panel timeline-panel">
+      {renderContextMenu()}
 
       {/* ── TOOLBAR ──────────────────────────────────────────────────────── */}
       <div className="panel-header timeline-header">
@@ -416,6 +532,19 @@ export function TimelinePanel({
             type="button"
             title="Zoom in (Ctrl+scroll)"
           >+</button>
+          <span className="tl-header-sep" />
+          <button
+            className="tl-add-track-btn"
+            onClick={() => onAddTrack?.("video")}
+            title="Add video track"
+            type="button"
+          >+ V</button>
+          <button
+            className="tl-add-track-btn"
+            onClick={() => onAddTrack?.("audio")}
+            title="Add audio track"
+            type="button"
+          >+ A</button>
         </div>
       </div>
 
@@ -675,6 +804,21 @@ export function TimelinePanel({
                             originalTrackId: layout.track.id
                           });
                           setGhostInfo({ frame: segment.startFrame, trackId: layout.track.id, isNewTrack: false, newTrackKind: layout.track.kind, newTrackIndex: 0 });
+                        }}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          propsRef.current.onSelectClip(segment.clip.id);
+                          setSpeedInput(String((segment.clip.speed ?? 1).toFixed(2)));
+                          setContextMenu({
+                            x: event.clientX,
+                            y: event.clientY,
+                            clipId: segment.clip.id,
+                            clipKind: segment.track.kind,
+                            isLinked: Boolean(segment.clip.linkedGroupId),
+                            isEnabled: segment.clip.isEnabled !== false,
+                            speed: segment.clip.speed ?? 1,
+                          });
                         }}
                       >
                         {/* Thumbnail tint overlay */}

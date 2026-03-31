@@ -627,20 +627,44 @@ export function colorGradeToCSS(grade: ColorGrade | null): string {
   const tint        = safe(grade.tint, 0);
   const hueRot      = (-temperature * 0.10) + (tint * 0.05); // degrees
 
-  // ── Wheels → master luminance adjustments ────────────────────────────────
-  // Each wheel is RGBValue {r,g,b} in [-1,1]. We use the average as a
-  // master luminance delta. Per-channel colour shifts need WebGL.
-  const liftMaster   = (safe(grade.lift.r)  + safe(grade.lift.g)  + safe(grade.lift.b))  / 3;
-  const gammaMaster  = (safe(grade.gamma.r) + safe(grade.gamma.g) + safe(grade.gamma.b)) / 3;
-  const gainMaster   = (safe(grade.gain.r)  + safe(grade.gain.g)  + safe(grade.gain.b))  / 3;
-  const offsetMaster = (safe(grade.offset.r)+ safe(grade.offset.g)+ safe(grade.offset.b))/ 3;
+  // ── Wheels → brightness + sepia/hue tinting ───────────────────────────────
+  // Lift (shadows), Gamma (midtones), Gain (highlights), Offset (global)
+  // Each wheel is RGBValue {r,g,b} in [-1,1].
+  //
+  // Brightness: use the luminance average for overall level adjustments
+  // Color tint: compute hue from (r-b, g-b) channel differences to detect
+  //   whether the wheel is pushing towards a warm or cool colour, then use
+  //   sepia() + hue-rotate() to replicate the tint.
+  //
+  const lift   = grade.lift   ?? { r: 0, g: 0, b: 0 };
+  const gamma  = grade.gamma  ?? { r: 0, g: 0, b: 0 };
+  const gain   = grade.gain   ?? { r: 0, g: 0, b: 0 };
+  const offset = grade.offset ?? { r: 0, g: 0, b: 0 };
 
-  // Combine all brightness factors multiplicatively:
-  //   lift   → additive shadow lift  (1 + lift*0.5)  clamped ≥0.05
-  //   gamma  → midtone power approx  (1 + gamma*0.8) clamped ≥0.05
-  //            positive gamma = brighter mids
-  //   gain   → highlight scale       (1 + gain)       clamped ≥0.05
-  //   offset → global additive       (1 + offset)     clamped ≥0.05
+  function wheelBrightness(w: typeof lift): number {
+    return (safe(w.r) + safe(w.g) + safe(w.b)) / 3;
+  }
+
+  // Estimate hue-bias from a wheel: excess red → warm, excess blue → cool
+  // Returns degrees of hue-rotate that approximates the per-channel shift
+  function wheelHueDeg(w: typeof lift, scale: number): number {
+    const r = safe(w.r);
+    const g = safe(w.g);
+    const b = safe(w.b);
+    // Max-minus-median gives dominant channel direction
+    const rg = r - g;
+    const gb = g - b;
+    const rb = r - b;
+    // red excess → negative hue (warm), blue excess → positive (cool)
+    const bias = (rg * 0.5 - gb * 0.3 + rb * 0.2) * scale;
+    return bias * 60; // map [-1,1] range to roughly [-60,60] deg
+  }
+
+  const liftMaster   = wheelBrightness(lift);
+  const gammaMaster  = wheelBrightness(gamma);
+  const gainMaster   = wheelBrightness(gain);
+  const offsetMaster = wheelBrightness(offset);
+
   const liftFactor   = Math.max(0.05, 1 + liftMaster   * 0.5);
   const gammaFactor  = Math.max(0.05, 1 + gammaMaster  * 0.8);
   const gainFactor   = Math.max(0.05, 1 + gainMaster);
@@ -648,6 +672,28 @@ export function colorGradeToCSS(grade: ColorGrade | null): string {
 
   const brightnessCombined = expMult * liftFactor * gammaFactor * gainFactor * offsetFactor;
   const brightnessVal       = Math.max(0.001, brightnessCombined);
+
+  // Per-wheel hue contribution (weighted by their tonal impact)
+  const liftHue   = wheelHueDeg(lift,   0.4);  // shadows: subtle
+  const gammaHue  = wheelHueDeg(gamma,  0.6);  // mids: moderate
+  const gainHue   = wheelHueDeg(gain,   0.5);  // highlights: moderate
+  const offsetHue = wheelHueDeg(offset, 0.3);  // global: gentle
+
+  // Combine all hue biases + temperature/tint
+  const totalHue = hueRot + liftHue + gammaHue + gainHue + offsetHue;
+
+  // Sepia strength from color channel divergence (how strong is the tint?)
+  function wheelChromaStrength(w: typeof lift): number {
+    const r = safe(w.r); const g = safe(w.g); const b = safe(w.b);
+    const avg = (r + g + b) / 3;
+    return Math.min(1, Math.sqrt((r - avg) ** 2 + (g - avg) ** 2 + (b - avg) ** 2) * 3);
+  }
+  const chromaStrength = Math.min(0.6,
+    wheelChromaStrength(lift)   * 0.15 +
+    wheelChromaStrength(gamma)  * 0.20 +
+    wheelChromaStrength(gain)   * 0.15 +
+    wheelChromaStrength(offset) * 0.10
+  );
 
   // Build filter string (only include non-identity values to keep it short)
   const parts: string[] = [];
@@ -661,8 +707,12 @@ export function colorGradeToCSS(grade: ColorGrade | null): string {
   if (Math.abs(satVal - 1) > 0.001)
     parts.push(`saturate(${satVal.toFixed(3)})`);
 
-  if (Math.abs(hueRot) > 0.1)
-    parts.push(`hue-rotate(${hueRot.toFixed(2)}deg)`);
+  // Apply sepia tint + hue-rotate together for per-channel colour grading effect
+  if (chromaStrength > 0.01) {
+    parts.push(`sepia(${chromaStrength.toFixed(3)})`);
+  }
+  if (Math.abs(totalHue) > 0.1)
+    parts.push(`hue-rotate(${totalHue.toFixed(2)}deg)`);
 
   return parts.length > 0 ? parts.join(" ") : "none";
 }

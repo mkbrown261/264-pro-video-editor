@@ -4576,3 +4576,102 @@ kbd {
 .clip-vol-badge   { background: rgba(79,199,122,0.2);   color: #4cd98a; border: 1px solid rgba(79,199,122,0.3);  }
 .clip-speed-badge { background: rgba(255,160,40,0.2);   color: #ffb030; border: 1px solid rgba(255,160,40,0.3);  }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIMELINE CONTEXT MENU
+   ══════════════════════════════════════════════════════════════════════════ */
+.timeline-context-menu {
+  background: #1e2130;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 7px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  padding: 4px 0;
+  min-width: 200px;
+  user-select: none;
+  font-size: 0.82rem;
+  color: #d0d4e0;
+  animation: ctx-fadein 0.08s ease;
+}
+@keyframes ctx-fadein {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.ctx-menu-item {
+  padding: 7px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 3px;
+  transition: background 0.1s;
+}
+.ctx-menu-item:hover {
+  background: rgba(79,142,247,0.18);
+  color: #fff;
+}
+.ctx-menu-sep {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 3px 8px;
+}
+.ctx-menu-speed-row {
+  gap: 6px;
+  padding: 6px 14px;
+}
+.ctx-speed-input {
+  width: 52px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 4px;
+  color: #fff;
+  padding: 2px 5px;
+  font-size: 0.78rem;
+}
+.ctx-speed-apply {
+  background: rgba(79,142,247,0.35);
+  border: 1px solid rgba(79,142,247,0.5);
+  border-radius: 4px;
+  color: #fff;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.ctx-speed-apply:hover { background: rgba(79,142,247,0.6); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADD TRACK BUTTONS
+   ══════════════════════════════════════════════════════════════════════════ */
+.tl-header-sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255,255,255,0.1);
+  margin: 0 4px;
+  display: inline-block;
+  vertical-align: middle;
+}
+.tl-add-track-btn {
+  background: rgba(79,142,247,0.15);
+  border: 1px solid rgba(79,142,247,0.35);
+  border-radius: 5px;
+  color: #4f8ef7;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  letter-spacing: 0.02em;
+}
+.tl-add-track-btn:hover {
+  background: rgba(79,142,247,0.35);
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MASK SVG OVERLAY
+   ══════════════════════════════════════════════════════════════════════════ */
+.viewer-mask-svg-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}

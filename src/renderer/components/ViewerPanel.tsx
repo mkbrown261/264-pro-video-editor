@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type CSSProperties
@@ -125,6 +126,124 @@ function getTransitionPreviewStyles(
   }
 }
 
+// ─── Mask visual effect overlay ───────────────────────────────────────────────
+//
+// Renders an SVG overlay that visually shows masks on the video:
+//   - Semi-transparent tinted fill inside mask area
+//   - Feather effect via SVG feGaussianBlur filter
+//   - Inverted masks show effect OUTSIDE the mask region
+//
+function buildSvgMaskOverlay(
+  masks: ClipMask[],
+  w: number,
+  h: number,
+  playheadFrame: number
+): string | null {
+  if (!masks.length) return null;
+
+  const defs: string[] = [];
+  const uses: string[] = [];
+
+  for (const mask of masks) {
+    if (!mask || !mask.shape) continue;
+
+    const shape = mask.shape;
+    const feather = Math.max(0, mask.feather ?? 0);
+    const opacity = Math.max(0, Math.min(1, mask.opacity ?? 1));
+    const inverted = mask.inverted ?? false;
+    const filterId = `mf-${mask.id}`;
+    const clipId = `mc-${mask.id}`;
+    const maskId2 = `mm-${mask.id}`;
+
+    // Build shape path
+    let pathD = "";
+    if (shape.type === "rectangle" || shape.type === "ellipse") {
+      const cx = (shape.x + shape.width / 2) * w;
+      const cy = (shape.y + shape.height / 2) * h;
+      const hw = (shape.width / 2) * w;
+      const hh = (shape.height / 2) * h;
+      const rot = shape.rotation ?? 0;
+      if (shape.type === "rectangle") {
+        pathD = `M ${cx - hw},${cy - hh} L ${cx + hw},${cy - hh} L ${cx + hw},${cy + hh} L ${cx - hw},${cy + hh} Z`;
+      } else {
+        // Approximate ellipse with SVG ellipse element via path
+        const rx = hw;
+        const ry = hh;
+        pathD = `M ${cx + rx},${cy} A ${rx},${ry} 0 1,0 ${cx - rx},${cy} A ${rx},${ry} 0 1,0 ${cx + rx},${cy} Z`;
+      }
+      if (rot !== 0) {
+        // Embed rotation via transform on the path group
+        const shapeEl = shape.type === "rectangle"
+          ? `<rect x="${cx - hw}" y="${cy - hh}" width="${hw * 2}" height="${hh * 2}" transform="rotate(${rot},${cx},${cy})" />`
+          : `<ellipse cx="${cx}" cy="${cy}" rx="${hw}" ry="${hh}" transform="rotate(${rot},${cx},${cy})" />`;
+
+        // Filter for feather
+        if (feather > 0) {
+          defs.push(`<filter id="${filterId}" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="${feather * 0.4}" />
+          </filter>`);
+        }
+
+        defs.push(`<mask id="${maskId2}">
+          <rect width="${w}" height="${h}" fill="${inverted ? 'white' : 'black'}" />
+          <g fill="${inverted ? 'black' : 'white'}" ${feather > 0 ? `filter="url(#${filterId})"` : ""}>
+            ${shapeEl}
+          </g>
+        </mask>`);
+
+        uses.push(`<rect width="${w}" height="${h}" fill="rgba(79,142,247,0.25)" opacity="${opacity}" mask="url(#${maskId2})" />`);
+        continue;
+      }
+    } else if (shape.type === "bezier" && shape.points && shape.points.length >= 2) {
+      const pts = shape.points;
+      pathD = `M ${pts[0].point.x * w},${pts[0].point.y * h}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const curr = pts[i];
+        const next = pts[i + 1];
+        pathD += ` C ${curr.handleOut.x * w},${curr.handleOut.y * h} ${next.handleIn.x * w},${next.handleIn.y * h} ${next.point.x * w},${next.point.y * h}`;
+      }
+      if (pts.length >= 3) {
+        const last = pts[pts.length - 1];
+        const first = pts[0];
+        pathD += ` C ${last.handleOut.x * w},${last.handleOut.y * h} ${first.handleIn.x * w},${first.handleIn.y * h} ${first.point.x * w},${first.point.y * h}`;
+      }
+      pathD += " Z";
+    } else if (shape.type === "freehand" && shape.points && shape.points.length >= 3) {
+      const pts = shape.points;
+      pathD = `M ${pts[0].point.x * w},${pts[0].point.y * h}`;
+      for (let i = 1; i < pts.length; i++) {
+        pathD += ` L ${pts[i].point.x * w},${pts[i].point.y * h}`;
+      }
+      pathD += " Z";
+    }
+
+    if (!pathD) continue;
+
+    // Filter
+    if (feather > 0) {
+      defs.push(`<filter id="${filterId}" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="${feather * 0.4}" />
+      </filter>`);
+    }
+
+    // SVG mask element
+    defs.push(`<mask id="${maskId2}">
+      <rect width="${w}" height="${h}" fill="${inverted ? 'white' : 'black'}" />
+      <path d="${pathD}" fill="${inverted ? 'black' : 'white'}" ${feather > 0 ? `filter="url(#${filterId})"` : ""} />
+    </mask>`);
+
+    // Overlay rect using the mask
+    uses.push(`<rect width="${w}" height="${h}" fill="rgba(79,142,247,0.28)" opacity="${opacity}" mask="url(#${maskId2})" />`);
+  }
+
+  if (!uses.length) return null;
+  void playheadFrame; // used for keyframe interpolation in future
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" style="position:absolute;inset:0;pointer-events:none;">
+    <defs>${defs.join("")}</defs>
+    ${uses.join("")}
+  </svg>`;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
@@ -222,6 +341,14 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       }
     }, [activeSegment, selectedAsset?.id, selectedAsset?.previewUrl]);
 
+    // ── Derived display state ─────────────────────────────────────────────────
+    const previewAsset    = activeSegment?.asset ?? selectedAsset ?? null;
+    const timelineReady   = totalFrames > 0;
+    const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
+    const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
+    const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    const currentMasks    = activeSegment?.clip.masks ?? [];
+
     // ── Color grading via CSS filter ─────────────────────────────────────────
     //
     // The grade is applied as a CSS `filter` string directly on the <video>
@@ -235,13 +362,11 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const gradeFilter = colorGradeToCSS(colorGrade ?? null);
     const hasGrade    = Boolean(colorGrade);
 
-    // ── Derived display state ─────────────────────────────────────────────────
-    const previewAsset    = activeSegment?.asset ?? selectedAsset ?? null;
-    const timelineReady   = totalFrames > 0;
-    const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
-    const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
-    const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
-    const currentMasks    = activeSegment?.clip.masks ?? [];
+    // ── Mask SVG overlay ──────────────────────────────────────────────────────
+    const maskSvg = useMemo(
+      () => buildSvgMaskOverlay(currentMasks, stageSize.w, stageSize.h, playheadFrame),
+      [currentMasks, stageSize.w, stageSize.h, playheadFrame]
+    );
 
     return (
       <section
@@ -289,6 +414,15 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             <div
               className={`viewer-transition-overlay${transitionState ? ` ${transitionState.type}` : ""}`}
               style={overlayStyle}
+            />
+          )}
+
+          {/* Mask visual effect overlay — shows tinted fill inside each mask shape */}
+          {previewAsset && maskSvg && (
+            <div
+              className="viewer-mask-svg-overlay"
+              style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+              dangerouslySetInnerHTML={{ __html: maskSvg }}
             />
           )}
 

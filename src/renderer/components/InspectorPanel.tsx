@@ -60,6 +60,7 @@ interface InspectorPanelProps {
   // Clip actions
   onToggleClipEnabled: (clipId: string) => void;
   onDetachLinkedClips: (clipId: string) => void;
+  onRelinkClips?: (clipId: string) => void;
   onSetTransitionType: (edge: "in" | "out", type: ClipTransitionType) => void;
   onSetTransitionDuration: (edge: "in" | "out", durationFrames: number) => void;
   onExtractAudio: () => void;
@@ -149,6 +150,7 @@ export function InspectorPanel({
   onSetBackgroundRemoval,
   onToggleClipEnabled,
   onDetachLinkedClips,
+  onRelinkClips,
   onSetTransitionType,
   onSetTransitionDuration,
   onExtractAudio,
@@ -377,9 +379,20 @@ export function InspectorPanel({
                       <button
                         className="panel-action muted"
                         onClick={() => onDetachLinkedClips(selectedSegment.clip.id)}
+                        title="Unlink audio from video — allows independent movement"
                         type="button"
                       >
-                        Unlink A/V
+                        🔗 Unlink A/V
+                      </button>
+                    )}
+                    {!selectedSegment.clip.linkedGroupId && (
+                      <button
+                        className="panel-action muted"
+                        onClick={() => onRelinkClips?.(selectedSegment.clip.id)}
+                        title="Relink to matching audio/video clip at same time position"
+                        type="button"
+                      >
+                        🔗 Relink A/V
                       </button>
                     )}
                     {selectedSegment.asset.hasAudio && (
