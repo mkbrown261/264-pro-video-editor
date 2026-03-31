@@ -29,6 +29,7 @@
     "hardenedRuntime": false,
     "gatekeeperAssess": false,
     "notarize": false,
+    "artifactName": "${productName}-${version}-${arch}-mac.${ext}",
     "target": [
       { "target": "zip", "arch": ["arm64"] },
       { "target": "zip", "arch": ["x64"] }
