@@ -32,6 +32,8 @@ interface ProjectSettings {
 
 export default function App() {
   const viewerPanelRef = useRef<ViewerPanelHandle | null>(null);
+  // Stable video ref passed to ColorGradingPanel — must never be re-created
+  const colorPageVideoRef = useRef<HTMLVideoElement | null>(null);
 
   // ── Store ──────────────────────────────────────────────────────────────────
   const project = useEditorStore((s) => s.project);
@@ -167,6 +169,12 @@ export default function App() {
       segments,
       sequenceFps: project.sequence.settings.fps
     };
+  });
+
+  // Sync colorPageVideoRef with the ViewerPanel's video element on every render
+  // so ScopeCanvas always reads from the live video element.
+  useEffect(() => {
+    colorPageVideoRef.current = viewerPanelRef.current?.getVideoRef() ?? null;
   });
 
   useEffect(() => {
@@ -703,10 +711,16 @@ export default function App() {
               <ColorGradingPanel
                 selectedSegment={inspectorSegment}
                 colorGrade={inspectorSegment?.clip.colorGrade ?? null}
-                videoRef={{ current: viewerPanelRef.current?.getVideoRef() ?? null }}
-                onEnableGrade={() => { if (selectedClipId) enableColorGrade(selectedClipId); }}
-                onUpdateGrade={(grade) => { if (selectedClipId) setColorGrade(selectedClipId, grade); }}
-                onResetGrade={() => { if (selectedClipId) resetColorGrade(selectedClipId); }}
+                videoRef={colorPageVideoRef}
+                onEnableGrade={() => {
+                  if (selectedClipId) enableColorGrade(selectedClipId);
+                }}
+                onUpdateGrade={(grade) => {
+                  if (selectedClipId) setColorGrade(selectedClipId, grade);
+                }}
+                onResetGrade={() => {
+                  if (selectedClipId) resetColorGrade(selectedClipId);
+                }}
               />
             </div>
 

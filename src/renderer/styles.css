@@ -1653,7 +1653,8 @@ kbd {
 }
 
 /* ── Section titles ── */
-.cgp-section-title {
+.cgp-section-title,
+.cgp-section-label {
   font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.16em;
@@ -1783,8 +1784,8 @@ kbd {
   grid-template-columns: 88px 1fr 42px 18px;
   align-items: center;
   gap: 6px;
-  padding: 3px 0;
-  min-height: 22px;
+  padding: 2px 0;
+  min-height: 26px;
 }
 
 .sr-label {
@@ -1795,28 +1796,54 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* sr-stack: flexible container used by SliderRow – NO overflow:hidden so thumb is always visible */
+.sr-stack {
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+/* sr-track: the dark background bar */
+.sr-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 3px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Legacy alias kept so any remaining sr-track-wrap references still render */
 .sr-track-wrap {
   position: relative;
-  height: 3px;
-  background: rgba(255,255,255,0.08);
-  border-radius: 2px;
-  overflow: hidden;
+  height: 20px;
+  display: flex;
+  align-items: center;
 }
 
 .sr-fill {
   position: absolute;
   left: 0;
-  top: 0;
-  height: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 3px;
   border-radius: 2px;
   pointer-events: none;
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 .sr-input {
-  position: absolute;
-  inset: -6px 0;
+  /* sits above track + fill, full click area, no clipping */
+  position: relative;
+  z-index: 1;
   width: 100%;
+  height: 20px;
   -webkit-appearance: none;
   appearance: none;
   background: transparent;

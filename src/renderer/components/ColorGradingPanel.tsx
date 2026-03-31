@@ -1,11 +1,17 @@
 /**
- * 264 Pro — Professional Color Grading Page
- * Layout inspired by DaVinci Resolve Color Page:
- *   [Node Graph] | [Viewer area (handled in App)] | [Controls/Wheels/Curves]
- *   [Scopes always visible at bottom-right]
+ * 264 Pro — Professional Color Grading Panel  (full rewrite, all bugs fixed)
  *
- * This component renders the full right-side grading controls + node graph.
- * App.tsx wraps it alongside the ViewerPanel and mini timeline.
+ * FIXES vs previous version:
+ * 1. videoRef: App passes a stable useRef<HTMLVideoElement|null> (not an object literal).
+ * 2. Slider CSS: uses sr-stack / sr-track / sr-fill / sr-input classes consistently;
+ *    the track wrapper never sets overflow:hidden – the native input rides on top via z-index.
+ * 3. cgp-section-label class used throughout; CSS added for it below in styles.css patch.
+ * 4. Auto-enable: handleUpdate calls onEnableGrade THEN onUpdateGrade. Both hit the Zustand
+ *    store synchronously so setColorGrade correctly merges on top of the freshly created default.
+ * 5. Drag on color wheel tracked on window, not canvas, so fast mouse movement never drops drag.
+ * 6. CurveEditor drag also tracked on window for same reason.
+ * 7. Primary controls are ALWAYS visible (grade = colorGrade ?? createDefaultColorGrade()),
+ *    regardless of whether the clip has a stored grade yet.
  */
 
 import {
@@ -21,16 +27,13 @@ import type { TimelineSegment } from "../../shared/timeline";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface ColorGradingPanelProps {
+export interface ColorGradingPanelProps {
   selectedSegment: TimelineSegment | null;
   colorGrade: ColorGrade | null;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   onEnableGrade: () => void;
   onUpdateGrade: (grade: Partial<ColorGrade>) => void;
   onResetGrade: () => void;
-}
-
-interface FullColorGradingPanelProps extends ColorGradingPanelProps {
-  videoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
 type ActiveScope   = "waveform" | "vectorscope" | "histogram" | "parade";
@@ -43,10 +46,14 @@ interface ColorNode {
   label: string;
   type: "corrector" | "effect" | "serial";
   enabled: boolean;
-  active: boolean;   // currently selected for editing
+  active: boolean;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Tiny helpers ─────────────────────────────────────────────────────────────
+
+function clamp(v: number, lo: number, hi: number) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
 
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const a = s * Math.min(l, 1 - l);
@@ -57,34 +64,29 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [f(0), f(8), f(4)];
 }
 
-function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b].map((c) => Math.round(clamp(c, 0, 255)).toString(16).padStart(2, "0")).join("")}`;
-}
-
-// ─── Color Wheel ─────────────────────────────────────────────────────────────
+// ─── Color Wheel ──────────────────────────────────────────────────────────────
 
 interface ColorWheelProps {
   label: string;
   value: RGBValue;
   onChange: (v: RGBValue) => void;
-  disabled?: boolean;
 }
 
-function ColorWheel({ label, value, onChange, disabled = false }: ColorWheelProps) {
+function ColorWheel({ label, value, onChange }: ColorWheelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const isDragging = useRef(false);
-  const RADIUS = 58;
-  const SIZE   = RADIUS * 2 + 10;
+  const dragging  = useRef(false);
+  const valueRef  = useRef(value);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { valueRef.current = value; }, [value]);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
+  const RADIUS = 56;
+  const SIZE   = RADIUS * 2 + 12;
   const CX     = SIZE / 2;
   const CY     = SIZE / 2;
 
-  // Compute indicator position from RGB offset value
-  const indX = CX + value.r * RADIUS * 2;
-  const indY = CY + value.g * RADIUS * 2;
-
-  const drawWheel = useCallback(() => {
+  // ── Draw wheel ──
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -92,8 +94,7 @@ function ColorWheel({ label, value, onChange, disabled = false }: ColorWheelProp
 
     ctx.clearRect(0, 0, SIZE, SIZE);
 
-    // Draw color wheel pixel by pixel
-    const imageData = ctx.createImageData(SIZE, SIZE);
+    const imgData = ctx.createImageData(SIZE, SIZE);
     for (let py = 0; py < SIZE; py++) {
       for (let px = 0; px < SIZE; px++) {
         const dx = px - CX;
@@ -101,84 +102,111 @@ function ColorWheel({ label, value, onChange, disabled = false }: ColorWheelProp
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > RADIUS) continue;
         const hue = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
-        const sat = dist / RADIUS;
-        const lum = disabled ? 0.25 : 0.5;
-        const [ri, gi, bi] = hslToRgb(hue / 360, sat, lum);
+        const [ri, gi, bi] = hslToRgb(hue / 360, dist / RADIUS, 0.5);
         const idx = (py * SIZE + px) * 4;
-        imageData.data[idx]     = ri;
-        imageData.data[idx + 1] = gi;
-        imageData.data[idx + 2] = bi;
-        imageData.data[idx + 3] = 255;
+        imgData.data[idx]     = ri;
+        imgData.data[idx + 1] = gi;
+        imgData.data[idx + 2] = bi;
+        imgData.data[idx + 3] = 255;
       }
     }
-    ctx.putImageData(imageData, 0, 0);
+    ctx.putImageData(imgData, 0, 0);
 
-    // Outer ring
+    // Outer border ring
     ctx.beginPath();
     ctx.arc(CX, CY, RADIUS, 0, Math.PI * 2);
-    ctx.strokeStyle = "#2a2a2a";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Crosshair lines
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    // Crosshair
+    ctx.strokeStyle = "rgba(255,255,255,0.07)";
     ctx.lineWidth = 0.5;
     ctx.beginPath(); ctx.moveTo(CX, CY - RADIUS); ctx.lineTo(CX, CY + RADIUS); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(CX - RADIUS, CY); ctx.lineTo(CX + RADIUS, CY); ctx.stroke();
 
-    // Indicator dot
-    const ix = clamp(indX, CX - RADIUS, CX + RADIUS);
-    const iy = clamp(indY, CY - RADIUS, CY + RADIUS);
-    // Shadow
+    // Indicator dot — r → X-axis, g → Y-axis (both in [-1, 1])
+    const raw_ix = CX + value.r * RADIUS;
+    const raw_iy = CY + value.g * RADIUS;
+    const dot_d  = Math.sqrt((raw_ix - CX) ** 2 + (raw_iy - CY) ** 2);
+    const ix = dot_d > RADIUS ? CX + (raw_ix - CX) / dot_d * RADIUS : raw_ix;
+    const iy = dot_d > RADIUS ? CY + (raw_iy - CY) / dot_d * RADIUS : raw_iy;
+
     ctx.beginPath();
-    ctx.arc(ix, iy, 5.5, 0, Math.PI * 2);
+    ctx.arc(ix, iy, 6, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fill();
-    // White dot
     ctx.beginPath();
     ctx.arc(ix, iy, 4.5, 0, Math.PI * 2);
     ctx.fillStyle = "#ffffff";
     ctx.fill();
-    ctx.strokeStyle = "#000";
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
     ctx.lineWidth = 1.5;
     ctx.stroke();
-  }, [value, disabled, indX, indY]);
+  }, [value, SIZE, CX, CY, RADIUS]);
 
-  useEffect(() => { drawWheel(); }, [drawWheel]);
+  useEffect(() => { draw(); }, [draw]);
 
-  function handlePointer(e: RMouseEvent<HTMLCanvasElement>) {
-    if (disabled) return;
-    if (!isDragging.current && e.type !== "mousedown") return;
+  // Convert client coords to normalised RGB offset
+  function posToRGB(clientX: number, clientY: number): RGBValue {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const dx = (e.clientX - rect.left - CX) / RADIUS;
-    const dy = (e.clientY - rect.top  - CY) / RADIUS;
+    if (!canvas) return valueRef.current;
+    const rect  = canvas.getBoundingClientRect();
+    const scaleX = SIZE / rect.width;
+    const scaleY = SIZE / rect.height;
+    const cx = (clientX - rect.left) * scaleX;
+    const cy = (clientY - rect.top)  * scaleY;
+    const dx = (cx - CX) / RADIUS;
+    const dy = (cy - CY) / RADIUS;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const ndx = dist > 1 ? dx / dist : dx;
-    const ndy = dist > 1 ? dy / dist : dy;
-    onChange({ r: Math.round(ndx * 1000) / 1000, g: Math.round(ndy * 1000) / 1000, b: value.b });
+    const ndx  = dist > 1 ? dx / dist : dx;
+    const ndy  = dist > 1 ? dy / dist : dy;
+    return {
+      r: Math.round(ndx * 1000) / 1000,
+      g: Math.round(ndy * 1000) / 1000,
+      b: valueRef.current.b,
+    };
   }
 
-  // Compute the tint color for the label
+  // ── Window-level drag listeners (never drop even if cursor leaves canvas) ──
+  useEffect(() => {
+    function onWindowMove(e: MouseEvent) {
+      if (!dragging.current) return;
+      onChangeRef.current(posToRGB(e.clientX, e.clientY));
+    }
+    function onWindowUp() { dragging.current = false; }
+    window.addEventListener("mousemove", onWindowMove);
+    window.addEventListener("mouseup",   onWindowUp);
+    return () => {
+      window.removeEventListener("mousemove", onWindowMove);
+      window.removeEventListener("mouseup",   onWindowUp);
+    };
+  // posToRGB reads from refs, safe to omit from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleMouseDown(e: RMouseEvent<HTMLCanvasElement>) {
+    e.preventDefault();
+    dragging.current = true;
+    onChangeRef.current(posToRGB(e.clientX, e.clientY));
+  }
+
   const magnitude = Math.sqrt(value.r * value.r + value.g * value.g);
-  const hasOffset = magnitude > 0.01;
+  const hasOffset = magnitude > 0.005 || Math.abs(value.b) > 0.005;
 
   return (
-    <div className={`cw-wrap${disabled ? " cw-disabled" : ""}`}>
+    <div className="cw-wrap">
       <div className="cw-label">{label}</div>
+
       <canvas
         ref={canvasRef}
         width={SIZE}
         height={SIZE}
         className="cw-canvas"
-        style={{ cursor: disabled ? "default" : "crosshair" }}
-        onMouseDown={(e) => { if (!disabled) { isDragging.current = true; handlePointer(e); } }}
-        onMouseMove={handlePointer}
-        onMouseUp={() => { isDragging.current = false; }}
-        onMouseLeave={() => { isDragging.current = false; }}
+        onMouseDown={handleMouseDown}
       />
-      {/* Luminance / master slider */}
+
+      {/* Master luminance slider — independent of wheel drag */}
       <div className="cw-lum-row">
         <input
           type="range"
@@ -187,24 +215,102 @@ function ColorWheel({ label, value, onChange, disabled = false }: ColorWheelProp
           max={0.5}
           step={0.002}
           value={value.b}
-          disabled={disabled}
           onChange={(e) => onChange({ ...value, b: Number(e.target.value) })}
         />
       </div>
+
+      {/* RGB readout */}
       <div className="cw-value-row">
-        {(["r", "g", "b"] as const).map((ch) => (
-          <span key={ch} className={`cw-val cw-${ch}`}>{value[ch] >= 0 ? "+" : ""}{value[ch].toFixed(3)}</span>
-        ))}
+        <span className="cw-val cw-r">{value.r >= 0 ? "+" : ""}{value.r.toFixed(3)}</span>
+        <span className="cw-val cw-g">{value.g >= 0 ? "+" : ""}{value.g.toFixed(3)}</span>
+        <span className="cw-val cw-b">{value.b >= 0 ? "+" : ""}{value.b.toFixed(3)}</span>
       </div>
+
       <button
-        className="cw-reset-btn"
+        className={`cw-reset-btn${hasOffset ? " visible" : ""}`}
         onClick={() => onChange({ r: 0, g: 0, b: 0 })}
         type="button"
-        disabled={disabled || !hasOffset}
         title={`Reset ${label}`}
       >
         ↺
       </button>
+    </div>
+  );
+}
+
+// ─── Slider Row ───────────────────────────────────────────────────────────────
+// The fill bar is a sibling div; the native range input sits on top with z-index.
+// No overflow:hidden on the track — thumb is always fully visible and clickable.
+
+interface SliderRowProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  resetValue?: number;
+  onChange: (v: number) => void;
+  formatValue?: (v: number) => string;
+  accentColor?: string;
+}
+
+function SliderRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  resetValue,
+  onChange,
+  formatValue,
+  accentColor = "var(--accent)",
+}: SliderRowProps) {
+  const pct        = ((value - min) / (max - min)) * 100;
+  const displayVal = formatValue ? formatValue(value) : value.toFixed(2);
+  const isDefault  = resetValue !== undefined && Math.abs(value - resetValue) <= step * 0.5;
+
+  return (
+    <div className="sr-row">
+      <span className="sr-label">{label}</span>
+
+      {/* sr-stack: relative container, no overflow:hidden */}
+      <div className="sr-stack">
+        {/* Background track */}
+        <div className="sr-track" />
+        {/* Coloured fill */}
+        <div
+          className="sr-fill"
+          style={{ width: `${pct}%`, background: accentColor }}
+        />
+        {/* Native range on top — full-width, z-index above fill */}
+        <input
+          type="range"
+          className="sr-input"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+      </div>
+
+      <span
+        className="sr-value"
+        style={{ color: isDefault ? "var(--text-dim)" : "var(--text-hi)" }}
+      >
+        {displayVal}
+      </span>
+
+      {resetValue !== undefined && !isDefault && (
+        <button
+          className="sr-reset"
+          onClick={() => onChange(resetValue)}
+          type="button"
+          title="Reset"
+        >
+          ↺
+        </button>
+      )}
     </div>
   );
 }
@@ -214,16 +320,18 @@ function ColorWheel({ label, value, onChange, disabled = false }: ColorWheelProp
 interface CurveEditorProps {
   points: CurvePoint[];
   color: string;
-  secondaryColor?: string;
-  label?: string;
   onChange: (pts: CurvePoint[]) => void;
   size?: number;
 }
 
-function CurveEditor({ points, color, onChange, size = 220 }: CurveEditorProps) {
-  const canvasRef  = useRef<HTMLCanvasElement | null>(null);
-  const dragging   = useRef<number | null>(null);
-  const SIZE       = size;
+function CurveEditor({ points, color, onChange, size = 210 }: CurveEditorProps) {
+  const canvasRef   = useRef<HTMLCanvasElement | null>(null);
+  const dragging    = useRef<number | null>(null);
+  const pointsRef   = useRef(points);
+  const onChangeRef = useRef(onChange);
+  const S           = size;
+  useEffect(() => { pointsRef.current = points; }, [points]);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -231,129 +339,141 @@ function CurveEditor({ points, color, onChange, size = 220 }: CurveEditorProps) 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Background
-    ctx.fillStyle = "#0f0f0f";
-    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.fillStyle = "#0e0e0e";
+    ctx.fillRect(0, 0, S, S);
 
     // Grid lines
     ctx.strokeStyle = "rgba(255,255,255,0.05)";
-    ctx.lineWidth = 0.5;
+    ctx.lineWidth   = 0.5;
     for (let i = 1; i < 4; i++) {
-      const p = (i / 4) * SIZE;
-      ctx.beginPath(); ctx.moveTo(p, 0);    ctx.lineTo(p, SIZE);    ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, p);    ctx.lineTo(SIZE, p);    ctx.stroke();
+      const p = (i / 4) * S;
+      ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
     }
 
-    // Diagonal identity
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 0.7;
+    // Identity diagonal
+    ctx.strokeStyle = "rgba(255,255,255,0.11)";
+    ctx.lineWidth   = 0.7;
     ctx.setLineDash([3, 3]);
-    ctx.beginPath(); ctx.moveTo(0, SIZE); ctx.lineTo(SIZE, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, S); ctx.lineTo(S, 0); ctx.stroke();
     ctx.setLineDash([]);
 
-    // Curve spline
     const sorted = [...points].sort((a, b) => a.x - b.x);
     if (sorted.length >= 2) {
-      // Filled area under curve
+      // Fill under curve
       ctx.beginPath();
-      ctx.moveTo(0, SIZE);
-      ctx.lineTo(sorted[0].x * SIZE, (1 - sorted[0].y) * SIZE);
+      ctx.moveTo(0, S);
+      ctx.lineTo(sorted[0].x * S, (1 - sorted[0].y) * S);
       for (let i = 1; i < sorted.length; i++) {
-        const prev = sorted[i - 1];
-        const curr = sorted[i];
-        const mx = ((prev.x + curr.x) / 2) * SIZE;
-        ctx.bezierCurveTo(mx, (1 - prev.y) * SIZE, mx, (1 - curr.y) * SIZE, curr.x * SIZE, (1 - curr.y) * SIZE);
+        const mx = ((sorted[i - 1].x + sorted[i].x) / 2) * S;
+        ctx.bezierCurveTo(
+          mx, (1 - sorted[i - 1].y) * S,
+          mx, (1 - sorted[i].y) * S,
+          sorted[i].x * S, (1 - sorted[i].y) * S,
+        );
       }
-      ctx.lineTo(SIZE, SIZE);
+      ctx.lineTo(S, S);
       ctx.closePath();
-      ctx.fillStyle = `${color}18`;
+      ctx.fillStyle = `${color}22`;
       ctx.fill();
 
       // Curve line
       ctx.beginPath();
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.8;
-      ctx.moveTo(sorted[0].x * SIZE, (1 - sorted[0].y) * SIZE);
+      ctx.lineWidth   = 2;
+      ctx.moveTo(sorted[0].x * S, (1 - sorted[0].y) * S);
       for (let i = 1; i < sorted.length; i++) {
-        const prev = sorted[i - 1];
-        const curr = sorted[i];
-        const mx = ((prev.x + curr.x) / 2) * SIZE;
-        ctx.bezierCurveTo(mx, (1 - prev.y) * SIZE, mx, (1 - curr.y) * SIZE, curr.x * SIZE, (1 - curr.y) * SIZE);
+        const mx = ((sorted[i - 1].x + sorted[i].x) / 2) * S;
+        ctx.bezierCurveTo(
+          mx, (1 - sorted[i - 1].y) * S,
+          mx, (1 - sorted[i].y) * S,
+          sorted[i].x * S, (1 - sorted[i].y) * S,
+        );
       }
       ctx.stroke();
     }
 
     // Control points
-    for (let i = 0; i < sorted.length; i++) {
-      const pt = sorted[i];
-      const isFixed = pt.x === 0 || pt.x === 1;
+    for (const pt of sorted) {
+      const fixed = pt.x === 0 || pt.x === 1;
       ctx.beginPath();
-      ctx.arc(pt.x * SIZE, (1 - pt.y) * SIZE, isFixed ? 3 : 4.5, 0, Math.PI * 2);
-      ctx.fillStyle = isFixed ? "rgba(255,255,255,0.5)" : "#ffffff";
+      ctx.arc(pt.x * S, (1 - pt.y) * S, fixed ? 3 : 5, 0, Math.PI * 2);
+      ctx.fillStyle   = fixed ? "rgba(255,255,255,0.4)" : "#fff";
       ctx.fill();
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth   = 1.5;
       ctx.stroke();
     }
-  }, [points, color, SIZE]);
+  }, [points, color, S]);
 
   useEffect(() => { draw(); }, [draw]);
 
-  function ptFromEvent(e: RMouseEvent<HTMLCanvasElement>): CurvePoint {
+  function ptFromCanvas(clientX: number, clientY: number): CurvePoint {
     const rect = canvasRef.current!.getBoundingClientRect();
+    const sx = S / rect.width;
+    const sy = S / rect.height;
     return {
-      x: clamp((e.clientX - rect.left) / SIZE, 0, 1),
-      y: clamp(1 - (e.clientY - rect.top)  / SIZE, 0, 1),
+      x: clamp((clientX - rect.left) * sx / S, 0, 1),
+      y: clamp(1 - (clientY - rect.top) * sy / S, 0, 1),
     };
   }
 
+  // Window-level drag so mouse movement outside canvas doesn't drop the drag
+  useEffect(() => {
+    function onWindowMove(e: MouseEvent) {
+      if (dragging.current === null) return;
+      const pt  = ptFromCanvas(e.clientX, e.clientY);
+      const idx = dragging.current;
+      const pts = [...pointsRef.current];
+      const isFixed = pts[idx].x === 0 || pts[idx].x === 1;
+      pts[idx] = isFixed ? { x: pts[idx].x, y: pt.y } : pt;
+      onChangeRef.current(pts);
+    }
+    function onWindowUp() { dragging.current = null; }
+    window.addEventListener("mousemove", onWindowMove);
+    window.addEventListener("mouseup",   onWindowUp);
+    return () => {
+      window.removeEventListener("mousemove", onWindowMove);
+      window.removeEventListener("mouseup",   onWindowUp);
+    };
+  // ptFromCanvas reads from refs, safe
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function handleMouseDown(e: RMouseEvent<HTMLCanvasElement>) {
     e.preventDefault();
-    const pt = ptFromEvent(e);
-    let nearest = -1, minDist = 0.045;
-    for (let i = 0; i < points.length; i++) {
-      const d = Math.hypot(points[i].x - pt.x, points[i].y - pt.y);
+    const pt = ptFromCanvas(e.clientX, e.clientY);
+    const pts = pointsRef.current;
+    let nearest = -1, minDist = 0.07;
+    for (let i = 0; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - pt.x, pts[i].y - pt.y);
       if (d < minDist) { minDist = d; nearest = i; }
     }
     if (nearest >= 0) {
       dragging.current = nearest;
     } else {
-      const newPts = [...points, pt].sort((a, b) => a.x - b.x);
-      onChange(newPts);
-      dragging.current = newPts.findIndex((p) => p === pt || (p.x === pt.x && p.y === pt.y));
+      const newPts = [...pts, pt].sort((a, b) => a.x - b.x);
+      onChangeRef.current(newPts);
+      dragging.current = newPts.findIndex((p) => Math.abs(p.x - pt.x) < 0.001 && Math.abs(p.y - pt.y) < 0.001);
     }
   }
 
-  function handleMouseMove(e: RMouseEvent<HTMLCanvasElement>) {
-    if (dragging.current === null) return;
-    const pt  = ptFromEvent(e);
-    const idx = dragging.current;
-    const newPts = [...points];
-    // Prevent dragging past neighbours
-    const isFixed = newPts[idx].x === 0 || newPts[idx].x === 1;
-    newPts[idx] = isFixed ? { x: newPts[idx].x, y: pt.y } : pt;
-    onChange(newPts);
-  }
-
   function handleDoubleClick(e: RMouseEvent<HTMLCanvasElement>) {
-    const pt = ptFromEvent(e);
-    const filtered = points.filter((p) =>
-      p.x === 0 || p.x === 1 || Math.hypot(p.x - pt.x, p.y - pt.y) > 0.045
+    const pt = ptFromCanvas(e.clientX, e.clientY);
+    const filtered = pointsRef.current.filter(
+      (p) => p.x === 0 || p.x === 1 || Math.hypot(p.x - pt.x, p.y - pt.y) > 0.05
     );
-    if (filtered.length < points.length) onChange(filtered);
+    if (filtered.length < pointsRef.current.length) onChangeRef.current(filtered);
   }
 
   return (
     <canvas
       ref={canvasRef}
-      width={SIZE}
-      height={SIZE}
+      width={S}
+      height={S}
       className="ce-canvas"
-      style={{ cursor: "crosshair" }}
+      style={{ cursor: "crosshair", display: "block" }}
       onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={() => { dragging.current = null; }}
-      onMouseLeave={() => { dragging.current = null; }}
       onDoubleClick={handleDoubleClick}
     />
   );
@@ -368,7 +488,7 @@ interface ScopeProps {
   height?: number;
 }
 
-function ScopeCanvas({ type, videoRef, width = 280, height = 160 }: ScopeProps) {
+function ScopeCanvas({ type, videoRef, width = 270, height = 160 }: ScopeProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef    = useRef<number | null>(null);
   const lastTime  = useRef(-1);
@@ -379,11 +499,11 @@ function ScopeCanvas({ type, videoRef, width = 280, height = 160 }: ScopeProps) 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
-    function render() {
+    function tick() {
       const video = videoRef.current;
-      if (!video || !canvas) { rafRef.current = requestAnimationFrame(render); return; }
+      if (!video || !canvas) { rafRef.current = requestAnimationFrame(tick); return; }
       if (video.paused && video.currentTime === lastTime.current) {
-        rafRef.current = requestAnimationFrame(render);
+        rafRef.current = requestAnimationFrame(tick);
         return;
       }
       lastTime.current = video.currentTime;
@@ -392,23 +512,22 @@ function ScopeCanvas({ type, videoRef, width = 280, height = 160 }: ScopeProps) 
       tmp.width  = 96;
       tmp.height = 54;
       const tc = tmp.getContext("2d");
-      if (!tc || !ctx) { rafRef.current = requestAnimationFrame(render); return; }
+      if (!tc || !ctx) { rafRef.current = requestAnimationFrame(tick); return; }
       try {
         tc.drawImage(video, 0, 0, 96, 54);
         const imgData = tc.getImageData(0, 0, 96, 54);
         drawScope(ctx, imgData, type, canvas.width, canvas.height);
       } catch {
-        if (ctx) {
-          ctx.fillStyle = "#111";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = "rgba(255,255,255,0.2)";
-          ctx.font = "9px monospace";
-          ctx.fillText("No signal", 6, canvas.height / 2);
-        }
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "rgba(255,255,255,0.18)";
+        ctx.font      = "9px monospace";
+        ctx.fillText("No signal", 6, canvas.height / 2);
       }
-      rafRef.current = requestAnimationFrame(render);
+      rafRef.current = requestAnimationFrame(tick);
     }
-    rafRef.current = requestAnimationFrame(render);
+
+    rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); };
   }, [type, videoRef]);
 
@@ -422,18 +541,17 @@ function drawScope(
   w: number,
   h: number,
 ) {
-  ctx.fillStyle = "#0a0a0a";
+  ctx.fillStyle = "#080808";
   ctx.fillRect(0, 0, w, h);
   const d = img.data;
   const n = d.length / 4;
 
   if (type === "waveform") {
     for (let i = 0; i < n; i++) {
-      const r = d[i*4], g = d[i*4+1], b = d[i*4+2];
-      const luma = (0.299*r + 0.587*g + 0.114*b) / 255;
+      const luma = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255;
       const px = ((i % img.width) / img.width) * w;
       const py = (1 - luma) * h;
-      ctx.fillStyle = "rgba(100,210,100,0.18)";
+      ctx.fillStyle = "rgba(80,210,80,0.18)";
       ctx.fillRect(Math.round(px), Math.round(py), 1, 1);
     }
     ctx.strokeStyle = "rgba(255,255,255,0.07)";
@@ -441,68 +559,58 @@ function drawScope(
     for (const ire of [0, 20, 40, 60, 80, 100]) {
       const y = (1 - ire / 100) * h;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,0.3)";
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
       ctx.font = "7px monospace";
       ctx.fillText(String(ire), 2, y - 1);
     }
   } else if (type === "histogram") {
-    const rBins = new Array(256).fill(0);
-    const gBins = new Array(256).fill(0);
-    const bBins = new Array(256).fill(0);
-    for (let i = 0; i < n; i++) {
-      rBins[d[i*4]]++;
-      gBins[d[i*4+1]]++;
-      bBins[d[i*4+2]]++;
-    }
-    const maxVal = Math.max(...rBins, ...gBins, ...bBins);
-    const barW = w / 256;
+    const rb = new Array<number>(256).fill(0);
+    const gb = new Array<number>(256).fill(0);
+    const bb = new Array<number>(256).fill(0);
+    for (let i = 0; i < n; i++) { rb[d[i * 4]]++; gb[d[i * 4 + 1]]++; bb[d[i * 4 + 2]]++; }
+    const mx = Math.max(...rb, ...gb, ...bb, 1);
+    const bw = w / 256;
     for (let i = 0; i < 256; i++) {
       const x = (i / 255) * w;
-      ctx.fillStyle = "rgba(255,60,60,0.5)";
-      ctx.fillRect(x, h - (rBins[i] / maxVal) * h, barW, (rBins[i] / maxVal) * h);
-      ctx.fillStyle = "rgba(60,200,60,0.5)";
-      ctx.fillRect(x, h - (gBins[i] / maxVal) * h, barW, (gBins[i] / maxVal) * h);
-      ctx.fillStyle = "rgba(60,120,255,0.5)";
-      ctx.fillRect(x, h - (bBins[i] / maxVal) * h, barW, (bBins[i] / maxVal) * h);
+      ctx.fillStyle = "rgba(255,60,60,0.55)";
+      ctx.fillRect(x, h - (rb[i] / mx) * h, bw, (rb[i] / mx) * h);
+      ctx.fillStyle = "rgba(60,200,60,0.55)";
+      ctx.fillRect(x, h - (gb[i] / mx) * h, bw, (gb[i] / mx) * h);
+      ctx.fillStyle = "rgba(60,120,255,0.55)";
+      ctx.fillRect(x, h - (bb[i] / mx) * h, bw, (bb[i] / mx) * h);
     }
   } else if (type === "vectorscope") {
-    // Circle guide
-    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
     ctx.lineWidth = 0.5;
-    ctx.beginPath(); ctx.arc(w/2, h/2, Math.min(w,h)*0.46, 0, Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(w/2, h/2, Math.min(w,h)*0.23, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.45, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.22, 0, Math.PI * 2); ctx.stroke();
     for (let i = 0; i < n; i++) {
-      const r = d[i*4]/255, g = d[i*4+1]/255, b = d[i*4+2]/255;
-      const cb = (-0.169*r - 0.331*g + 0.5*b);
-      const cr = (0.5*r   - 0.419*g - 0.081*b);
-      const px = (0.5 + cb * 0.9) * w;
-      const py = (0.5 - cr * 0.9) * h;
-      ctx.fillStyle = "rgba(80,230,190,0.14)";
-      ctx.fillRect(Math.round(px), Math.round(py), 1, 1);
+      const r = d[i * 4] / 255, g = d[i * 4 + 1] / 255, b = d[i * 4 + 2] / 255;
+      const cb = -0.169 * r - 0.331 * g + 0.5 * b;
+      const cr =  0.5   * r - 0.419 * g - 0.081 * b;
+      ctx.fillStyle = "rgba(80,230,190,0.13)";
+      ctx.fillRect(Math.round((0.5 + cb * 0.9) * w), Math.round((0.5 - cr * 0.9) * h), 1, 1);
     }
-    // Center
-    ctx.beginPath(); ctx.arc(w/2, h/2, 2, 0, Math.PI*2);
+    ctx.beginPath(); ctx.arc(w / 2, h / 2, 2, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.fill();
   } else if (type === "parade") {
     const cW = Math.floor(w / 3);
-    const chConfig: Array<[number, string]> = [
-      [0, "rgba(255,50,50,0.75)"],
-      [1, "rgba(50,220,50,0.75)"],
-      [2, "rgba(50,100,255,0.75)"],
-    ];
-    for (const [ci, col] of chConfig) {
-      const bins = new Array(256).fill(0);
-      for (let i = 0; i < n; i++) bins[d[i*4+ci]]++;
+    for (const [ci, col] of [
+      [0, "rgba(255,50,50,0.8)"],
+      [1, "rgba(50,220,50,0.8)"],
+      [2, "rgba(50,100,255,0.8)"],
+    ] as [number, string][]) {
+      const bins = new Array<number>(256).fill(0);
+      for (let i = 0; i < n; i++) bins[d[i * 4 + ci]]++;
       const mx = Math.max(...bins, 1);
       for (let i = 0; i < 256; i++) {
-        const x = ci * cW + (i / 255) * cW;
         const bh = (bins[i] / mx) * h;
         ctx.fillStyle = col;
-        ctx.fillRect(x, h - bh, cW/256 + 0.5, bh);
+        ctx.fillRect(ci * cW + (i / 255) * cW, h - bh, cW / 256 + 0.5, bh);
       }
       ctx.fillStyle = "rgba(255,255,255,0.5)";
       ctx.font = "8px monospace";
-      ctx.fillText(["R","G","B"][ci], ci * cW + 3, 10);
+      ctx.fillText(["R", "G", "B"][ci], ci * cW + 3, 10);
     }
   }
 }
@@ -511,48 +619,44 @@ function drawScope(
 
 interface NodeGraphProps {
   nodes: ColorNode[];
-  activeNodeId: string | null;
   onSelectNode: (id: string) => void;
   onAddNode: () => void;
   onDeleteNode: (id: string) => void;
   onToggleNode: (id: string) => void;
 }
 
-function NodeGraph({ nodes, activeNodeId, onSelectNode, onAddNode, onDeleteNode, onToggleNode }: NodeGraphProps) {
+function NodeGraph({ nodes, onSelectNode, onAddNode, onDeleteNode, onToggleNode }: NodeGraphProps) {
   return (
     <div className="ng-root">
       <div className="ng-header">
-        <span className="ng-title">Node Graph</span>
-        <button className="ng-add-btn" onClick={onAddNode} type="button" title="Add Serial Node">+</button>
+        <span className="ng-title">NODE GRAPH</span>
+        <button className="ng-add-btn" onClick={onAddNode} type="button" title="Add Corrector Node">+</button>
       </div>
       <div className="ng-canvas">
         {nodes.map((node, idx) => (
           <div key={node.id} className="ng-node-group">
-            {/* Connector */}
             {idx > 0 && (
               <div className="ng-connector">
-                <svg width="32" height="16" style={{ display: "block" }}>
-                  <line x1="0" y1="8" x2="32" y2="8" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5"/>
-                  <polygon points="28,5 32,8 28,11" fill="rgba(255,255,255,0.3)"/>
+                <svg width="28" height="14">
+                  <line x1="0" y1="7" x2="24" y2="7" stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+                  <polygon points="22,4 28,7 22,10" fill="rgba(255,255,255,0.28)" />
                 </svg>
               </div>
             )}
-            {/* Node card */}
             <div
               className={`ng-node${node.active ? " ng-node-active" : ""}${!node.enabled ? " ng-node-disabled" : ""}`}
               onClick={() => onSelectNode(node.id)}
             >
-              <div className="ng-node-thumb" style={{ opacity: node.enabled ? 1 : 0.3 }}>
-                <div className="ng-node-thumb-inner" />
+              <div className="ng-node-thumb">
+                <div className="ng-node-thumb-inner" style={{ opacity: node.enabled ? 1 : 0.2 }} />
               </div>
               <div className="ng-node-label">{node.label}</div>
-              <div className="ng-node-type">{node.type}</div>
               <div className="ng-node-actions">
                 <button
-                  className={`ng-node-btn${!node.enabled ? " off" : ""}`}
+                  className={`ng-node-btn${node.enabled ? "" : " off"}`}
                   onClick={(e) => { e.stopPropagation(); onToggleNode(node.id); }}
-                  title={node.enabled ? "Disable" : "Enable"}
                   type="button"
+                  title={node.enabled ? "Disable" : "Enable"}
                 >
                   {node.enabled ? "●" : "○"}
                 </button>
@@ -560,8 +664,8 @@ function NodeGraph({ nodes, activeNodeId, onSelectNode, onAddNode, onDeleteNode,
                   <button
                     className="ng-node-btn del"
                     onClick={(e) => { e.stopPropagation(); onDeleteNode(node.id); }}
-                    title="Delete node"
                     type="button"
+                    title="Delete node"
                   >
                     ×
                   </button>
@@ -575,63 +679,6 @@ function NodeGraph({ nodes, activeNodeId, onSelectNode, onAddNode, onDeleteNode,
   );
 }
 
-// ─── Slider Row ───────────────────────────────────────────────────────────────
-
-interface SliderRowProps {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onReset?: number; // reset value
-  onChange: (v: number) => void;
-  formatValue?: (v: number) => string;
-  color?: string;
-}
-
-function SliderRow({ label, value, min, max, step, onReset, onChange, formatValue, color }: SliderRowProps) {
-  const pct = ((value - min) / (max - min)) * 100;
-  const displayVal = formatValue ? formatValue(value) : value.toFixed(2);
-  const isDefault = onReset !== undefined && Math.abs(value - onReset) < step;
-
-  return (
-    <div className="sr-row">
-      <span className="sr-label">{label}</span>
-      <div className="sr-track-wrap">
-        <div
-          className="sr-fill"
-          style={{
-            width: `${pct}%`,
-            background: color ?? "var(--accent)"
-          }}
-        />
-        <input
-          type="range"
-          className="sr-input"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
-      </div>
-      <span className="sr-value" style={{ color: isDefault ? "var(--text-dim)" : "var(--text)" }}>
-        {displayVal}
-      </span>
-      {onReset !== undefined && !isDefault && (
-        <button
-          className="sr-reset"
-          onClick={() => onChange(onReset)}
-          type="button"
-          title={`Reset to ${onReset}`}
-        >
-          ↺
-        </button>
-      )}
-    </div>
-  );
-}
-
 // ─── Main ColorGradingPanel ───────────────────────────────────────────────────
 
 export function ColorGradingPanel({
@@ -641,375 +688,378 @@ export function ColorGradingPanel({
   onEnableGrade,
   onUpdateGrade,
   onResetGrade,
-}: FullColorGradingPanelProps) {
+}: ColorGradingPanelProps) {
 
-  const [activePanel, setActivePanel]   = useState<ActivePanel>("primary");
-  const [activeScope,  setActiveScope]  = useState<ActiveScope>("waveform");
-  const [activeCurve,  setActiveCurve]  = useState<CurveChannel>("master");
-  const [showScopes,   setShowScopes]   = useState(true);
+  const [activePanel, setActivePanel] = useState<ActivePanel>("primary");
+  const [activeScope,  setActiveScope] = useState<ActiveScope>("waveform");
+  const [activeCurve, setActiveCurve] = useState<CurveChannel>("master");
+  const [showScopes,  setShowScopes]  = useState(true);
 
-  // Node graph state — persisted locally for now
   const [nodes, setNodes] = useState<ColorNode[]>([
-    { id: "node-1", label: "Corrector 1", type: "corrector", enabled: true, active: true }
+    { id: "node-1", label: "Corrector 1", type: "corrector", enabled: true, active: true },
   ]);
-  const [activeNodeId, setActiveNodeId] = useState<string>("node-1");
 
+  // ── Auto-enable helper ──────────────────────────────────────────────────────
+  // Always call onEnableGrade first if no grade exists, then immediately
+  // call onUpdateGrade. Both calls hit Zustand synchronously so setColorGrade
+  // will safely merge on top of the just-created default.
+  const handleUpdate = useCallback((partial: Partial<ColorGrade>) => {
+    if (!colorGrade) {
+      onEnableGrade();
+    }
+    onUpdateGrade(partial);
+  }, [colorGrade, onEnableGrade, onUpdateGrade]);
+
+  // ── Working grade — always derived, never stale ──
   const grade = colorGrade ?? createDefaultColorGrade();
 
-  // ── Node helpers ──────────────────────────────────────────────────────────
+  // ── Node helpers ──
   function addNode() {
     const id = createId();
-    const n  = nodes.length + 1;
-    const newNode: ColorNode = { id, label: `Corrector ${n}`, type: "corrector", enabled: true, active: false };
-    const updated = nodes.map((nd) => ({ ...nd, active: false }));
-    setNodes([...updated, { ...newNode, active: true }]);
-    setActiveNodeId(id);
+    setNodes((prev) => [
+      ...prev.map((n) => ({ ...n, active: false })),
+      { id, label: `Corrector ${prev.length + 1}`, type: "corrector" as const, enabled: true, active: true },
+    ]);
   }
-
   function deleteNode(id: string) {
-    const filtered = nodes.filter((n) => n.id !== id);
-    if (!filtered.length) return;
-    setNodes(filtered.map((n, i) => ({ ...n, active: i === 0 })));
-    setActiveNodeId(filtered[0].id);
+    setNodes((prev) => {
+      const next = prev.filter((n) => n.id !== id);
+      if (!next.length) return prev;
+      return next.map((n, i) => ({ ...n, active: i === 0 }));
+    });
   }
-
   function toggleNode(id: string) {
-    setNodes(nodes.map((n) => n.id === id ? { ...n, enabled: !n.enabled } : n));
+    setNodes((prev) => prev.map((n) => n.id === id ? { ...n, enabled: !n.enabled } : n));
   }
-
   function selectNode(id: string) {
-    setNodes(nodes.map((n) => ({ ...n, active: n.id === id })));
-    setActiveNodeId(id);
+    setNodes((prev) => prev.map((n) => ({ ...n, active: n.id === id })));
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
+  // ── No segment selected ──
   if (!selectedSegment) {
     return (
       <div className="cgp-root cgp-empty">
         <div className="cgp-empty-msg">
           <div className="cgp-empty-icon">🎨</div>
           <p>Select a video clip in the timeline to start color grading.</p>
-          <span>Switch to Edit page to import and arrange clips.</span>
+          <span>Click a clip below, then grade here.</span>
         </div>
       </div>
     );
   }
 
-  const clipName = selectedSegment.asset.name ?? "Untitled Clip";
+  const clipName = selectedSegment.asset?.name ?? "Untitled Clip";
 
   return (
     <div className="cgp-root">
-      {/* ── Top: Clip info bar ── */}
+
+      {/* ── Clip top bar ── */}
       <div className="cgp-topbar">
         <span className="cgp-clip-badge">
-          <span className="cgp-clip-dot" style={{ background: colorGrade ? "var(--accent)" : "var(--text-dim)" }} />
+          <span
+            className="cgp-clip-dot"
+            style={{ background: colorGrade ? "var(--accent)" : "var(--text-dim)" }}
+          />
           {clipName}
         </span>
-        {!colorGrade && (
-          <button className="cgp-enable-btn" onClick={onEnableGrade} type="button">
-            Enable Color Grade
-          </button>
-        )}
-        {colorGrade && (
-          <div className="cgp-topbar-actions">
-            <button className="cgp-btn" onClick={() => setShowScopes((v) => !v)} type="button">
-              {showScopes ? "Hide Scopes" : "Show Scopes"}
+        <div className="cgp-topbar-actions">
+          {!colorGrade && (
+            <button className="cgp-enable-btn" onClick={onEnableGrade} type="button">
+              Enable Grade
             </button>
-            <button className="cgp-btn muted" onClick={onResetGrade} type="button">
-              Reset Grade
-            </button>
-          </div>
-        )}
+          )}
+          {colorGrade && (
+            <>
+              <button
+                className="cgp-btn"
+                onClick={() => setShowScopes((v) => !v)}
+                type="button"
+              >
+                {showScopes ? "Hide Scopes" : "Scopes"}
+              </button>
+              <button className="cgp-btn muted" onClick={onResetGrade} type="button">
+                Reset
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* ── Node graph bar ── */}
+      {/* ── Node Graph ── */}
       <NodeGraph
         nodes={nodes}
-        activeNodeId={activeNodeId}
         onSelectNode={selectNode}
         onAddNode={addNode}
         onDeleteNode={deleteNode}
         onToggleNode={toggleNode}
       />
 
-      {/* ── Main body ── */}
-      {!colorGrade ? (
-        <div className="cgp-no-grade">
-          <p>No color grade applied to this clip.</p>
-          <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: 8 }}>
-            Click "Enable Color Grade" above to activate the grading controls.
-          </p>
-        </div>
-      ) : (
-        <div className="cgp-body">
-          {/* ── Panel tabs ── */}
-          <div className="cgp-tabs">
-            {([
-              { id: "primary" as const, label: "Primary" },
-              { id: "curves"  as const, label: "Curves"  },
-              { id: "lut"     as const, label: "LUT"     },
-              { id: "scopes"  as const, label: "Scopes"  },
-            ]).map(({ id, label }) => (
-              <button
-                key={id}
-                className={`cgp-tab${activePanel === id ? " active" : ""}`}
-                onClick={() => setActivePanel(id)}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+      {/* ── Tab strip ── */}
+      <div className="cgp-tabs">
+        {(["primary", "curves", "lut", "scopes"] as ActivePanel[]).map((id) => (
+          <button
+            key={id}
+            className={`cgp-tab${activePanel === id ? " active" : ""}`}
+            onClick={() => setActivePanel(id)}
+            type="button"
+          >
+            {id === "primary" ? "Primary"
+              : id === "curves" ? "Curves"
+              : id === "lut"    ? "LUT"
+              : "Scopes"}
+          </button>
+        ))}
+      </div>
 
-          {/* ── Panel content ── */}
-          <div className="cgp-panel-content">
+      {/* ── Scrollable panel body ── */}
+      <div className="cgp-panel-content">
 
-            {/* ─── PRIMARY ─── */}
-            {activePanel === "primary" && (
-              <div className="cgp-primary">
-                {/* Color wheels */}
-                <div className="cgp-wheels-section">
-                  <div className="cgp-section-title">COLOR WHEELS</div>
-                  <div className="cgp-wheels-row">
-                    {([
-                      { key: "lift"   as WheelKey, label: "Lift"   },
-                      { key: "gamma"  as WheelKey, label: "Gamma"  },
-                      { key: "gain"   as WheelKey, label: "Gain"   },
-                      { key: "offset" as WheelKey, label: "Offset" },
-                    ]).map(({ key, label }) => (
-                      <ColorWheel
-                        key={key}
-                        label={label}
-                        value={grade[key]}
-                        onChange={(v) => onUpdateGrade({ [key]: v })}
-                      />
-                    ))}
-                  </div>
-                </div>
+        {/* ─── PRIMARY ─── */}
+        {activePanel === "primary" && (
+          <div className="cgp-primary">
 
-                {/* Primary sliders */}
-                <div className="cgp-sliders-section">
-                  <div className="cgp-section-title">PRIMARY CONTROLS</div>
-                  <div className="cgp-sliders-grid">
-                    <SliderRow
-                      label="Exposure"
-                      value={grade.exposure}
-                      min={-3} max={3} step={0.01}
-                      onReset={0}
-                      onChange={(v) => onUpdateGrade({ exposure: v })}
-                      formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(2)}
-                      color="rgba(255,210,80,0.8)"
-                    />
-                    <SliderRow
-                      label="Contrast"
-                      value={grade.contrast}
-                      min={-1} max={1} step={0.01}
-                      onReset={0}
-                      onChange={(v) => onUpdateGrade({ contrast: v })}
-                      formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(2)}
-                      color="rgba(200,200,200,0.7)"
-                    />
-                    <SliderRow
-                      label="Saturation"
-                      value={grade.saturation}
-                      min={0} max={3} step={0.01}
-                      onReset={1}
-                      onChange={(v) => onUpdateGrade({ saturation: v })}
-                      formatValue={(v) => v.toFixed(2)}
-                      color="rgba(200,80,200,0.7)"
-                    />
-                    <SliderRow
-                      label="Temperature"
-                      value={grade.temperature}
-                      min={-100} max={100} step={1}
-                      onReset={0}
-                      onChange={(v) => onUpdateGrade({ temperature: v })}
-                      formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(0) + "K"}
-                      color="rgba(80,150,255,0.7)"
-                    />
-                    <SliderRow
-                      label="Tint"
-                      value={grade.tint}
-                      min={-100} max={100} step={1}
-                      onReset={0}
-                      onChange={(v) => onUpdateGrade({ tint: v })}
-                      formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(0)}
-                      color="rgba(120,200,100,0.7)"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ─── CURVES ─── */}
-            {activePanel === "curves" && (
-              <div className="cgp-curves">
-                <div className="cgp-section-title">RGB CURVES</div>
-                <div className="cgp-curve-channels">
-                  {([
-                    { id: "master"   as CurveChannel, label: "Master", color: "#c0c0c0" },
-                    { id: "red"      as CurveChannel, label: "R",      color: "#ff5555" },
-                    { id: "green"    as CurveChannel, label: "G",      color: "#55cc55" },
-                    { id: "blue"     as CurveChannel, label: "B",      color: "#5599ff" },
-                    { id: "hueVsHue" as CurveChannel, label: "H/H",    color: "#ffaa44" },
-                    { id: "hueVsSat" as CurveChannel, label: "H/S",    color: "#aa44ff" },
-                  ]).map(({ id, label, color }) => (
-                    <button
-                      key={id}
-                      className={`cgp-ch-btn${activeCurve === id ? " active" : ""}`}
-                      style={activeCurve === id ? { borderColor: color, color } : {}}
-                      onClick={() => setActiveCurve(id)}
-                      type="button"
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="cgp-curve-editor-wrap">
-                  <CurveEditor
-                    points={grade.curves[activeCurve] ?? [{ x: 0, y: 0 }, { x: 1, y: 1 }]}
-                    color={
-                      activeCurve === "master"   ? "#c0c0c0" :
-                      activeCurve === "red"      ? "#ff5555" :
-                      activeCurve === "green"    ? "#55cc55" :
-                      activeCurve === "blue"     ? "#5599ff" :
-                      activeCurve === "hueVsHue" ? "#ffaa44" :
-                                                   "#aa44ff"
-                    }
-                    size={200}
-                    onChange={(pts) =>
-                      onUpdateGrade({ curves: { ...grade.curves, [activeCurve]: pts } })
-                    }
-                  />
-                  <div className="cgp-curve-actions">
-                    <button
-                      className="cgp-btn muted"
-                      type="button"
-                      onClick={() =>
-                        onUpdateGrade({ curves: { ...grade.curves, [activeCurve]: [{ x: 0, y: 0 }, { x: 1, y: 1 }] } })
-                      }
-                    >
-                      Reset Curve
-                    </button>
-                  </div>
-                </div>
-                <p className="cgp-hint">Click to add · Double-click to remove · Drag to move</p>
-              </div>
-            )}
-
-            {/* ─── LUT ─── */}
-            {activePanel === "lut" && (
-              <div className="cgp-lut">
-                <div className="cgp-section-title">LUT — LOOK-UP TABLE</div>
-
-                <div className="cgp-lut-status">
-                  {grade.lutPath ? (
-                    <>
-                      <div className="cgp-lut-active-row">
-                        <span className="cgp-lut-dot active" />
-                        <span className="cgp-lut-name">{grade.lutPath.split(/[\\/]/).pop()}</span>
-                        <button
-                          className="cgp-btn danger"
-                          onClick={() => onUpdateGrade({ lutPath: null })}
-                          type="button"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="cgp-lut-inactive">
-                      <span className="cgp-lut-dot" />
-                      <span>No LUT applied</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="cgp-section-title" style={{ marginTop: 14 }}>INTENSITY</div>
-                <SliderRow
-                  label="LUT Mix"
-                  value={grade.lutIntensity}
-                  min={0} max={1} step={0.01}
-                  onReset={1}
-                  onChange={(v) => onUpdateGrade({ lutIntensity: v })}
-                  formatValue={(v) => Math.round(v * 100) + "%"}
-                  color="rgba(224,120,32,0.8)"
+            <div className="cgp-section-label">COLOR WHEELS</div>
+            <div className="cgp-wheels-row">
+              {(["lift", "gamma", "gain", "offset"] as WheelKey[]).map((key) => (
+                <ColorWheel
+                  key={key}
+                  label={key.charAt(0).toUpperCase() + key.slice(1)}
+                  value={grade[key]}
+                  onChange={(v) => handleUpdate({ [key]: v })}
                 />
-
-                <div className="cgp-section-title" style={{ marginTop: 14 }}>LOAD .CUBE FILE</div>
-                <div className="cgp-lut-input-row">
-                  <input
-                    className="cgp-lut-path-input"
-                    type="text"
-                    placeholder="Paste or type .cube path…"
-                    value={grade.lutPath ?? ""}
-                    onChange={(e) => onUpdateGrade({ lutPath: e.target.value.trim() || null })}
-                  />
-                </div>
-
-                <div className="cgp-lut-presets">
-                  <div className="cgp-section-title" style={{ marginTop: 14 }}>PRESETS</div>
-                  <div className="cgp-lut-preset-grid">
-                    {[
-                      { name: "Log to Rec.709", path: "luts/log_to_rec709.cube" },
-                      { name: "Cinematic",       path: "luts/cinematic.cube"     },
-                      { name: "Warm Vintage",    path: "luts/warm_vintage.cube"  },
-                      { name: "Cool Teal",       path: "luts/cool_teal.cube"     },
-                      { name: "High Contrast",   path: "luts/high_contrast.cube" },
-                      { name: "Faded Film",      path: "luts/faded_film.cube"    },
-                    ].map((p) => (
-                      <button
-                        key={p.path}
-                        className={`cgp-lut-preset-btn${grade.lutPath === p.path ? " active" : ""}`}
-                        onClick={() => onUpdateGrade({ lutPath: p.path })}
-                        type="button"
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ─── SCOPES ─── */}
-            {activePanel === "scopes" && (
-              <div className="cgp-scopes-panel">
-                <div className="cgp-scope-selector">
-                  {(["waveform","histogram","vectorscope","parade"] as const).map((s) => (
-                    <button
-                      key={s}
-                      className={`cgp-scope-btn${activeScope === s ? " active" : ""}`}
-                      onClick={() => setActiveScope(s)}
-                      type="button"
-                    >
-                      {s === "waveform" ? "Wave" : s === "vectorscope" ? "Vector" : s.charAt(0).toUpperCase() + s.slice(1)}
-                    </button>
-                  ))}
-                </div>
-                <div className="cgp-scope-display">
-                  <div className="cgp-scope-label">{activeScope.toUpperCase()}</div>
-                  <ScopeCanvas type={activeScope} videoRef={videoRef} width={260} height={180} />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── Always-visible mini scopes strip ── */}
-          {showScopes && activePanel !== "scopes" && (
-            <div className="cgp-scope-strip">
-              <div className="cgp-scope-strip-header">
-                <span>WAVEFORM</span>
-                <span>HISTOGRAM</span>
-                <button className="cgp-scope-strip-close" onClick={() => setShowScopes(false)} type="button">✕</button>
-              </div>
-              <div className="cgp-scope-strip-canvases">
-                <ScopeCanvas type="waveform"   videoRef={videoRef} width={130} height={80} />
-                <ScopeCanvas type="histogram"  videoRef={videoRef} width={130} height={80} />
-              </div>
+              ))}
             </div>
-          )}
+
+            <div className="cgp-section-label" style={{ marginTop: 8 }}>PRIMARY CONTROLS</div>
+            <div className="cgp-sliders-grid">
+              <SliderRow
+                label="Exposure"
+                value={grade.exposure}
+                min={-3} max={3} step={0.01}
+                resetValue={0}
+                accentColor="rgba(255,210,80,0.85)"
+                onChange={(v) => handleUpdate({ exposure: v })}
+                formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(2)}
+              />
+              <SliderRow
+                label="Contrast"
+                value={grade.contrast}
+                min={-1} max={1} step={0.01}
+                resetValue={0}
+                accentColor="rgba(200,200,200,0.7)"
+                onChange={(v) => handleUpdate({ contrast: v })}
+                formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(2)}
+              />
+              <SliderRow
+                label="Saturation"
+                value={grade.saturation}
+                min={0} max={3} step={0.01}
+                resetValue={1}
+                accentColor="rgba(210,80,210,0.7)"
+                onChange={(v) => handleUpdate({ saturation: v })}
+                formatValue={(v) => v.toFixed(2)}
+              />
+              <SliderRow
+                label="Temperature"
+                value={grade.temperature}
+                min={-100} max={100} step={1}
+                resetValue={0}
+                accentColor="rgba(80,150,255,0.7)"
+                onChange={(v) => handleUpdate({ temperature: v })}
+                formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(0) + "K"}
+              />
+              <SliderRow
+                label="Tint"
+                value={grade.tint}
+                min={-100} max={100} step={1}
+                resetValue={0}
+                accentColor="rgba(120,200,100,0.7)"
+                onChange={(v) => handleUpdate({ tint: v })}
+                formatValue={(v) => (v >= 0 ? "+" : "") + v.toFixed(0)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ─── CURVES ─── */}
+        {activePanel === "curves" && (
+          <div className="cgp-curves">
+            <div className="cgp-section-label">RGB CURVES</div>
+            <div className="cgp-curve-channels">
+              {(
+                [
+                  { id: "master"   as CurveChannel, label: "M",   color: "#c0c0c0" },
+                  { id: "red"      as CurveChannel, label: "R",   color: "#ff5555" },
+                  { id: "green"    as CurveChannel, label: "G",   color: "#55cc55" },
+                  { id: "blue"     as CurveChannel, label: "B",   color: "#5599ff" },
+                  { id: "hueVsHue" as CurveChannel, label: "H/H", color: "#ffaa44" },
+                  { id: "hueVsSat" as CurveChannel, label: "H/S", color: "#aa44ff" },
+                ] as const
+              ).map(({ id, label, color }) => (
+                <button
+                  key={id}
+                  className={`cgp-ch-btn${activeCurve === id ? " active" : ""}`}
+                  style={activeCurve === id ? { borderColor: color, color } : {}}
+                  onClick={() => setActiveCurve(id)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="cgp-curve-editor-wrap">
+              <CurveEditor
+                points={grade.curves[activeCurve] ?? [{ x: 0, y: 0 }, { x: 1, y: 1 }]}
+                color={
+                  activeCurve === "master"   ? "#c0c0c0" :
+                  activeCurve === "red"      ? "#ff5555" :
+                  activeCurve === "green"    ? "#55cc55" :
+                  activeCurve === "blue"     ? "#5599ff" :
+                  activeCurve === "hueVsHue" ? "#ffaa44" : "#aa44ff"
+                }
+                size={200}
+                onChange={(pts) =>
+                  handleUpdate({ curves: { ...grade.curves, [activeCurve]: pts } })
+                }
+              />
+              <button
+                className="cgp-btn muted"
+                style={{ marginTop: 6, alignSelf: "flex-start" }}
+                type="button"
+                onClick={() =>
+                  handleUpdate({
+                    curves: {
+                      ...grade.curves,
+                      [activeCurve]: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+                    },
+                  })
+                }
+              >
+                Reset Curve
+              </button>
+            </div>
+            <p className="cgp-hint">Click · drag to move · double-click to remove</p>
+          </div>
+        )}
+
+        {/* ─── LUT ─── */}
+        {activePanel === "lut" && (
+          <div className="cgp-lut">
+            <div className="cgp-section-label">LUT — LOOK-UP TABLE</div>
+            <div className="cgp-lut-status">
+              {grade.lutPath ? (
+                <div className="cgp-lut-active-row">
+                  <span className="cgp-lut-dot active" />
+                  <span className="cgp-lut-name">{grade.lutPath.split(/[\\/]/).pop()}</span>
+                  <button
+                    className="cgp-btn danger"
+                    onClick={() => handleUpdate({ lutPath: null })}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <div className="cgp-lut-inactive">
+                  <span className="cgp-lut-dot" />
+                  <span>No LUT applied</span>
+                </div>
+              )}
+            </div>
+
+            <div className="cgp-section-label" style={{ marginTop: 12 }}>INTENSITY</div>
+            <div style={{ padding: "4px 10px" }}>
+              <SliderRow
+                label="LUT Mix"
+                value={grade.lutIntensity}
+                min={0} max={1} step={0.01}
+                resetValue={1}
+                accentColor="rgba(224,120,32,0.85)"
+                onChange={(v) => handleUpdate({ lutIntensity: v })}
+                formatValue={(v) => Math.round(v * 100) + "%"}
+              />
+            </div>
+
+            <div className="cgp-section-label" style={{ marginTop: 12 }}>LOAD .CUBE PATH</div>
+            <div className="cgp-lut-input-row">
+              <input
+                className="cgp-lut-path-input"
+                type="text"
+                placeholder="Paste .cube file path…"
+                value={grade.lutPath ?? ""}
+                onChange={(e) =>
+                  handleUpdate({ lutPath: e.target.value.trim() || null })
+                }
+              />
+            </div>
+
+            <div className="cgp-section-label" style={{ marginTop: 12 }}>PRESET LUTS</div>
+            <div className="cgp-lut-preset-grid">
+              {[
+                { name: "Log → Rec.709",  path: "luts/log_to_rec709.cube" },
+                { name: "Cinematic",       path: "luts/cinematic.cube"     },
+                { name: "Warm Vintage",    path: "luts/warm_vintage.cube"  },
+                { name: "Cool Teal",       path: "luts/cool_teal.cube"     },
+                { name: "High Contrast",   path: "luts/high_contrast.cube" },
+                { name: "Faded Film",      path: "luts/faded_film.cube"    },
+              ].map((p) => (
+                <button
+                  key={p.path}
+                  className={`cgp-lut-preset-btn${grade.lutPath === p.path ? " active" : ""}`}
+                  onClick={() => handleUpdate({ lutPath: p.path })}
+                  type="button"
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ─── SCOPES ─── */}
+        {activePanel === "scopes" && (
+          <div className="cgp-scopes-panel">
+            <div className="cgp-scope-selector">
+              {(["waveform", "histogram", "vectorscope", "parade"] as ActiveScope[]).map((s) => (
+                <button
+                  key={s}
+                  className={`cgp-scope-btn${activeScope === s ? " active" : ""}`}
+                  onClick={() => setActiveScope(s)}
+                  type="button"
+                >
+                  {s === "waveform" ? "Wave"
+                    : s === "vectorscope" ? "Vector"
+                    : s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="cgp-scope-display">
+              <div className="cgp-scope-label">{activeScope.toUpperCase()}</div>
+              <ScopeCanvas type={activeScope} videoRef={videoRef} width={270} height={190} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Always-visible scope strip (when grade active, not on Scopes tab) ── */}
+      {colorGrade && showScopes && activePanel !== "scopes" && (
+        <div className="cgp-scope-strip">
+          <div className="cgp-scope-strip-header">
+            <span>WAVEFORM</span>
+            <span>HISTOGRAM</span>
+            <button
+              className="cgp-scope-strip-close"
+              onClick={() => setShowScopes(false)}
+              type="button"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="cgp-scope-strip-canvases">
+            <ScopeCanvas type="waveform"  videoRef={videoRef} width={130} height={80} />
+            <ScopeCanvas type="histogram" videoRef={videoRef} width={130} height={80} />
+          </div>
         </div>
       )}
     </div>
