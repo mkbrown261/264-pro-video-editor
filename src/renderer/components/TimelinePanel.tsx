@@ -403,6 +403,8 @@ export function TimelinePanel({
   // ── Clip drag ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!dragState) return;
+    // Capture as non-null const so TypeScript narrows it inside closures below
+    const ds = dragState;
 
     /**
      * Core intent resolver.
@@ -442,7 +444,7 @@ export function TimelinePanel({
        * Subtracting offsetX accounts for where inside the clip the user clicked.
        */
       function laneFrame(r: DOMRect): number {
-        const px = clientX - r.left + scrollLeft - dragState.offsetX;
+        const px = clientX - r.left + scrollLeft - ds.offsetX;
         return snapFrame(Math.max(0, Math.round(px / ppfRef.current)), se, fps, SNAP_DIVISIONS[sdi].factor);
       }
 
@@ -451,7 +453,7 @@ export function TimelinePanel({
         return laneFrame(allLanes[0].r);
       }
 
-      const kindLanes = allLanes.filter((l) => l.kind === dragState.trackKind);
+      const kindLanes = allLanes.filter((l) => l.kind === ds.trackKind);
       const globalIndexOf = (trackId: string) => allLanes.findIndex((l) => l.trackId === trackId);
 
       const topOfAll    = allLanes[0].r.top;
@@ -463,7 +465,7 @@ export function TimelinePanel({
           intent: "INSERT_ABOVE_TOP",
           frame: fallbackFrame(),
           trackId: "",
-          newTrackKind: dragState.trackKind,
+          newTrackKind: ds.trackKind,
           insertBeforeTrackId: kindLanes.length > 0 ? kindLanes[0].trackId : "",
           insertIndex: 0,
         };
@@ -484,7 +486,7 @@ export function TimelinePanel({
             intent: "INSERT_ABOVE_TRACK",
             frame: laneFrame(r),
             trackId: "",
-            newTrackKind: dragState.trackKind,
+            newTrackKind: ds.trackKind,
             insertBeforeTrackId: trackId,
             insertIndex: Math.max(0, gIdx),
           };
@@ -495,7 +497,7 @@ export function TimelinePanel({
           intent: "DRAG_ON_TRACK",
           frame: laneFrame(r),
           trackId,
-          newTrackKind: dragState.trackKind,
+          newTrackKind: ds.trackKind,
           insertBeforeTrackId: "",
           insertIndex: -1,
         };
@@ -507,7 +509,7 @@ export function TimelinePanel({
           intent: "INSERT_BELOW_BOTTOM",
           frame: fallbackFrame(),
           trackId: "",
-          newTrackKind: dragState.trackKind,
+          newTrackKind: ds.trackKind,
           insertBeforeTrackId: "",
           insertIndex: allLanes.length,
         };
@@ -529,7 +531,7 @@ export function TimelinePanel({
             intent: "INSERT_ABOVE_TRACK",
             frame: laneFrame(nearest.r),
             trackId: "",
-            newTrackKind: dragState.trackKind,
+            newTrackKind: ds.trackKind,
             insertBeforeTrackId: nearest.trackId,
             insertIndex: Math.max(0, gIdx),
           };
@@ -538,7 +540,7 @@ export function TimelinePanel({
             intent: "DRAG_ON_TRACK",
             frame: laneFrame(nearest.r),
             trackId: nearest.trackId,
-            newTrackKind: dragState.trackKind,
+            newTrackKind: ds.trackKind,
             insertBeforeTrackId: "",
             insertIndex: -1,
           };
@@ -883,10 +885,21 @@ export function TimelinePanel({
             if (prev) prev.removeEventListener("wheel", (prev as HTMLDivElement & { _wheelHandler?: EventListener })._wheelHandler ?? (() => {}));
             const handler = (event: WheelEvent) => {
               if (event.ctrlKey || event.metaKey) {
+                // Ctrl/Cmd + scroll → zoom timeline
                 event.preventDefault();
                 setZoom(ppfRef.current + (event.deltaY > 0 ? -0.8 : 0.8), event.clientX);
-              } else {
+              } else if (event.shiftKey) {
+                // Shift + scroll → horizontal scroll (scrub through timeline)
+                event.preventDefault();
                 el.scrollLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+              } else {
+                // Plain scroll → vertical scroll (tracks up/down) — let the browser handle it naturally
+                // Only prevent default for deltaX (trackpad horizontal swipe) so it scrolls horizontally
+                if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+                  event.preventDefault();
+                  el.scrollLeft += event.deltaX;
+                }
+                // deltaY: let it fall through to native vertical scroll of the container
               }
             };
             (el as HTMLDivElement & { _wheelHandler?: EventListener })._wheelHandler = handler as EventListener;

@@ -141,7 +141,8 @@ function drawMaskOnCanvas(
       }
       ctx.closePath();
     } else if (shape.type === "freehand" && shape.points.length >= 2) {
-      const pts = shape.points;
+      // Freehand stores each vertex as a BezierPoint; only .point (Vec2) is used
+      const pts = shape.points.map((bp) => bp.point);
       ctx.moveTo(pts[0].x * canvasWidth, pts[0].y * canvasHeight);
       for (let i = 1; i < pts.length; i++) {
         ctx.lineTo(pts[i].x * canvasWidth, pts[i].y * canvasHeight);
