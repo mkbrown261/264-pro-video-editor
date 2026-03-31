@@ -144,8 +144,13 @@ interface EditorStore {
    * Atomically: create a new video track (+ paired audio track if the clip
    * has linked audio), move the dragged clip group into those new tracks,
    * preserving start-frame and audio/video sync.
+   * @param insertIndex  Position in sequence.tracks[] where the new video
+   *                     track is spliced.  0 = top, tracks.length = bottom.
    */
-  addTracksAndMoveClip: (clipId: string, startFrame: number) => void;
+  addTracksAndMoveClip: (clipId: string, startFrame: number, insertIndex: number) => void;
+
+  /** Reorder a track by moving it to a new index in sequence.tracks[]. */
+  reorderTrack: (trackId: string, toIndex: number) => void;
 
   // ── Markers ──
   addMarker: (marker: Omit<TimelineMarker, "id">) => void;
@@ -1343,11 +1348,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
   },
 
-  addTracksAndMoveClip: (clipId, startFrame) => {
+  addTracksAndMoveClip: (clipId, startFrame, insertIndex) => {
     set(withUndo("Move to New Track", (state) => {
       const seq = state.project.sequence;
 
-      // 1. Find the video clip being dragged (could be audio if user drags audio clip)
+      // 1. Find the clip being dragged (video or audio)
       const clip = seq.clips.find((c) => c.id === clipId);
       if (!clip) return state;
 
@@ -1385,31 +1390,31 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         color: "#2fc77a"
       } : null;
 
-      // 5. Compute frame delta between old position and new startFrame
+      // 5. Compute frame delta
       const frameDelta = startFrame - videoClip.startFrame;
 
       // 6. Rewrite clips: move video → newVideoTrack, audio → newAudioTrack
       const updatedClips = seq.clips.map((c) => {
         if (c.id === videoClip.id) {
-          return {
-            ...c,
-            trackId: newVideoTrackId,
-            startFrame: Math.max(0, c.startFrame + frameDelta)
-          };
+          return { ...c, trackId: newVideoTrackId, startFrame: Math.max(0, c.startFrame + frameDelta) };
         }
         if (needAudio && audioClips.some((a) => a.id === c.id)) {
-          return {
-            ...c,
-            trackId: newAudioTrackId,
-            startFrame: Math.max(0, c.startFrame + frameDelta)
-          };
+          return { ...c, trackId: newAudioTrackId, startFrame: Math.max(0, c.startFrame + frameDelta) };
         }
         return c;
       });
 
-      // 7. Insert new tracks at the top of their kind group
-      const newTracks = [...seq.tracks, newVideoTrack];
-      if (newAudioTrack) newTracks.push(newAudioTrack);
+      // 7. Splice new tracks at the correct position
+      //    insertIndex is the desired index in the CURRENT tracks array.
+      //    Clamp to valid range.
+      const clamped = Math.max(0, Math.min(insertIndex, seq.tracks.length));
+      const newTracks = [
+        ...seq.tracks.slice(0, clamped),
+        newVideoTrack,
+        // Insert audio track immediately after the video track so they stay paired
+        ...(newAudioTrack ? [newAudioTrack] : []),
+        ...seq.tracks.slice(clamped),
+      ];
 
       const nextProject = resolveTracks(
         {
@@ -1426,6 +1431,30 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           ...state.playback,
           playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame)
         }
+      };
+    }));
+  },
+
+  reorderTrack: (trackId, toIndex) => {
+    set(withUndo("Reorder Track", (state) => {
+      const tracks = state.project.sequence.tracks;
+      const fromIndex = tracks.findIndex((t) => t.id === trackId);
+      if (fromIndex === -1) return state;
+
+      // Remove the track from its current position
+      const withoutTrack = [...tracks.slice(0, fromIndex), ...tracks.slice(fromIndex + 1)];
+      // Clamp destination
+      const dest = Math.max(0, Math.min(toIndex, withoutTrack.length));
+      const reordered = [...withoutTrack.slice(0, dest), tracks[fromIndex], ...withoutTrack.slice(dest)];
+
+      return {
+        project: resolveTracks(
+          {
+            ...state.project,
+            sequence: { ...state.project.sequence, tracks: reordered }
+          },
+          []
+        )
       };
     }));
   },

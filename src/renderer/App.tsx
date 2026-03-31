@@ -85,6 +85,7 @@ export default function App() {
   const removeTrack = useEditorStore((s) => s.removeTrack);
   const duplicateTrack = useEditorStore((s) => s.duplicateTrack);
   const addTracksAndMoveClip = useEditorStore((s) => s.addTracksAndMoveClip);
+  const reorderTrack = useEditorStore((s) => s.reorderTrack);
   const addMarker = useEditorStore((s) => s.addMarker);
   const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
 
@@ -1146,7 +1147,8 @@ export default function App() {
               onRemoveTrack={(trackId) => removeTrack(trackId)}
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
               onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
-              onAddTracksAndMoveClip={(clipId, frame) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame); }}
+              onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
+              onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
             />
           </>
@@ -1248,7 +1250,8 @@ export default function App() {
               onRemoveTrack={(trackId) => removeTrack(trackId)}
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
               onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
-              onAddTracksAndMoveClip={(clipId, frame) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame); }}
+              onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
+              onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               />
             </div>
@@ -1392,7 +1395,8 @@ export default function App() {
               onRemoveTrack={(trackId) => removeTrack(trackId)}
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
               onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
-              onAddTracksAndMoveClip={(clipId, frame) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame); }}
+              onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
+              onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               />
             </div>

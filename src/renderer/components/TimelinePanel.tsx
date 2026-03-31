@@ -65,13 +65,36 @@ interface FadeHandleState {
   maxFrames: number;
 }
 
-// Ghost info: where the dragged clip will land
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAG-POSITION INTENT
+//   DRAG_ON_TRACK       → drop onto existing track (trackId set)
+//   INSERT_ABOVE_TRACK  → create new track immediately above insertBeforeTrackId
+//   INSERT_ABOVE_TOP    → create new track at very top (index 0)
+//   INSERT_BELOW_BOTTOM → append new track at very bottom
+// ─────────────────────────────────────────────────────────────────────────────
+type DragIntent =
+  | "DRAG_ON_TRACK"
+  | "INSERT_ABOVE_TRACK"   // insert before a specific existing track
+  | "INSERT_ABOVE_TOP"
+  | "INSERT_BELOW_BOTTOM";
+
 interface GhostInfo {
+  intent: DragIntent;
   frame: number;
+  /** Existing track to drop onto (DRAG_ON_TRACK only) */
   trackId: string;
-  isNewTrack: boolean;      // true when hovering above top video or below last track
+  /** Kind of the new track to create */
   newTrackKind: TimelineTrackKind;
-  newTrackIndex: number;
+  /**
+   * For INSERT_ABOVE_TRACK: the trackId of the existing row the ghost sits
+   * immediately above.  The new track will be spliced before this track.
+   */
+  insertBeforeTrackId: string;
+  /**
+   * Absolute insertion index in the sequence.tracks[] array.
+   * 0 = very top; tracks.length = very bottom.
+   */
+  insertIndex: number;
 }
 
 interface TimelinePanelProps {
@@ -106,8 +129,14 @@ interface TimelinePanelProps {
   onRemoveTrack?: (trackId: string) => void;
   onRenameTrack?: (trackId: string, name: string) => void;
   onDuplicateTrack?: (trackId: string) => void;
-  /** Atomically create new tracks and move the clip group into them */
-  onAddTracksAndMoveClip?: (clipId: string, startFrame: number) => void;
+  /**
+   * Atomically create new tracks (at the given insertIndex) and move the
+   * clip group into them.  insertIndex is the position in sequence.tracks[]
+   * where the new video track will be spliced.
+   */
+  onAddTracksAndMoveClip?: (clipId: string, startFrame: number, insertIndex: number) => void;
+  /** Reorder an existing track to a new index in sequence.tracks[] */
+  onReorderTrack?: (trackId: string, toIndex: number) => void;
   /** Called once on mount with zoom control functions */
   onRegisterZoomControls?: (controls: { zoomIn: () => void; zoomOut: () => void; fitToWindow: () => void }) => void;
 }
@@ -154,6 +183,7 @@ export function TimelinePanel({
   onRenameTrack,
   onDuplicateTrack,
   onAddTracksAndMoveClip,
+  onReorderTrack,
   onRegisterZoomControls,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
@@ -164,7 +194,7 @@ export function TimelinePanel({
     onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
     onUpdateTrack, onSetTransitionDuration,
     toolMode, sequenceFps,
-    onAddTrack, onAddTracksAndMoveClip
+    onAddTrack, onAddTracksAndMoveClip, onReorderTrack
   });
   useEffect(() => {
     propsRef.current = {
@@ -172,7 +202,7 @@ export function TimelinePanel({
       onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
       onUpdateTrack, onSetTransitionDuration,
       toolMode, sequenceFps,
-      onAddTrack, onAddTracksAndMoveClip
+      onAddTrack, onAddTracksAndMoveClip, onReorderTrack
     };
   });
 
@@ -208,6 +238,13 @@ export function TimelinePanel({
   const [dragState, setDragState]                   = useState<DragState | null>(null);
   const [ghostInfo, setGhostInfo]                   = useState<GhostInfo | null>(null);
   const [dropTargetTrackId, setDropTargetTrackId]   = useState<string | null>(null);
+
+  // ── Track reorder drag ────────────────────────────────────────────────────
+  const [trackReorderDrag, setTrackReorderDrag] = useState<{
+    trackId: string;
+    anchorY: number;
+    currentY: number;
+  } | null>(null);
 
   // ── Track height resize ───────────────────────────────────────────────────
   const [trackHeightDrag, setTrackHeightDrag] = useState<{ trackId: string; anchorY: number; origHeight: number } | null>(null);
@@ -364,72 +401,161 @@ export function TimelinePanel({
   useEffect(() => {
     if (!dragState) return;
 
+    /**
+     * Core intent resolver.
+     *
+     * Rules (in priority order):
+     *  1. If cursor Y is in the TOP 40% of a same-kind track row  → INSERT_ABOVE_TRACK
+     *  2. If cursor Y is in the MIDDLE 20% of a same-kind track row → DRAG_ON_TRACK
+     *  3. If cursor Y is in the BOTTOM 40% of a same-kind track row:
+     *       - if there is a next same-kind row → INSERT_ABOVE_TRACK (insert before the next)
+     *       - else → INSERT_BELOW_BOTTOM
+     *  4. Cursor above ALL track rows                              → INSERT_ABOVE_TOP
+     *  5. Cursor below ALL track rows                             → INSERT_BELOW_BOTTOM
+     *  6. Cursor between rows of DIFFERENT kinds (gap zone):
+     *       nearest same-kind row by Y-center distance → same logic as rule 1-3
+     */
     function resolveGhostAt(clientX: number, clientY: number): GhostInfo | null {
-      const lanes = Array.from(document.querySelectorAll<HTMLElement>(".timeline-lane"));
-      const editor = timelineEditorRef.current;
+      // All lane elements, sorted top-to-bottom by their rendered position
+      const allLanes = Array.from(document.querySelectorAll<HTMLElement>(".timeline-lane"))
+        .map((el) => ({ el, r: el.getBoundingClientRect(), kind: el.dataset.trackKind as TimelineTrackKind, trackId: el.dataset.trackId ?? "" }))
+        .sort((a, b) => a.r.top - b.r.top);
+
+      if (allLanes.length === 0) return null;
+
+      const editor  = timelineEditorRef.current;
       const scrollLeft = editor?.scrollLeft ?? 0;
-
-      // Compute the frame at the cursor X position using the rows container
-      const rowsEl = document.querySelector(".timeline-rows") as HTMLElement | null;
-      const rowsRect = rowsEl?.getBoundingClientRect();
-      const framePx = rowsRect
-        ? clientX - rowsRect.left - LABEL_W + scrollLeft - dragState.offsetX
-        : 0;
-      const rawFrameFromRows = Math.max(0, Math.round(framePx / ppfRef.current));
       const { snapEnabled: se, snapDivIdx: sdi } = snapRef.current;
-      const snappedFrame = snapFrame(rawFrameFromRows, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+      const fps = propsRef.current.sequenceFps;
 
-      // 1. Check if cursor is over a lane of the same kind → place on existing track
-      for (const lane of lanes) {
-        const r = lane.getBoundingClientRect();
-        const kind = lane.dataset.trackKind as TimelineTrackKind;
-        const trackId = lane.dataset.trackId ?? "";
-        if (clientY >= r.top && clientY <= r.bottom && kind === dragState.trackKind) {
-          // Compute frame relative to this lane's left edge
-          const lanePx = clientX - r.left + scrollLeft - dragState.offsetX;
-          const rawFrame = Math.max(0, Math.round(lanePx / ppfRef.current));
-          const frame = snapFrame(rawFrame, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
-          return { frame, trackId, isNewTrack: false, newTrackKind: kind, newTrackIndex: 0 };
+      /** Convert cursor X to a snapped frame number relative to a lane rect */
+      function laneFrame(r: DOMRect): number {
+        const px = clientX - r.left + scrollLeft - dragState.offsetX;
+        return snapFrame(Math.max(0, Math.round(px / ppfRef.current)), se, fps, SNAP_DIVISIONS[sdi].factor);
+      }
+
+      /** Frame using the rows container origin (used when no specific lane) */
+      function rowsFrame(): number {
+        const rowsEl = document.querySelector(".timeline-rows") as HTMLElement | null;
+        const rr = rowsEl?.getBoundingClientRect();
+        if (!rr) return 0;
+        const px = clientX - rr.left - LABEL_W + scrollLeft - dragState.offsetX;
+        return snapFrame(Math.max(0, Math.round(px / ppfRef.current)), se, fps, SNAP_DIVISIONS[sdi].factor);
+      }
+
+      // Only lanes matching the dragged clip's kind
+      const kindLanes = allLanes.filter((l) => l.kind === dragState.trackKind);
+
+      // Build global track index map (position of each trackId in the full sorted lane list)
+      const globalIndexOf = (trackId: string) => allLanes.findIndex((l) => l.trackId === trackId);
+
+      // ── Check if cursor is directly over a same-kind lane ──────────────────
+      for (let i = 0; i < kindLanes.length; i++) {
+        const { r, trackId } = kindLanes[i];
+        if (clientY < r.top || clientY > r.bottom) continue;
+
+        // Cursor is inside this lane — decide intent by vertical zone
+        const relY    = clientY - r.top;
+        const h       = r.bottom - r.top;
+        const topZone = h * 0.38;  // top 38% → insert above
+        const botZone = h * 0.62;  // below 62% → insert below (= above next)
+
+        if (relY <= topZone) {
+          // INSERT ABOVE this track
+          const gIdx = globalIndexOf(trackId);
+          return {
+            intent: "INSERT_ABOVE_TRACK",
+            frame: laneFrame(r),
+            trackId: "",
+            newTrackKind: dragState.trackKind,
+            insertBeforeTrackId: trackId,
+            insertIndex: Math.max(0, gIdx),
+          };
         }
+
+        if (relY >= botZone) {
+          // INSERT BELOW this track = INSERT ABOVE the next same-kind track (if any)
+          const nextKind = kindLanes[i + 1];
+          if (nextKind) {
+            const gIdx = globalIndexOf(nextKind.trackId);
+            return {
+              intent: "INSERT_ABOVE_TRACK",
+              frame: laneFrame(r),
+              trackId: "",
+              newTrackKind: dragState.trackKind,
+              insertBeforeTrackId: nextKind.trackId,
+              insertIndex: Math.max(0, gIdx),
+            };
+          }
+          // No next same-kind lane → append at bottom
+          return {
+            intent: "INSERT_BELOW_BOTTOM",
+            frame: laneFrame(r),
+            trackId: "",
+            newTrackKind: dragState.trackKind,
+            insertBeforeTrackId: "",
+            insertIndex: allLanes.length,
+          };
+        }
+
+        // Middle zone → DRAG ON TRACK (no new track)
+        return {
+          intent: "DRAG_ON_TRACK",
+          frame: laneFrame(r),
+          trackId,
+          newTrackKind: dragState.trackKind,
+          insertBeforeTrackId: "",
+          insertIndex: -1,
+        };
       }
 
-      // 2. No matching lane under cursor — find topmost and bottommost lane bounds
-      if (lanes.length === 0) return null;
+      // ── Cursor is NOT over any same-kind lane ──────────────────────────────
+      const topOfAll    = allLanes[0].r.top;
+      const bottomOfAll = allLanes[allLanes.length - 1].r.bottom;
 
-      // Sort lanes by their top position
-      const sorted = lanes.slice().sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-      const topmostLane = sorted[0];
-      const bottommostLane = sorted[sorted.length - 1];
-      const topLaneTop = topmostLane.getBoundingClientRect().top;
-      const bottomLaneBottom = bottommostLane.getBoundingClientRect().bottom;
-
-      if (clientY < topLaneTop) {
-        // Above topmost track → new track at top
-        return { frame: snappedFrame, trackId: "", isNewTrack: true, newTrackKind: dragState.trackKind, newTrackIndex: 0 };
-      }
-      if (clientY > bottomLaneBottom) {
-        // Below bottommost track → new track at bottom
-        return { frame: snappedFrame, trackId: "", isNewTrack: true, newTrackKind: dragState.trackKind, newTrackIndex: -1 };
+      if (clientY < topOfAll) {
+        // Above every track → insert at very top
+        return {
+          intent: "INSERT_ABOVE_TOP",
+          frame: rowsFrame(),
+          trackId: "",
+          newTrackKind: dragState.trackKind,
+          insertBeforeTrackId: kindLanes.length > 0 ? kindLanes[0].trackId : "",
+          insertIndex: 0,
+        };
       }
 
-      // Cursor is between tracks (gap between a video and audio row, or between rows of different kinds)
-      // Find closest lane of the same kind and snap to it
-      const sameKindLanes = sorted.filter((l) => l.dataset.trackKind === dragState.trackKind);
-      if (sameKindLanes.length > 0) {
-        // Pick the lane whose center is closest to clientY
-        let closest = sameKindLanes[0];
+      if (clientY > bottomOfAll) {
+        return {
+          intent: "INSERT_BELOW_BOTTOM",
+          frame: rowsFrame(),
+          trackId: "",
+          newTrackKind: dragState.trackKind,
+          insertBeforeTrackId: "",
+          insertIndex: allLanes.length,
+        };
+      }
+
+      // Cursor is in a gap between rows of different kinds.
+      // Find the nearest same-kind lane by Y-center and apply the same zone logic.
+      if (kindLanes.length > 0) {
+        let nearest = kindLanes[0];
         let minDist = Infinity;
-        for (const lane of sameKindLanes) {
-          const r = lane.getBoundingClientRect();
-          const center = (r.top + r.bottom) / 2;
-          const dist = Math.abs(clientY - center);
-          if (dist < minDist) { minDist = dist; closest = lane; }
+        for (const kl of kindLanes) {
+          const center = (kl.r.top + kl.r.bottom) / 2;
+          const d = Math.abs(clientY - center);
+          if (d < minDist) { minDist = d; nearest = kl; }
         }
-        const cr = closest.getBoundingClientRect();
-        const lanePx = clientX - cr.left + scrollLeft - dragState.offsetX;
-        const rawFrame = Math.max(0, Math.round(lanePx / ppfRef.current));
-        const frame = snapFrame(rawFrame, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
-        return { frame, trackId: closest.dataset.trackId ?? "", isNewTrack: false, newTrackKind: dragState.trackKind, newTrackIndex: 0 };
+        // Treat as if cursor is just above the nearest lane → insert above it
+        const gIdx = globalIndexOf(nearest.trackId);
+        return {
+          intent: "INSERT_ABOVE_TRACK",
+          frame: laneFrame(nearest.r),
+          trackId: "",
+          newTrackKind: dragState.trackKind,
+          insertBeforeTrackId: nearest.trackId,
+          insertIndex: Math.max(0, gIdx),
+        };
       }
 
       return null;
@@ -442,12 +568,13 @@ export function TimelinePanel({
 
     const onUp = (e: MouseEvent) => {
       const g = resolveGhostAt(e.clientX, e.clientY);
-      if (g && !g.isNewTrack) {
-        // Normal drop on existing track
-        propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
-      } else if (g?.isNewTrack) {
-        // Atomically create new tracks and move the clip group into them
-        propsRef.current.onAddTracksAndMoveClip?.(dragState.clipId, g.frame);
+      if (g) {
+        if (g.intent === "DRAG_ON_TRACK") {
+          propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
+        } else {
+          // INSERT_ABOVE_TRACK | INSERT_ABOVE_TOP | INSERT_BELOW_BOTTOM
+          propsRef.current.onAddTracksAndMoveClip?.(dragState.clipId, g.frame, g.insertIndex);
+        }
       }
       setDragState(null);
       setGhostInfo(null);
@@ -457,6 +584,37 @@ export function TimelinePanel({
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [dragState]);
+
+  // ── Track reorder drag ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!trackReorderDrag) return;
+
+    const onMove = (e: MouseEvent) => {
+      setTrackReorderDrag((prev) => prev ? { ...prev, currentY: e.clientY } : null);
+    };
+
+    const onUp = (e: MouseEvent) => {
+      if (!trackReorderDrag) { setTrackReorderDrag(null); return; }
+
+      // Find which track row the cursor is over
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(".timeline-row"))
+        .map((el) => ({ el, r: el.getBoundingClientRect(), trackId: el.dataset.trackId ?? "" }))
+        .sort((a, b) => a.r.top - b.r.top);
+
+      let toIndex = rows.length; // default: move to bottom
+      for (let i = 0; i < rows.length; i++) {
+        const center = (rows[i].r.top + rows[i].r.bottom) / 2;
+        if (e.clientY < center) { toIndex = i; break; }
+      }
+
+      propsRef.current.onReorderTrack?.(trackReorderDrag.trackId, toIndex);
+      setTrackReorderDrag(null);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [trackReorderDrag]);
 
   // ── Track context menu renderer ───────────────────────────────────────────
   function renderTrackContextMenu() {
@@ -772,13 +930,19 @@ export function TimelinePanel({
         {/* ── TRACK ROWS ─────────────────────────────────────────────────── */}
         <div className="timeline-rows">
 
-          {/* Ghost new-track indicator (above) */}
-          {ghostInfo?.isNewTrack && ghostInfo.newTrackIndex === 0 && (
-            <div className="timeline-new-track-ghost">
-              <div className="ghost-new-track-label">+ New {ghostInfo.newTrackKind} track</div>
-              {dragState && (
+          {/*
+           * Ghost-insert indicator helper — rendered BEFORE a specific track row.
+           * Shows a pulsing new-track row with a clip preview at the correct X position.
+           */}
+          {(() => {
+            const isInsert = ghostInfo && ghostInfo.intent !== "DRAG_ON_TRACK";
+            if (!isInsert || !dragState) return null;
+
+            const ghostRow = (
+              <div className="timeline-new-track-ghost" key="ghost-insert">
+                <div className="ghost-new-track-label">+ New {ghostInfo.newTrackKind} track</div>
                 <div
-                  className={`timeline-clip-ghost new-track-ghost-clip ${dragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
+                  className={`new-track-ghost-clip ${dragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
                   style={{
                     position: "absolute",
                     left: LABEL_W + ghostInfo.frame * pixelsPerFrame,
@@ -787,19 +951,55 @@ export function TimelinePanel({
                     bottom: 2,
                   }}
                 />
-              )}
-            </div>
-          )}
+              </div>
+            );
+
+            // INSERT_ABOVE_TOP → rendered before all rows (handled by returning ghostRow
+            // from the enclosing fragment when trackIdx === 0 is not found yet)
+            if (ghostInfo.intent === "INSERT_ABOVE_TOP") {
+              return ghostRow;
+            }
+
+            // For INSERT_ABOVE_TRACK / INSERT_BELOW_BOTTOM we need to inject inline
+            // with the map loop below — return null here so the map loop handles it
+            return null;
+          })()}
 
           {trackLayouts.map((layout) => {
             const isLocked = layout.track.locked;
             const isMuted  = layout.track.muted;
             const trackH   = layout.track.height ?? (layout.track.kind === "video" ? 56 : 44);
+            const isReordering = trackReorderDrag?.trackId === layout.track.id;
+
+            // Insert ghost ABOVE this track if insertBeforeTrackId matches
+            const showGhostAbove = ghostInfo &&
+              ghostInfo.intent === "INSERT_ABOVE_TRACK" &&
+              dragState &&
+              ghostInfo.insertBeforeTrackId === layout.track.id;
 
             return (
+              <>
+                {/* Ghost row inserted immediately before this track row */}
+                {showGhostAbove && dragState && (
+                  <div className="timeline-new-track-ghost" key={`ghost-${layout.track.id}`}>
+                    <div className="ghost-new-track-label">+ New {ghostInfo!.newTrackKind} track</div>
+                    <div
+                      className={`new-track-ghost-clip ${dragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
+                      style={{
+                        position: "absolute",
+                        left: LABEL_W + ghostInfo!.frame * pixelsPerFrame,
+                        width: Math.max(dragState.durationFrames * pixelsPerFrame, 24),
+                        top: 2,
+                        bottom: 2,
+                      }}
+                    />
+                  </div>
+                )}
+
               <div
                 key={layout.track.id}
-                className={`timeline-row${isLocked ? " track-locked" : ""}${isMuted ? " track-muted" : ""}`}
+                data-track-id={layout.track.id}
+                className={`timeline-row${isLocked ? " track-locked" : ""}${isMuted ? " track-muted" : ""}${isReordering ? " track-reordering" : ""}`}
                 style={{ height: trackH }}
               >
                 {/* ── Track label with controls ── */}
@@ -823,6 +1023,16 @@ export function TimelinePanel({
                     });
                   }}
                 >
+                  {/* Reorder drag handle */}
+                  <div
+                    className="track-reorder-handle"
+                    title="Drag to reorder track"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setTrackReorderDrag({ trackId: layout.track.id, anchorY: e.clientY, currentY: e.clientY });
+                    }}
+                  >⠿</div>
                   <div className="track-label-top">
                     <span className="track-name" title={layout.track.name}>{layout.track.name}</span>
                   </div>
@@ -953,8 +1163,8 @@ export function TimelinePanel({
 
                     // Ghost position for this clip while dragging (live preview follows mouse)
                     // If dragging to a NEW track, show clip faded at original position (preview is in ghost row)
-                    const isDraggingToNewTrack = isDragging && ghostInfo?.isNewTrack;
-                    const ghostTargetFrame = isDragging && ghostInfo && !ghostInfo.isNewTrack && ghostInfo.trackId === layout.track.id
+                    const isDraggingToNewTrack = isDragging && ghostInfo?.intent !== "DRAG_ON_TRACK";
+                    const ghostTargetFrame = isDragging && ghostInfo?.intent === "DRAG_ON_TRACK" && ghostInfo.trackId === layout.track.id
                       ? ghostInfo.frame
                       : null;
                     // While dragging, show clip at ghost target position; otherwise at clip position
@@ -1021,8 +1231,8 @@ export function TimelinePanel({
                             originalTrackId: layout.track.id,
                             durationFrames: segment.durationFrames,
                           });
-                          // Initialize ghost at current position
-                          setGhostInfo({ frame: segment.startFrame, trackId: layout.track.id, isNewTrack: false, newTrackKind: layout.track.kind, newTrackIndex: 0 });
+                          // Initialize ghost at current position (DRAG_ON_TRACK)
+                          setGhostInfo({ intent: "DRAG_ON_TRACK", frame: segment.startFrame, trackId: layout.track.id, newTrackKind: layout.track.kind, insertBeforeTrackId: "", insertIndex: -1 });
                         }}
                         onContextMenu={(event) => {
                           event.preventDefault();
@@ -1212,25 +1422,24 @@ export function TimelinePanel({
                   })()}
                 </div>
               </div>
+              </>
             );
           })}
 
-          {/* Ghost new-track indicator (below) */}
-          {ghostInfo?.isNewTrack && ghostInfo.newTrackIndex === -1 && (
+          {/* Ghost new-track indicator at the bottom (INSERT_BELOW_BOTTOM) */}
+          {ghostInfo?.intent === "INSERT_BELOW_BOTTOM" && dragState && (
             <div className="timeline-new-track-ghost">
               <div className="ghost-new-track-label">+ New {ghostInfo.newTrackKind} track</div>
-              {dragState && (
-                <div
-                  className={`timeline-clip-ghost new-track-ghost-clip ${dragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
-                  style={{
-                    position: "absolute",
-                    left: LABEL_W + ghostInfo.frame * pixelsPerFrame,
-                    width: Math.max(dragState.durationFrames * pixelsPerFrame, 24),
-                    top: 2,
-                    bottom: 2,
-                  }}
-                />
-              )}
+              <div
+                className={`new-track-ghost-clip ${dragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
+                style={{
+                  position: "absolute",
+                  left: LABEL_W + ghostInfo.frame * pixelsPerFrame,
+                  width: Math.max(dragState.durationFrames * pixelsPerFrame, 24),
+                  top: 2,
+                  bottom: 2,
+                }}
+              />
             </div>
           )}
         </div>

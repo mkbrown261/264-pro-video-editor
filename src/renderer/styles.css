@@ -3394,6 +3394,33 @@ kbd {
   transition: background 0.1s;
 }
 .track-height-handle:hover { background: rgba(79,142,247,0.4); }
+
+/* Track reorder drag handle */
+.track-reorder-handle {
+  position: absolute;
+  top: 0; left: 0;
+  width: 16px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: rgba(255,255,255,0.25);
+  font-size: 0.9rem;
+  user-select: none;
+  transition: color 0.15s;
+  z-index: 5;
+}
+.track-reorder-handle:hover { color: rgba(79,142,247,0.8); }
+.track-reorder-handle:active { cursor: grabbing; }
+
+/* Track being reordered gets a drag-source highlight */
+.timeline-row.track-reordering {
+  opacity: 0.5;
+  outline: 2px dashed rgba(79,142,247,0.7);
+  outline-offset: -2px;
+}
+
 .timeline-row.track-locked { opacity: 0.7; }
 .timeline-row.track-muted .timeline-lane { opacity: 0.45; }
 
