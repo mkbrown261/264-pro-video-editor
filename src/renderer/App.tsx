@@ -16,6 +16,7 @@ import {
   type TimelineSegment,
   getTotalDurationFrames
 } from "../shared/timeline";
+import type { UpdaterStatus } from "./vite-env";
 
 export default function App() {
   const viewerPanelRef = useRef<ViewerPanelHandle | null>(null);
@@ -68,6 +69,8 @@ export default function App() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(320);
   const [rightPanelWidth, setRightPanelWidth] = useState(320);
   const [resizeSide, setResizeSide] = useState<"left" | "right" | null>(null);
+  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null);
+  const [updaterDismissed, setUpdaterDismissed] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("Voice Chop AI ready.");
   const [voiceTranscript, setVoiceTranscript] = useState("");
@@ -393,8 +396,18 @@ export default function App() {
         }
       });
 
+    // Subscribe to auto-updater events pushed from the main process
+    const unsubUpdater = window.editorApi.onUpdaterStatus((status) => {
+      setUpdaterStatus(status);
+      // Reset dismissed state whenever a new, different state arrives
+      if (status.state === "available" || status.state === "ready") {
+        setUpdaterDismissed(false);
+      }
+    });
+
     return () => {
       cancelled = true;
+      unsubUpdater();
     };
   }, [setEnvironment]);
 
@@ -460,8 +473,57 @@ export default function App() {
     "--right-panel-width": `${rightPanelWidth}px`
   } as CSSProperties;
 
+  // Compute the updater banner content
+  const showUpdaterBanner =
+    !updaterDismissed &&
+    updaterStatus !== null &&
+    updaterStatus.state !== "checking" &&
+    updaterStatus.state !== "up-to-date";
+
+  function renderUpdaterBanner() {
+    if (!showUpdaterBanner || !updaterStatus) return null;
+    const { state, version, percent, message } = updaterStatus;
+
+    let text = "";
+    let bannerClass = "updater-banner";
+    let canDismiss = false;
+
+    if (state === "available") {
+      text = `Update available — v${version ?? ""} is ready to download.`;
+      bannerClass += " updater-banner--info";
+      canDismiss = true;
+    } else if (state === "downloading") {
+      text = `Downloading update… ${percent ?? 0}%`;
+      bannerClass += " updater-banner--info";
+    } else if (state === "ready") {
+      text = `v${version ?? ""} downloaded — will install on next quit.`;
+      bannerClass += " updater-banner--success";
+      canDismiss = true;
+    } else if (state === "error") {
+      text = `Update error: ${message ?? "unknown error"}`;
+      bannerClass += " updater-banner--error";
+      canDismiss = true;
+    }
+
+    return (
+      <div className={bannerClass}>
+        <span>{text}</span>
+        {canDismiss && (
+          <button
+            className="updater-banner__dismiss"
+            onClick={() => setUpdaterDismissed(true)}
+            aria-label="Dismiss update notification"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <main ref={appShellRef} className="app-shell" style={shellStyle}>
+      {renderUpdaterBanner()}
       <header className="workspace-header">
         <div>
           <p className="eyebrow">264 Pro Video Editor</p>

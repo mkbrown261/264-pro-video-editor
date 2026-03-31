@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
+import { autoUpdater } from "electron-updater";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -199,7 +200,57 @@ function createMainWindow(): BrowserWindow {
 app.whenReady().then(() => {
   protocol.handle("media", (request) => createMediaResponse(request));
 
-  createMainWindow();
+  const mainWindow = createMainWindow();
+
+  // --- Auto-updater setup ---
+  // Only run in production (not during dev server)
+  if (!process.env.VITE_DEV_SERVER_URL) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on("checking-for-update", () => {
+      mainWindow.webContents.send("updater:status", { state: "checking" });
+    });
+
+    autoUpdater.on("update-available", (info) => {
+      mainWindow.webContents.send("updater:status", {
+        state: "available",
+        version: info.version
+      });
+    });
+
+    autoUpdater.on("update-not-available", () => {
+      mainWindow.webContents.send("updater:status", { state: "up-to-date" });
+    });
+
+    autoUpdater.on("download-progress", (progress) => {
+      mainWindow.webContents.send("updater:status", {
+        state: "downloading",
+        percent: Math.round(progress.percent),
+        transferred: progress.transferred,
+        total: progress.total
+      });
+    });
+
+    autoUpdater.on("update-downloaded", (info) => {
+      mainWindow.webContents.send("updater:status", {
+        state: "ready",
+        version: info.version
+      });
+    });
+
+    autoUpdater.on("error", (err) => {
+      mainWindow.webContents.send("updater:status", {
+        state: "error",
+        message: err.message
+      });
+    });
+
+    // Check for updates 5 seconds after launch, then every 2 hours
+    setTimeout(() => { void autoUpdater.checkForUpdates(); }, 5000);
+    setInterval(() => { void autoUpdater.checkForUpdates(); }, 2 * 60 * 60 * 1000);
+  }
+  // --- End auto-updater ---
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
