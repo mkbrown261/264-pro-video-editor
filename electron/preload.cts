@@ -52,7 +52,17 @@ const editorApi = {
   openProject: (): Promise<OpenProjectResult | null> =>
     ipcRenderer.invoke("project:open"),
   saveProjectAs: (json: string, filePath: string): Promise<string> =>
-    ipcRenderer.invoke("project:save-as", json, filePath)
+    ipcRenderer.invoke("project:save-as", json, filePath),
+  // ── App lifecycle ─────────────────────────────────────────────────────────
+  confirmClose: (): Promise<void> =>
+    ipcRenderer.invoke("app:confirm-close"),
+  installUpdate: (): Promise<void> =>
+    ipcRenderer.invoke("updater:install-now"),
+  onBeforeClose: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("app:before-close", listener);
+    return () => ipcRenderer.removeListener("app:before-close", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("editorApi", editorApi);

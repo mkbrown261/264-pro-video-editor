@@ -139,14 +139,16 @@ export function TimelinePanel({
     onSetPlayheadFrame, onSelectClip, onMoveClipTo,
     onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
     onUpdateTrack, onSetTransitionDuration,
-    toolMode, sequenceFps
+    toolMode, sequenceFps,
+    onAddTrack
   });
   useEffect(() => {
     propsRef.current = {
       onSetPlayheadFrame, onSelectClip, onMoveClipTo,
       onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
       onUpdateTrack, onSetTransitionDuration,
-      toolMode, sequenceFps
+      toolMode, sequenceFps,
+      onAddTrack
     };
   });
 
@@ -362,10 +364,10 @@ export function TimelinePanel({
       if (g && !g.isNewTrack) {
         propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
       }
-      // New track creation — call onAddTrack then move clip to whatever track was just added
+      // New track creation — add the track first, then move clip to same frame on original track.
+      // (We can't move to the new track synchronously since we don't have its ID yet.)
       if (g?.isNewTrack) {
-        // We can't know the new trackId here synchronously, so just move clip to its original track at new frame
-        // App layer handles creating the track separately via the ghost UI
+        propsRef.current.onAddTrack?.(g.newTrackKind);
         propsRef.current.onMoveClipTo(dragState.clipId, dragState.originalTrackId, g.frame);
       }
       setDragState(null);
@@ -425,7 +427,7 @@ export function TimelinePanel({
           <input
             className="ctx-speed-input"
             type="number"
-            min={0.1} max={4} step={0.05}
+            min={0.25} max={4} step={0.05}
             value={speedInput}
             onChange={(e) => setSpeedInput(e.target.value)}
             onClick={(e) => e.stopPropagation()}
@@ -435,7 +437,7 @@ export function TimelinePanel({
             className="ctx-speed-apply"
             type="button"
             onClick={() => {
-              const spd = Math.max(0.1, Math.min(4, parseFloat(speedInput) || speed));
+              const spd = Math.max(0.25, Math.min(4, parseFloat(speedInput) || speed));
               onSetClipSpeed?.(clipId, spd);
               setContextMenu(null);
             }}
@@ -738,11 +740,12 @@ export function TimelinePanel({
                     const isSelected = selectedClipId === segment.clip.id;
                     const isDragging = dragState?.clipId === segment.clip.id;
 
-                    // Ghost position for this clip while dragging
-                    const ghostFrame = isDragging && ghostInfo && !ghostInfo.isNewTrack && ghostInfo.trackId === layout.track.id
+                    // Ghost position for this clip while dragging (live preview follows mouse)
+                    const ghostTargetFrame = isDragging && ghostInfo && !ghostInfo.isNewTrack && ghostInfo.trackId === layout.track.id
                       ? ghostInfo.frame
                       : null;
-                    const displayLeft = ghostFrame !== null ? ghostFrame * pixelsPerFrame : clipLeft;
+                    // While dragging, show clip at ghost target position; otherwise at clip position
+                    const displayLeft = ghostTargetFrame !== null ? ghostTargetFrame * pixelsPerFrame : clipLeft;
 
                     // Fade durations
                     const fadeInFrames  = segment.clip.transitionIn?.durationFrames  ?? 0;
@@ -803,6 +806,7 @@ export function TimelinePanel({
                             originalStartFrame: segment.startFrame,
                             originalTrackId: layout.track.id
                           });
+                          // Initialize ghost at current position
                           setGhostInfo({ frame: segment.startFrame, trackId: layout.track.id, isNewTrack: false, newTrackKind: layout.track.kind, newTrackIndex: 0 });
                         }}
                         onContextMenu={(event) => {
@@ -940,15 +944,16 @@ export function TimelinePanel({
                     );
                   })}
 
-                  {/* Ghost clip preview while dragging */}
-                  {ghostInfo && !ghostInfo.isNewTrack && ghostInfo.trackId === layout.track.id && dragState && (() => {
+                  {/* Ghost clip preview while dragging — shows origin position as shadow, clip follows cursor */}
+                  {dragState && layout.segments.some((s) => s.clip.id === dragState.clipId) && (() => {
                     const seg = layout.segments.find((s) => s.clip.id === dragState.clipId);
                     if (!seg) return null;
                     const w = Math.max(seg.durationFrames * pixelsPerFrame, 24);
+                    // Show ghost at original position while clip moves
                     return (
                       <div
                         className="timeline-clip-ghost"
-                        style={{ left: ghostInfo.frame * pixelsPerFrame, width: w, height: "calc(100% - 4px)" }}
+                        style={{ left: seg.startFrame * pixelsPerFrame, width: w, height: "calc(100% - 4px)" }}
                       />
                     );
                   })()}

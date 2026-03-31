@@ -122,9 +122,10 @@ button { cursor: pointer; }
 .app-shell {
   display: grid;
   grid-template-columns: var(--left-panel-width, 280px) 3px minmax(460px, 1fr) 3px var(--right-panel-width, 280px);
-  grid-template-rows: minmax(300px, 0.62fr) minmax(180px, 0.38fr);
+  grid-template-rows: minmax(240px, 1fr) 5px var(--timeline-height, 220px);
   grid-template-areas:
     "media      left-resizer  viewer        right-resizer inspector"
+    "tl-resize  tl-resize     tl-resize     tl-resize     tl-resize"
     "timeline   timeline      timeline      timeline      timeline";
   gap: 1px;
   flex: 1;
@@ -157,6 +158,29 @@ button { cursor: pointer; }
 .viewer-panel   { grid-area: viewer; }
 .inspector-panel{ grid-area: inspector; }
 .timeline-panel { grid-area: timeline; }
+.timeline-vertical-resizer {
+  grid-area: tl-resize;
+  cursor: ns-resize;
+  background: var(--separator);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  z-index: 10;
+  transition: background 0.12s;
+}
+.timeline-vertical-resizer:hover,
+.timeline-vertical-resizer.dragging {
+  background: rgba(79,142,247,0.45);
+}
+.timeline-vertical-resizer::before {
+  content: "";
+  width: 40px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(79,142,247,0.6);
+  pointer-events: none;
+}
 
 /* ── Panel header ────────────────────────────────────────────────────────────── */
 .panel-header {
@@ -4674,4 +4698,115 @@ kbd {
   inset: 0;
   pointer-events: none;
   z-index: 3;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SAVE CONFIRMATION MODAL
+   ══════════════════════════════════════════════════════════════════════════ */
+.save-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(4px);
+}
+.save-confirm-modal {
+  background: #162029;
+  border: 1px solid rgba(79,142,247,0.35);
+  border-radius: 12px;
+  padding: 36px 40px 28px;
+  min-width: 380px;
+  max-width: 460px;
+  text-align: center;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.7);
+  animation: modal-pop 0.18s cubic-bezier(0.34,1.56,0.64,1) both;
+}
+@keyframes modal-pop {
+  from { transform: scale(0.88); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+.save-confirm-icon { font-size: 2.4rem; margin-bottom: 12px; }
+.save-confirm-title { font-size: 1.15rem; font-weight: 700; color: #e8f0f8; margin: 0 0 10px; }
+.save-confirm-body  { font-size: 0.88rem; color: #8ba0b4; margin: 0 0 24px; line-height: 1.55; }
+.save-confirm-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.panel-action.danger {
+  background: rgba(239,68,68,0.15);
+  border-color: rgba(239,68,68,0.4);
+  color: #f87171;
+}
+.panel-action.danger:hover {
+  background: rgba(239,68,68,0.3);
+  border-color: rgba(239,68,68,0.7);
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UPDATER BANNER ENHANCEMENTS
+   ══════════════════════════════════════════════════════════════════════════ */
+.updater-progress-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
+  margin: 0 12px;
+  flex: 1;
+  min-width: 80px;
+  overflow: hidden;
+}
+.updater-progress-fill {
+  height: 100%;
+  background: #4f8ef7;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.updater-banner__install {
+  background: #4f8ef7;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  cursor: pointer;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.updater-banner__install:hover { background: #6ba3ff; }
+.updater-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIMELINE RESIZE HANDLE (drag timeline up to expand)
+   ══════════════════════════════════════════════════════════════════════════ */
+.timeline-resize-handle {
+  height: 6px;
+  cursor: ns-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.timeline-resize-handle:hover,
+.timeline-resize-handle.dragging {
+  background: rgba(79,142,247,0.35);
+}
+.timeline-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%,-50%);
+  width: 36px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(79,142,247,0.5);
 }

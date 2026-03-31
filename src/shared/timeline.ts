@@ -61,11 +61,14 @@ export function getClipDurationFrames(
   timelineFps: number
 ): number {
   const assetFrames = getAssetDurationFrames(asset, timelineFps);
-
-  return Math.max(
+  const sourceFrames = Math.max(
     MIN_CLIP_DURATION_FRAMES,
     assetFrames - clip.trimStartFrames - clip.trimEndFrames
   );
+  // Speed factor: 2x speed means clip occupies half the timeline duration
+  const speed = clip.speed ?? 1;
+  const clampedSpeed = Math.max(0.25, Math.min(4, speed));
+  return Math.max(MIN_CLIP_DURATION_FRAMES, Math.round(sourceFrames / clampedSpeed));
 }
 
 export function getClipTransitionDurationFrames(
@@ -120,12 +123,16 @@ export function buildTimelineSegments(
         clip.trimStartFrames,
         sequence.settings.fps
       );
+      // Source duration is the actual source media consumed, not the timeline duration.
+      // At 2x speed, the clip consumes twice as many source frames as timeline frames.
+      const clipSpeed = Math.max(0.25, Math.min(4, clip.speed ?? 1));
+      const sourceDurationSeconds = framesToSeconds(durationFrames, sequence.settings.fps) * clipSpeed;
       const sourceOutSeconds = Math.min(
         asset.durationSeconds,
         Math.max(
           sourceInSeconds +
             framesToSeconds(MIN_CLIP_DURATION_FRAMES, sequence.settings.fps),
-          sourceInSeconds + framesToSeconds(durationFrames, sequence.settings.fps)
+          sourceInSeconds + sourceDurationSeconds
         )
       );
 

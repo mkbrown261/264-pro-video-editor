@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
 import { createReadStream } from "node:fs";
@@ -67,6 +67,19 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
+// ── Branding: ensure app name shows everywhere (dock, taskbar, About dialog) ──
+app.setName("264 Pro Video Editor");
+// macOS About panel
+if (process.platform === "darwin") {
+  app.setAboutPanelOptions({
+    applicationName: "264 Pro Video Editor",
+    applicationVersion: app.getVersion(),
+    version: app.getVersion(),
+    credits: "© 2025 264 Pro. All rights reserved.",
+    iconPath: join(app.getAppPath(), "build-assets/icon.png")
+  });
+}
 
 function getContentType(sourcePath: string): string {
   return MEDIA_CONTENT_TYPES[extname(sourcePath).toLowerCase()] ?? "application/octet-stream";
@@ -196,6 +209,21 @@ function createMainWindow(): BrowserWindow {
     void window.loadFile(join(__dirname, "../../dist/index.html"));
   }
 
+  // Ensure title is set even after content loads (prevents Electron default title)
+  window.webContents.on("did-finish-load", () => {
+    window.setTitle("264 Pro Video Editor");
+  });
+
+  // ── Close guard: ask renderer if there are unsaved changes ───────────────
+  // Use a flag so we can bypass the guard after user confirms.
+  let closeConfirmed = false;
+  window.on("close", (e) => {
+    if (closeConfirmed) return; // already confirmed
+    e.preventDefault();
+    // Ask renderer to handle dirty-check modal
+    window.webContents.send("app:before-close");
+  });
+
   return window;
 }
 
@@ -238,6 +266,20 @@ app.whenReady().then(() => {
       mainWindow.webContents.send("updater:status", {
         state: "ready",
         version: info.version
+      });
+      // Show native dialog asking to restart and install now
+      void dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "Update Ready",
+        message: `264 Pro v${info.version} has been downloaded.`,
+        detail: "Restart now to install the update, or it will be installed automatically on next quit.",
+        buttons: ["Restart & Install", "Later"],
+        defaultId: 0,
+        cancelId: 1
+      }).then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall(false, true);
+        }
       });
     });
 
@@ -386,4 +428,25 @@ ipcMain.handle("project:open", async (event) => {
 ipcMain.handle("project:save-as", async (event, json: string, filePath: string) => {
   await writeFile(filePath, json, "utf-8");
   return filePath;
+});
+
+// ── App lifecycle IPC ─────────────────────────────────────────────────────────
+
+// renderer calls this when user says "yes close"
+// Uses ipcMain.handle so it works every time (not just once)
+ipcMain.handle("app:confirm-close", () => {
+  const wins = BrowserWindow.getAllWindows();
+  if (wins[0]) {
+    // Remove the close guard listeners then close
+    wins[0].removeAllListeners("close");
+    wins[0].close();
+  }
+});
+
+ipcMain.handle("updater:install-now", () => {
+  autoUpdater.quitAndInstall(false, true);
+});
+
+ipcMain.handle("app:open-external", (_event, url: string) => {
+  void shell.openExternal(url);
 });

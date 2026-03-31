@@ -114,8 +114,15 @@ export default function App() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(280);
   const [rightPanelWidth, setRightPanelWidth] = useState(320);
   const [resizeSide, setResizeSide] = useState<"left" | "right" | null>(null);
+  const [timelineHeight, setTimelineHeight] = useState(220);
+  const [isResizingTimeline, setIsResizingTimeline] = useState(false);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | null>(null);
   const [updaterDismissed, setUpdaterDismissed] = useState(false);
+
+  // ── Save Confirmation Modal ────────────────────────────────────────────────
+  type SaveConfirmAction = "new" | "open" | "close";
+  const [saveConfirm, setSaveConfirm] = useState<{ action: SaveConfirmAction } | null>(null);
+  const pendingActionRef = useRef<SaveConfirmAction | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({
     width: project.sequence.settings.width,
@@ -184,8 +191,10 @@ export default function App() {
   const selectedAsset =
     project.assets.find((a) => a.id === selectedAssetId) ?? inspectorSegment?.asset ?? null;
 
-  // Mark project as dirty on any change
+  // Mark project as dirty on any change (but not on first mount)
+  const isFirstMount = useRef(true);
   useEffect(() => {
+    if (isFirstMount.current) { isFirstMount.current = false; return; }
     setProjectDirty(true);
   }, [project]);
 
@@ -349,7 +358,15 @@ export default function App() {
   }
 
   function handleNewProject() {
-    if (projectDirty && !window.confirm("Discard unsaved changes and create a new project?")) return;
+    if (projectDirty) {
+      pendingActionRef.current = "new";
+      setSaveConfirm({ action: "new" });
+      return;
+    }
+    _doNewProject();
+  }
+
+  function _doNewProject() {
     loadProjectFromData(createEmptyProject() as ReturnType<typeof createEmptyProject>);
     setCurrentProjectPath(null);
     setProjectDirty(false);
@@ -358,7 +375,12 @@ export default function App() {
     setShowRecentPanel(false);
   }
 
-  async function handleOpenProject() {
+  async function handleOpenProject(skipDirtyCheck?: boolean) {
+    if (!skipDirtyCheck && projectDirty) {
+      pendingActionRef.current = "open";
+      setSaveConfirm({ action: "open" });
+      return;
+    }
     if (!window.editorApi) {
       // Fallback: load from localStorage
       try {
@@ -402,31 +424,22 @@ export default function App() {
     }
   }
 
-  async function handleOpenRecentProject(path: string, name: string) {
+  async function handleOpenRecentProject(path: string, _name: string) {
+    // Always go through handleOpenProject so dirty-check is respected
     if (path === "[localStorage]") {
+      setShowRecentPanel(false);
       await handleOpenProject();
       return;
     }
-    if (!window.editorApi) { setExportMessage("Requires Electron."); return; }
-    try {
-      const result = await window.editorApi.openProject();
-      if (!result) return;
-      const { project: loaded, warnings } = deserializeProject(result.json);
-      loadProjectFromData(loaded);
-      setCurrentProjectPath(result.filePath);
-      setProjectDirty(false);
-      addToRecentProjects(loaded.name, result.filePath);
-      setExportMessage(warnings.length ? `⚠ Loaded` : `✓ ${name} loaded.`);
-    } catch {
-      setExportMessage("Failed to open recent project.");
-    }
     setShowRecentPanel(false);
+    // For real file paths, just trigger the open dialog through normal flow
+    await handleOpenProject();
   }
 
   // ── Shortcuts ──────────────────────────────────────────────────────────────
   useEditorShortcuts({
     sequenceFps: project.sequence.settings.fps,
-    isModalOpen: showSettings || showRecentPanel,
+    isModalOpen: showSettings || showRecentPanel || Boolean(saveConfirm),
     onTogglePlayback: handleTogglePlayback,
     onToggleFullscreen: () => void viewerPanelRef.current?.toggleFullscreen(),
     onSelectTool: () => setToolMode("select"),
@@ -478,6 +491,20 @@ export default function App() {
     return () => { voiceChop.dispose(); voiceChopRef.current = null; };
   }, []);
 
+  // ── Before-close handler (Electron close button) ──────────────────────────
+  useEffect(() => {
+    if (!window.editorApi?.onBeforeClose) return;
+    const unsub = window.editorApi.onBeforeClose(() => {
+      if (!projectDirty) {
+        void window.editorApi!.confirmClose();
+        return;
+      }
+      pendingActionRef.current = "close";
+      setSaveConfirm({ action: "close" });
+    });
+    return unsub;
+  }, [projectDirty]);
+
   // ── Updater + bridge ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!window.editorApi) { setBridgeReady(false); return; }
@@ -495,6 +522,22 @@ export default function App() {
 
     return () => { cancelled = true; unsub(); };
   }, [setEnvironment]);
+
+  // ── Timeline vertical resize ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!isResizingTimeline) return;
+    const onMove = (e: MouseEvent) => {
+      const shell = appShellRef.current;
+      if (!shell) return;
+      const bounds = shell.getBoundingClientRect();
+      const newH = Math.max(140, Math.min(560, bounds.bottom - e.clientY));
+      setTimelineHeight(newH);
+    };
+    const onUp = () => setIsResizingTimeline(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [isResizingTimeline]);
 
   // ── Panel resize ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -553,6 +596,48 @@ export default function App() {
     }
   }
 
+  // ── Save Confirmation Modal handler ───────────────────────────────────────
+  async function handleSaveConfirmChoice(choice: "save" | "discard" | "cancel") {
+    const action = pendingActionRef.current;
+    setSaveConfirm(null);
+    if (choice === "cancel") { pendingActionRef.current = null; return; }
+    if (choice === "save") {
+      await handleSaveProject();
+    }
+    // After save (or discard), proceed with pending action
+    pendingActionRef.current = null;
+    if (action === "new") _doNewProject();
+    else if (action === "open") await handleOpenProject(true);
+    else if (action === "close") { void window.editorApi?.confirmClose(); }
+  }
+
+  function renderSaveConfirmModal() {
+    if (!saveConfirm) return null;
+    const actionLabel = saveConfirm.action === "close" ? "closing the app"
+      : saveConfirm.action === "new" ? "creating a new project"
+      : "opening another project";
+    return (
+      <div className="save-confirm-overlay">
+        <div className="save-confirm-modal">
+          <div className="save-confirm-icon">💾</div>
+          <h2 className="save-confirm-title">Unsaved Changes</h2>
+          <p className="save-confirm-body">Do you want to save your changes before {actionLabel}?</p>
+          <div className="save-confirm-actions">
+            <button className="panel-action primary" onClick={() => void handleSaveConfirmChoice("save")} type="button">
+              💾 Save
+            </button>
+            <button className="panel-action danger" onClick={() => void handleSaveConfirmChoice("discard")} type="button">
+              🗑 Don't Save
+            </button>
+            <button className="panel-action muted" onClick={() => void handleSaveConfirmChoice("cancel")} type="button">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── Updater banner ─────────────────────────────────────────────────────────
   const showUpdaterBanner = !updaterDismissed && updaterStatus !== null &&
     updaterStatus.state !== "checking" && updaterStatus.state !== "up-to-date";
@@ -563,15 +648,36 @@ export default function App() {
     let text = "";
     let cls = "updater-banner";
     let canDismiss = false;
+    let canInstall = false;
 
-    if (state === "available") { text = `Update v${version ?? ""} ready to download.`; cls += " info"; canDismiss = true; }
-    else if (state === "downloading") { text = `Downloading… ${percent ?? 0}%`; cls += " info"; }
-    else if (state === "ready") { text = `v${version ?? ""} downloaded — installs on quit.`; cls += " success"; canDismiss = true; }
+    if (state === "available") { text = `Update v${version ?? ""} available — downloading…`; cls += " info"; canDismiss = true; }
+    else if (state === "downloading") {
+      text = `Downloading update… ${percent ?? 0}%`;
+      cls += " info";
+    }
+    else if (state === "ready") {
+      text = `v${version ?? ""} ready to install.`;
+      cls += " success";
+      canDismiss = true;
+      canInstall = true;
+    }
     else if (state === "error") { text = `Update error: ${message ?? "unknown"}`; cls += " error"; canDismiss = true; }
 
     return (
       <div className={cls}>
         <span>{text}</span>
+        {state === "downloading" && percent !== undefined && (
+          <div className="updater-progress-bar">
+            <div className="updater-progress-fill" style={{ width: `${percent}%` }} />
+          </div>
+        )}
+        {canInstall && (
+          <button
+            className="updater-banner__install"
+            onClick={() => void window.editorApi?.installUpdate()}
+            type="button"
+          >Restart &amp; Install</button>
+        )}
         {canDismiss && (
           <button className="updater-banner__dismiss" onClick={() => setUpdaterDismissed(true)} type="button">✕</button>
         )}
@@ -694,7 +800,7 @@ export default function App() {
                 <button className="panel-action" onClick={() => void handleSaveProjectAs()} type="button">
                   📋 Save As…
                 </button>
-                <button className="panel-action" onClick={() => void handleOpenProject()} type="button">
+                <button className="panel-action" onClick={() => { setShowSettings(false); void handleOpenProject(); }} type="button">
                   📂 Open Project…
                 </button>
               </div>
@@ -714,13 +820,15 @@ export default function App() {
 
   const shellStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
-    "--right-panel-width": `${rightPanelWidth}px`
+    "--right-panel-width": `${rightPanelWidth}px`,
+    "--timeline-height": `${timelineHeight}px`
   } as CSSProperties;
 
   // ── Page content ───────────────────────────────────────────────────────────
   return (
     <div className="app-root">
       {renderUpdaterBanner()}
+      {renderSaveConfirmModal()}
       {renderSettingsModal()}
       {renderRecentPanel()}
 
@@ -931,6 +1039,14 @@ export default function App() {
               onSetVoiceBpm={(bpm) => { const v = Math.max(40, Math.min(240, Math.round(bpm))); setVoiceBpm(v); voiceChopRef.current?.setBpm(v); }}
               onSetVoiceGridFrames={(g) => { const v = Math.max(1, Math.round(g)); setVoiceGridFrames(v); voiceChopRef.current?.setGridFrames(v); }}
               onExport={handleExport}
+            />
+
+            {/* Timeline resize handle */}
+            <div
+              className={`timeline-vertical-resizer${isResizingTimeline ? " dragging" : ""}`}
+              onMouseDown={(e) => { e.preventDefault(); setIsResizingTimeline(true); }}
+              title="Drag to resize timeline"
+              role="separator"
             />
 
             {/* Timeline */}
@@ -1185,13 +1301,26 @@ export default function App() {
                 sequenceFps={project.sequence.settings.fps}
                 onSetPlayheadFrame={handleSeek}
                 onSelectClip={selectClip}
-                onMoveClipTo={(clipId, trackId, frame) => moveClipTo(clipId, trackId, frame)}
-                onTrimClipStart={trimClipStart}
-                onTrimClipEnd={trimClipEnd}
-                onBladeCut={splitClipAtFrame}
-                onDropAsset={dropAssetAtFrame}
+                onMoveClipTo={(clipId, trackId, frame) => { pauseViewerPlayback(); moveClipTo(clipId, trackId, frame); }}
+                onTrimClipStart={(clipId, trim) => { pauseViewerPlayback(); trimClipStart(clipId, trim); }}
+                onTrimClipEnd={(clipId, trim) => { pauseViewerPlayback(); trimClipEnd(clipId, trim); }}
+                onBladeCut={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+                onDropAsset={(assetId, trackId, frame) => { pauseViewerPlayback(); dropAssetAtFrame(assetId, trackId, frame); }}
                 onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
                 onSetTransitionDuration={(clipId, edge, dur) => setTransitionMessage(setSelectedClipTransitionDuration(edge, dur))}
+                onDeleteClip={(clipId) => { pauseViewerPlayback(); removeClipById(clipId); }}
+                onDuplicateClip={(clipId) => { pauseViewerPlayback(); duplicateClip(clipId); }}
+                onSplitClip={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+                onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
+                onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
+                onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
+                onSetClipSpeed={(clipId, spd) => setClipSpeed(clipId, spd)}
+                onAddFade={(clipId, edge) => {
+                  pauseViewerPlayback();
+                  selectClip(clipId);
+                  setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
+                }}
+                onAddTrack={(kind) => addTrack(kind)}
               />
             </div>
           </>

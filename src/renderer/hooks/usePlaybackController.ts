@@ -37,8 +37,13 @@ function getTargetCurrentTime(
   playheadFrame: number,
   sequenceFps: number
 ): number {
+  // Offset in timeline frames from the clip's start
   const segmentOffsetFrames = Math.max(0, playheadFrame - segment.startFrame);
-  const expectedTime = segment.sourceInSeconds + framesToSeconds(segmentOffsetFrames, sequenceFps);
+  // Convert to source seconds, accounting for clip speed
+  // (at 2x speed, each timeline frame = 2 source frames)
+  const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
+  const sourceOffsetSeconds = framesToSeconds(segmentOffsetFrames, sequenceFps) * clipSpeed;
+  const expectedTime = segment.sourceInSeconds + sourceOffsetSeconds;
   return Math.min(
     Math.max(expectedTime, segment.sourceInSeconds),
     Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, sequenceFps))
@@ -183,6 +188,9 @@ export function usePlaybackController({
       }
 
       if (shouldPlay) {
+        // Apply clip speed as HTML5 playbackRate (0.25x – 4x)
+        const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
+        media.playbackRate = clipSpeed;
         await media.play();
       } else {
         media.pause();

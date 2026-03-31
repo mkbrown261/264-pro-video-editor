@@ -39,6 +39,10 @@ declare global {
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;
       saveProjectAs: (json: string, filePath: string) => Promise<string>;
+      // App lifecycle
+      confirmClose: () => Promise<void>;
+      installUpdate: () => Promise<void>;
+      onBeforeClose: (callback: () => void) => () => void;
     };
   }
 }

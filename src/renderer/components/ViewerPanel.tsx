@@ -330,6 +330,17 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       return () => document.removeEventListener("fullscreenchange", h);
     }, []);
 
+    // ── Sync audio element volume/mute from clip settings ─────────────────────
+    useEffect(() => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const vol = activeAudioSegment?.clip.volume ?? 1;
+      const track = activeAudioSegment?.track;
+      const muted = track?.muted ?? false;
+      audio.volume = Math.max(0, Math.min(1, vol));
+      audio.muted = muted;
+    }, [activeAudioSegment?.clip.volume, activeAudioSegment?.track?.muted]);
+
     // ── Fallback: load preview asset when no timeline clip is active ──────────
     useEffect(() => {
       const video = videoRef.current;
@@ -396,7 +407,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                   filter:  gradeFilter,
                   ...videoStyle,
                 }}
-                muted={timelineReady}
+                muted={true}
                 playsInline
                 preload="metadata"
               />

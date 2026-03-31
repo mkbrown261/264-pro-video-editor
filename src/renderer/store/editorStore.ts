@@ -235,7 +235,10 @@ function getTransitionTargetClip(project: EditorProjectState, clipId: string): T
 }
 
 function withAssetSequenceDefaults(project: EditorProjectState, asset: MediaAsset): EditorProjectState {
+  // Only update sequence settings if this is the very first clip AND the project settings are still defaults
   if (project.sequence.clips.length > 0) return project;
+  const defaultFps = 30; // default fps from createEmptyProject
+  const shouldAdaptFps = project.sequence.settings.fps === defaultFps && asset.nativeFps && asset.nativeFps > 0;
   return {
     ...project,
     sequence: {
@@ -244,7 +247,7 @@ function withAssetSequenceDefaults(project: EditorProjectState, asset: MediaAsse
         ...project.sequence.settings,
         width: asset.width || project.sequence.settings.width,
         height: asset.height || project.sequence.settings.height,
-        fps: normalizeTimelineFps(asset.nativeFps || project.sequence.settings.fps)
+        fps: shouldAdaptFps ? normalizeTimelineFps(asset.nativeFps!) : project.sequence.settings.fps
       }
     }
   };
@@ -1044,7 +1047,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setClipSpeed: (clipId, speed) => {
     set(withUndo("Set Speed", (state) => updateClipInState(state, clipId, (c) => ({
       ...c,
-      speed: Math.max(0.1, Math.min(4, speed))
+      speed: Math.max(0.25, Math.min(4, speed))
     }))));
   },
 

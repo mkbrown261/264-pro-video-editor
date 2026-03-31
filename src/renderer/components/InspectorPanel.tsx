@@ -502,7 +502,7 @@ export function InspectorPanel({
                     <strong>{(selectedSegment.clip.speed ?? 1).toFixed(2)}×</strong>
                   </label>
                   <input
-                    type="range" min={0.1} max={4} step={0.05}
+                    type="range" min={0.25} max={4} step={0.05}
                     value={selectedSegment.clip.speed ?? 1}
                     onChange={(e) => onSetClipSpeed(Number(e.target.value))}
                   />
