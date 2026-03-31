@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol } from "electron";
-import { autoUpdater } from "electron-updater";
+import pkg from "electron-updater";
+const { autoUpdater } = pkg;
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
