@@ -31,8 +31,7 @@
     "notarize": false,
     "artifactName": "${productName}-${version}-${arch}-mac.${ext}",
     "target": [
-      { "target": "zip", "arch": ["arm64"] },
-      { "target": "zip", "arch": ["x64"] }
+      { "target": "zip" }
     ]
   },
   "win": {
