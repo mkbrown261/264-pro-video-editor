@@ -81,9 +81,38 @@ interface InspectorPanelProps {
 
   // Export
   onExport: () => Promise<void>;
+
+  // Color grade (for effects page display)
+  colorGrade?: ColorGrade | null;
 }
 
-const TRANSITION_CATEGORIES = ["Basic", "Dissolve", "Wipe", "Push", "Zoom", "Stylized"];
+// Transition icon map for visual representation
+const TRANSITION_ICONS: Record<ClipTransitionType, string> = {
+  cut:         "│",
+  fade:        "↔",
+  dipBlack:    "▼",
+  dipWhite:    "▽",
+  crossDissolve: "✕",
+  wipe:        "→",
+  wipeLeft:    "◀",
+  wipeRight:   "▶",
+  wipeUp:      "▲",
+  wipeDown:    "▼",
+  push:        "⇒",
+  pushLeft:    "⇐",
+  pushRight:   "⇒",
+  zoom:        "⊕",
+  zoomIn:      "⊕",
+  zoomOut:     "⊖",
+  blur:        "◎",
+  shake:       "≋",
+  rumble:      "~",
+  glitch:      "▣",
+  filmBurn:    "🎞",
+  lensFlare:   "✦"
+};
+
+const TRANSITION_CATEGORIES = Array.from(new Set(ALL_TRANSITION_TYPES.map((t) => t.category)));
 
 export function InspectorPanel({
   selectedAsset,
@@ -140,6 +169,7 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("clip");
   const [transitionCategory, setTransitionCategory] = useState("Basic");
+  const [transitionEdge, setTransitionEdge] = useState<"in" | "out">("in");
 
   const fps = sequenceSettings.fps;
   const maxFadeFrames = selectedSegment
@@ -147,16 +177,18 @@ export function InspectorPanel({
     : 0;
   const fadeInFrames = selectedSegment?.clip.transitionIn?.durationFrames ?? 0;
   const fadeOutFrames = selectedSegment?.clip.transitionOut?.durationFrames ?? 0;
-  const fadeInType = selectedSegment?.clip.transitionIn?.type ?? "fade";
-  const fadeOutType = selectedSegment?.clip.transitionOut?.type ?? "fade";
+  const fadeInType = selectedSegment?.clip.transitionIn?.type ?? null;
+  const fadeOutType = selectedSegment?.clip.transitionOut?.type ?? null;
+  const activeTransType = transitionEdge === "in" ? fadeInType : fadeOutType;
+  const activeTransFrames = transitionEdge === "in" ? fadeInFrames : fadeOutFrames;
 
   const TABS: Array<{ id: InspectorTab; label: string; icon: string }> = [
-    { id: "clip", label: "Clip", icon: "📋" },
-    { id: "masks", label: "Masks", icon: "⬡" },
+    { id: "clip",    label: "Clip",    icon: "📋" },
+    { id: "masks",   label: "Masks",   icon: "⬡" },
     { id: "effects", label: "Effects", icon: "✦" },
-    { id: "audio", label: "Audio", icon: "🎵" },
-    { id: "voice", label: "Voice AI", icon: "🎤" },
-    { id: "export", label: "Export", icon: "📤" }
+    { id: "audio",   label: "Audio",   icon: "🎵" },
+    { id: "voice",   label: "Voice AI",icon: "🎤" },
+    { id: "export",  label: "Export",  icon: "📤" }
   ];
 
   return (
@@ -199,8 +231,19 @@ export function InspectorPanel({
                     <span>Track</span><strong>{selectedSegment.track.name}</strong>
                     <span>In</span><strong>{formatTimecode(selectedSegment.startFrame, fps)}</strong>
                     <span>Duration</span><strong>{formatDuration(selectedSegment.durationSeconds)}</strong>
-                    <span>Status</span><strong>{selectedSegment.clip.isEnabled ? "Active" : "Disabled"}</strong>
+                    <span>Status</span>
+                    <strong className={selectedSegment.clip.isEnabled ? "text-success" : "text-muted"}>
+                      {selectedSegment.clip.isEnabled ? "Active" : "Disabled"}
+                    </strong>
                     <span>Linked</span><strong>{selectedSegment.clip.linkedGroupId ? "Yes" : "No"}</strong>
+                    {(selectedSegment.clip.effects?.length ?? 0) > 0 && (
+                      <>
+                        <span>Effects</span>
+                        <strong>
+                          {selectedSegment.clip.effects.filter((e) => e.enabled).length}/{selectedSegment.clip.effects.length} active
+                        </strong>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -208,6 +251,43 @@ export function InspectorPanel({
                 <div className="inspector-card">
                   <p className="inspector-label">Transitions</p>
 
+                  {/* In/Out edge selector */}
+                  <div className="transition-edge-tabs">
+                    <button
+                      className={`transition-edge-btn${transitionEdge === "in" ? " active" : ""}`}
+                      onClick={() => setTransitionEdge("in")}
+                      type="button"
+                    >
+                      <span>▶ Transition In</span>
+                      {fadeInType && <span className="trans-edge-badge">{TRANSITION_ICONS[fadeInType]}</span>}
+                    </button>
+                    <button
+                      className={`transition-edge-btn${transitionEdge === "out" ? " active" : ""}`}
+                      onClick={() => setTransitionEdge("out")}
+                      type="button"
+                    >
+                      <span>◀ Transition Out</span>
+                      {fadeOutType && <span className="trans-edge-badge">{TRANSITION_ICONS[fadeOutType]}</span>}
+                    </button>
+                  </div>
+
+                  {/* Duration control for active edge */}
+                  <div className="field">
+                    <label className="field-header">
+                      <span>{transitionEdge === "in" ? "In Duration" : "Out Duration"}</span>
+                      <strong>{(activeTransFrames / fps).toFixed(2)}s ({activeTransFrames}f)</strong>
+                    </label>
+                    <input
+                      disabled={maxFadeFrames === 0}
+                      max={maxFadeFrames} min={0} step={1}
+                      type="range"
+                      className="transition-duration-range"
+                      value={Math.min(activeTransFrames, maxFadeFrames)}
+                      onChange={(e) => onSetTransitionDuration(transitionEdge, Number(e.target.value))}
+                    />
+                  </div>
+
+                  {/* Category tabs */}
                   <div className="transition-category-tabs">
                     {TRANSITION_CATEGORIES.map((cat) => (
                       <button
@@ -221,50 +301,65 @@ export function InspectorPanel({
                     ))}
                   </div>
 
+                  {/* Transition grid */}
                   <div className="transition-grid">
                     {ALL_TRANSITION_TYPES
                       .filter((t) => t.category === transitionCategory)
-                      .map((t) => (
-                        <button
-                          key={t.value}
-                          className={`transition-btn${
-                            fadeInType === t.value || fadeOutType === t.value ? " active" : ""
-                          }`}
-                          onClick={() => onSetTransitionType("in", t.value)}
-                          title={`Apply ${t.label} transition in`}
-                          type="button"
-                        >
-                          {t.label}
-                        </button>
-                      ))}
+                      .map((t) => {
+                        const isActive = activeTransType === t.value;
+                        return (
+                          <button
+                            key={t.value}
+                            className={`transition-btn${isActive ? " active" : ""}`}
+                            onClick={() => onSetTransitionType(transitionEdge, t.value)}
+                            title={`Apply ${t.label} to ${transitionEdge === "in" ? "in" : "out"} point`}
+                            type="button"
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData("transition/type", t.value);
+                              e.dataTransfer.setData("transition/edge", transitionEdge);
+                            }}
+                          >
+                            <span className="trans-btn-icon">{TRANSITION_ICONS[t.value]}</span>
+                            <span className="trans-btn-label">{t.label}</span>
+                          </button>
+                        );
+                      })}
                   </div>
 
-                  <div className="field">
-                    <label className="field-header">
-                      <span>Transition In</span>
-                      <strong>{(fadeInFrames / fps).toFixed(2)}s</strong>
-                    </label>
-                    <input
-                      disabled={maxFadeFrames === 0}
-                      max={maxFadeFrames} min={0} step={1}
-                      type="range"
-                      value={Math.min(fadeInFrames, maxFadeFrames)}
-                      onChange={(e) => onSetTransitionDuration("in", Number(e.target.value))}
-                    />
-                  </div>
-                  <div className="field">
-                    <label className="field-header">
-                      <span>Transition Out</span>
-                      <strong>{(fadeOutFrames / fps).toFixed(2)}s</strong>
-                    </label>
-                    <input
-                      disabled={maxFadeFrames === 0}
-                      max={maxFadeFrames} min={0} step={1}
-                      type="range"
-                      value={Math.min(fadeOutFrames, maxFadeFrames)}
-                      onChange={(e) => onSetTransitionDuration("out", Number(e.target.value))}
-                    />
-                  </div>
+                  {/* Current transition display */}
+                  {(fadeInType || fadeOutType) && (
+                    <div className="transition-current-row">
+                      {fadeInType && (
+                        <div className="transition-current-item">
+                          <span className="trans-cur-label">In:</span>
+                          <span className="trans-cur-name">{ALL_TRANSITION_TYPES.find((t) => t.value === fadeInType)?.label ?? fadeInType}</span>
+                          <span className="trans-cur-dur">{(fadeInFrames / fps).toFixed(1)}s</span>
+                          <button
+                            className="trans-clear-btn"
+                            onClick={() => { onSetTransitionDuration("in", 0); onSetTransitionType("in", "cut"); }}
+                            type="button"
+                            title="Clear transition in"
+                          >✕</button>
+                        </div>
+                      )}
+                      {fadeOutType && (
+                        <div className="transition-current-item">
+                          <span className="trans-cur-label">Out:</span>
+                          <span className="trans-cur-name">{ALL_TRANSITION_TYPES.find((t) => t.value === fadeOutType)?.label ?? fadeOutType}</span>
+                          <span className="trans-cur-dur">{(fadeOutFrames / fps).toFixed(1)}s</span>
+                          <button
+                            className="trans-clear-btn"
+                            onClick={() => { onSetTransitionDuration("out", 0); onSetTransitionType("out", "cut"); }}
+                            type="button"
+                            title="Clear transition out"
+                          >✕</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {clipMessage && <span className="clip-message">{clipMessage}</span>}
                 </div>
 
                 {/* Actions */}
@@ -272,7 +367,7 @@ export function InspectorPanel({
                   <p className="inspector-label">Clip Actions</p>
                   <div className="inline-actions">
                     <button
-                      className="panel-action"
+                      className={`panel-action${!selectedSegment.clip.isEnabled ? " primary" : ""}`}
                       onClick={() => onToggleClipEnabled(selectedSegment.clip.id)}
                       type="button"
                     >
@@ -296,7 +391,6 @@ export function InspectorPanel({
                       Ripple Delete
                     </button>
                   </div>
-                  {clipMessage && <span className="clip-message">{clipMessage}</span>}
                 </div>
               </>
             ) : (
@@ -356,7 +450,7 @@ export function InspectorPanel({
 
         {/* ── EFFECTS TAB ── */}
         {activeTab === "effects" && (
-          <div className="inspector-stack">
+          <div className="inspector-stack effects-tab-body">
             <EffectsPanel
               selectedSegment={selectedSegment}
               effects={selectedSegment?.clip.effects ?? []}
@@ -432,11 +526,11 @@ export function InspectorPanel({
 
               <div className="inline-actions">
                 <button
-                  className={`panel-action${voiceListening ? " active" : ""}`}
+                  className={`panel-action${voiceListening ? " primary" : ""}`}
                   onClick={onToggleVoiceListening}
                   type="button"
                 >
-                  {voiceListening ? "Stop Mic" : "Start Mic"}
+                  {voiceListening ? "⏹ Stop Mic" : "🎤 Start Mic"}
                 </button>
                 <button className="panel-action muted" onClick={onAnalyzeVoiceChops} type="button">
                   Chop For Me
@@ -481,13 +575,13 @@ export function InspectorPanel({
                   Detect BPM
                 </button>
                 <button className="panel-action muted" onClick={() => onBeatSync("everyBeat")} type="button">
-                  Sync Every Beat
+                  Every Beat
                 </button>
                 <button className="panel-action muted" onClick={() => onBeatSync("every2")} type="button">
-                  Every 2 Beats
+                  Every 2
                 </button>
                 <button className="panel-action muted" onClick={() => onBeatSync("every4")} type="button">
-                  Every 4 Beats
+                  Every 4
                 </button>
               </div>
             </div>
@@ -561,12 +655,12 @@ export function InspectorPanel({
                 <strong>{sequenceSettings.audioSampleRate / 1000} kHz</strong>
               </div>
               <button
-                className="panel-action export-btn"
+                className="panel-action primary export-btn"
                 disabled={exportBusy}
                 onClick={() => void onExport()}
                 type="button"
               >
-                {exportBusy ? "⏳ Rendering…" : "Export MP4"}
+                {exportBusy ? "⏳ Rendering…" : "▶ Export MP4"}
               </button>
               {exportMessage && (
                 <span className={`export-message${exportMessage.startsWith("✓") ? " success" : " error"}`}>
@@ -577,7 +671,9 @@ export function InspectorPanel({
 
             <div className="inspector-card">
               <p className="inspector-label">Environment</p>
-              <strong>{environment?.ffmpegAvailable ? "✓ FFmpeg Ready" : "⚠ FFmpeg Unavailable"}</strong>
+              <strong className={environment?.ffmpegAvailable ? "text-success" : "text-warning"}>
+                {environment?.ffmpegAvailable ? "✓ FFmpeg Ready" : "⚠ FFmpeg Unavailable"}
+              </strong>
               <span>FFmpeg: {environment?.ffmpegPath ?? "not found"}</span>
               <span>FFprobe: {environment?.ffprobePath ?? "not found"}</span>
               {environment?.warnings.map((w) => (
