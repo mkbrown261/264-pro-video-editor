@@ -65,7 +65,7 @@ export interface KeyframeTrack<T> {
 
 // ── Masks ─────────────────────────────────────────────────────────────────────
 
-export type MaskType = "rectangle" | "ellipse" | "bezier";
+export type MaskType = "rectangle" | "ellipse" | "bezier" | "freehand";
 
 export interface Vec2 {
   x: number;

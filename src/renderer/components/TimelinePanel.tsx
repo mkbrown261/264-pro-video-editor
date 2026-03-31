@@ -120,15 +120,30 @@ export function TimelinePanel({
     };
   });
 
-  const [pixelsPerFrame, setPpf] = useState(6);
+  const [pixelsPerFrame, setPpf] = useState(() => {
+    try { return Number(localStorage.getItem("264pro_timeline_ppf") ?? "6") || 6; } catch { return 6; }
+  });
   const ppfRef = useRef(pixelsPerFrame);
-  useEffect(() => { ppfRef.current = pixelsPerFrame; }, [pixelsPerFrame]);
+  useEffect(() => {
+    ppfRef.current = pixelsPerFrame;
+    try { localStorage.setItem("264pro_timeline_ppf", String(pixelsPerFrame)); } catch { /* noop */ }
+  }, [pixelsPerFrame]);
 
   // ── Snap state ────────────────────────────────────────────────────────────
-  const [snapEnabled, setSnapEnabled]   = useState(true);
-  const [snapDivIdx, setSnapDivIdx]     = useState(2); // default 1/4
+  const [snapEnabled, setSnapEnabled] = useState(() => {
+    try { return localStorage.getItem("264pro_snap_enabled") !== "false"; } catch { return true; }
+  });
+  const [snapDivIdx, setSnapDivIdx] = useState(() => {
+    try { return Number(localStorage.getItem("264pro_snap_div_idx") ?? "2"); } catch { return 2; }
+  });
   const snapRef = useRef({ snapEnabled, snapDivIdx });
-  useEffect(() => { snapRef.current = { snapEnabled, snapDivIdx }; }, [snapEnabled, snapDivIdx]);
+  useEffect(() => {
+    snapRef.current = { snapEnabled, snapDivIdx };
+    try {
+      localStorage.setItem("264pro_snap_enabled", String(snapEnabled));
+      localStorage.setItem("264pro_snap_div_idx", String(snapDivIdx));
+    } catch { /* noop */ }
+  }, [snapEnabled, snapDivIdx]);
 
   // ── Interaction state ─────────────────────────────────────────────────────
   const [trimState, setTrimState]                   = useState<TrimState | null>(null);

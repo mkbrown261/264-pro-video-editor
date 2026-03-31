@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 
 interface EditorShortcutOptions {
   sequenceFps: number;
+  /** When true (any modal open) spacebar + arrow keys are suppressed */
+  isModalOpen?: boolean;
   onTogglePlayback: () => void;
   onToggleFullscreen: () => void;
   onSelectTool: () => void;
@@ -39,6 +41,7 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
 
       const {
         sequenceFps,
+        isModalOpen,
         onTogglePlayback,
         onToggleFullscreen,
         onSelectTool,
@@ -94,6 +97,11 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           onSplitSelectedClip();
           return;
         }
+        return;
+      }
+
+      // Block playback + navigation keys when any modal is open
+      if (isModalOpen && (key === " " || key === "arrowleft" || key === "arrowright" || key === "home" || key === "end")) {
         return;
       }
 

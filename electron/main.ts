@@ -179,6 +179,7 @@ function createMainWindow(): BrowserWindow {
     minHeight: 800,
     backgroundColor: "#091017",
     title: "264 Pro Video Editor",
+    icon: join(__dirname, "../../build-assets/icon.png"),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,

@@ -422,6 +422,7 @@ export default function App() {
   // ── Shortcuts ──────────────────────────────────────────────────────────────
   useEditorShortcuts({
     sequenceFps: project.sequence.settings.fps,
+    isModalOpen: showSettings || showRecentPanel,
     onTogglePlayback: handleTogglePlayback,
     onToggleFullscreen: () => void viewerPanelRef.current?.toggleFullscreen(),
     onSelectTool: () => setToolMode("select"),
