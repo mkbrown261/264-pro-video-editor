@@ -62,7 +62,8 @@ export function TimelinePanel({
   onMoveClipTo,
   onTrimClipStart,
   onTrimClipEnd,
-  onBladeCut
+  onBladeCut,
+  onDropAsset
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef = useRef<HTMLDivElement | null>(null);
