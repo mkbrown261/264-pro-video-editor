@@ -698,7 +698,7 @@ export default function App() {
         {/* ── COLOR PAGE ── */}
         {activePage === "color" && (
           <>
-            {/* Left: Color grading panel */}
+            {/* Left: Color grading controls */}
             <div className="color-page-grading">
               <ColorGradingPanel
                 selectedSegment={inspectorSegment}
@@ -710,9 +710,14 @@ export default function App() {
               />
             </div>
 
-            <div className="panel-resizer left-resizer" onMouseDown={(e) => { e.preventDefault(); setResizeSide("left"); }} role="separator" />
+            {/* Resizer between controls and viewer */}
+            <div
+              className="panel-resizer left-resizer"
+              onMouseDown={(e) => { e.preventDefault(); setResizeSide("left"); }}
+              role="separator"
+            />
 
-            {/* Center: Viewer */}
+            {/* Right: Viewer */}
             <div className="color-page-viewer">
               <ViewerPanel
                 ref={viewerPanelRef}
@@ -739,7 +744,7 @@ export default function App() {
               />
             </div>
 
-            {/* Bottom: Timeline */}
+            {/* Bottom: Timeline (spans full width) */}
             <div className="color-page-timeline">
               <TimelinePanel
                 trackLayouts={trackLayouts}
@@ -753,11 +758,11 @@ export default function App() {
                 sequenceFps={project.sequence.settings.fps}
                 onSetPlayheadFrame={handleSeek}
                 onSelectClip={selectClip}
-                onMoveClipTo={(clipId, trackId, frame) => moveClipTo(clipId, trackId, frame)}
-                onTrimClipStart={trimClipStart}
-                onTrimClipEnd={trimClipEnd}
-                onBladeCut={splitClipAtFrame}
-                onDropAsset={dropAssetAtFrame}
+                onMoveClipTo={(clipId, trackId, frame) => { pauseViewerPlayback(); moveClipTo(clipId, trackId, frame); }}
+                onTrimClipStart={(clipId, trim) => { pauseViewerPlayback(); trimClipStart(clipId, trim); }}
+                onTrimClipEnd={(clipId, trim) => { pauseViewerPlayback(); trimClipEnd(clipId, trim); }}
+                onBladeCut={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+                onDropAsset={(assetId, trackId, frame) => { pauseViewerPlayback(); dropAssetAtFrame(assetId, trackId, frame); }}
               />
             </div>
           </>
