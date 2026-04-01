@@ -426,9 +426,33 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       };
     }, []);
 
+    // ── Fallback: load preview asset when no timeline clip is active ──────────
+    useEffect(() => {
+      const video = videoRef.current;
+      if (!video || activeSegment) return;
+      if (!selectedAsset) { video.removeAttribute("src"); video.load(); return; }
+      if (video.currentSrc !== selectedAsset.previewUrl) {
+        video.src = selectedAsset.previewUrl;
+        video.load();
+      }
+    }, [activeSegment, selectedAsset?.id, selectedAsset?.previewUrl]);
+
+    // ── Derived display state ─────────────────────────────────────────────────
+    // IMPORTANT: These must be computed BEFORE any useEffect that references them
+    // to avoid the "Cannot access before initialization" TDZ error.
+    const previewAsset    = activeSegment?.asset ?? selectedAsset ?? null;
+    const timelineReady   = totalFrames > 0;
+    const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
+    const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
+    const { overlayStyle, videoStyle: rawVideoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    // Extract transitionFilter (blur/sepia from blur & oldFilm transitions) before spreading videoStyle onto <video>
+    const { transitionFilter, ...videoStyle } = rawVideoStyle as CSSProperties & { transitionFilter?: string };
+    const currentMasks    = activeSegment?.clip.masks ?? [];
+
     // ── WebGL transition rendering via RAF loop ───────────────────────────────
     // IMPORTANT: Never call renderTransitionFrame inside JSX render.
     // Use a useEffect + RAF loop keyed on the active transition type.
+    // transitionState must be declared above this block (done above).
     useEffect(() => {
       const canvas = webglCanvasRef.current;
       const video  = videoRef.current;
@@ -470,27 +494,6 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
 
     // Audio volume/mute is now managed per-segment by useMultiTrackAudio
     // inside usePlaybackController.  No audio element to sync here.
-
-    // ── Fallback: load preview asset when no timeline clip is active ──────────
-    useEffect(() => {
-      const video = videoRef.current;
-      if (!video || activeSegment) return;
-      if (!selectedAsset) { video.removeAttribute("src"); video.load(); return; }
-      if (video.currentSrc !== selectedAsset.previewUrl) {
-        video.src = selectedAsset.previewUrl;
-        video.load();
-      }
-    }, [activeSegment, selectedAsset?.id, selectedAsset?.previewUrl]);
-
-    // ── Derived display state ─────────────────────────────────────────────────
-    const previewAsset    = activeSegment?.asset ?? selectedAsset ?? null;
-    const timelineReady   = totalFrames > 0;
-    const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
-    const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
-    const { overlayStyle, videoStyle: rawVideoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
-    // Extract transitionFilter (blur/sepia from blur & oldFilm transitions) before spreading videoStyle onto <video>
-    const { transitionFilter, ...videoStyle } = rawVideoStyle as CSSProperties & { transitionFilter?: string };
-    const currentMasks    = activeSegment?.clip.masks ?? [];
 
     // ── Color grading via SVG feColorMatrix + CSS filters ──────────────────
     //
