@@ -217,6 +217,7 @@ export function usePlaybackController({
 
   const { startAudio, stopAudio, pauseAudio } = useMultiTrackAudio({
     activeAudioSegments,
+    allSegments: segments,   // pass ALL segments for lookahead prefetch
     isPlaying,
     playheadFrame,
     sequenceFps

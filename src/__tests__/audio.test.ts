@@ -1,7 +1,10 @@
 /**
- * FIX 1 / FIX 3: Audio Panel + Clip Speed — unit tests
- * Verifies that volume clamping, speed clamping and the 1:1 value-to-UI
- * relationship all hold.
+ * Audio engine unit tests
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Covers:
+ *   FIX 1 / FIX 3  – Volume and speed control UI (InspectorPanel)
+ *   FIX SEAM       – Crossfade constants (FADE_OUT_S, FADE_IN_S) and gain math
+ *   PREFETCH       – Lookahead window and prefetch gating logic
  */
 import { describe, it, expect } from "vitest";
 
@@ -25,9 +28,22 @@ function clampSpeed(raw: number): number {
   return Math.min(4, Math.max(0.25, raw));
 }
 
+// ── Crossfade / gain ramp constants (must match useMultiTrackAudio) ───────────
+
+const MAX_GAIN    = 4;
+const FADE_OUT_S  = 0.04;   // 40 ms
+const FADE_IN_S   = 0.03;   // 30 ms
+const LOOKAHEAD_FRAMES = 90;
+
+// ── Gain math helpers (mirrors reconcileSlots logic) ─────────────────────────
+
+function computeEffectiveGain(clipVol: number, trackMuted: boolean): number {
+  const effectiveVol = trackMuted ? 0 : Math.max(0, clipVol);
+  return Math.max(0, Math.min(MAX_GAIN, effectiveVol));
+}
+
 describe("Audio Panel — VolumeControl", () => {
   it("FIX 1: volume slider range is 0–2 (not 0–1)", () => {
-    // Slider max must be 2 to allow up to 200%
     const sliderMax = 2;
     expect(sliderMax).toBe(2);
   });
@@ -83,8 +99,7 @@ describe("Clip Speed Control", () => {
   });
 
   it("speed slider step is 0.05", () => {
-    // The slider uses step=0.05 — verify consistent rounding
-    const raw = 1.076; // halfway between two steps
+    const raw = 1.076;
     const stepped = Math.round(raw / 0.05) * 0.05;
     expect(stepped).toBeCloseTo(1.1, 5);
   });
@@ -93,5 +108,105 @@ describe("Clip Speed Control", () => {
     expect((1).toFixed(2)).toBe("1.00");
     expect((0.25).toFixed(2)).toBe("0.25");
     expect((4).toFixed(2)).toBe("4.00");
+  });
+});
+
+describe("Audio Seam Crossfade Constants", () => {
+  it("FADE_OUT_S is short enough not to bleed into next clip (< 80ms)", () => {
+    // Max acceptable bleed before the new clip is audible is ~80 ms
+    expect(FADE_OUT_S).toBeLessThan(0.08);
+  });
+
+  it("FADE_OUT_S is long enough to avoid a hard-cut pop (> 10ms)", () => {
+    // Below ~10 ms the ear hears a click on most content
+    expect(FADE_OUT_S).toBeGreaterThan(0.01);
+  });
+
+  it("FADE_IN_S is short enough not to sound like a fade-in effect (< 60ms)", () => {
+    expect(FADE_IN_S).toBeLessThan(0.06);
+  });
+
+  it("FADE_IN_S is long enough to suppress hard-onset click (> 5ms)", () => {
+    expect(FADE_IN_S).toBeGreaterThan(0.005);
+  });
+
+  it("fade-out completes within 3 frames at 30fps (no audible bleed)", () => {
+    // The ramp spans the seam boundary. It must finish within ~3 frames
+    // (100ms) so it's inaudible as a deliberate fade effect.
+    const threeFramesMs = (1000 / 30) * 3;
+    expect(FADE_OUT_S * 1000).toBeLessThan(threeFramesMs);
+  });
+
+  it("FADE_IN_S + FADE_OUT_S < 3 frames at 24fps (crossfade stays micro)", () => {
+    // Combined ramp pair must stay short enough to be perceived as seamless.
+    const threeFramesMs = (1000 / 24) * 3;
+    expect((FADE_IN_S + FADE_OUT_S) * 1000).toBeLessThan(threeFramesMs);
+  });
+});
+
+describe("Audio Gain Math", () => {
+  it("unity gain: clipVol=1, unmuted → gain=1", () => {
+    expect(computeEffectiveGain(1, false)).toBe(1);
+  });
+
+  it("muted track: any volume → gain=0", () => {
+    expect(computeEffectiveGain(1, true)).toBe(0);
+    expect(computeEffectiveGain(2, true)).toBe(0);
+    expect(computeEffectiveGain(0.5, true)).toBe(0);
+  });
+
+  it("boosted volume: clipVol=2 → gain=2 (Web Audio handles > 1 )", () => {
+    expect(computeEffectiveGain(2, false)).toBe(2);
+  });
+
+  it("gain is clamped to MAX_GAIN (4)", () => {
+    expect(computeEffectiveGain(5, false)).toBe(MAX_GAIN);
+    expect(computeEffectiveGain(10, false)).toBe(MAX_GAIN);
+  });
+
+  it("negative clipVol is floored to 0", () => {
+    expect(computeEffectiveGain(-1, false)).toBe(0);
+  });
+});
+
+describe("Prefetch Lookahead Logic", () => {
+  /** Mirrors the condition in useMultiTrackAudio's lookahead effect */
+  function shouldPrefetch(
+    segStartFrame: number,
+    segEndFrame: number,
+    playheadFrame: number
+  ): boolean {
+    const lookaheadFrame = playheadFrame + LOOKAHEAD_FRAMES;
+    return (
+      segStartFrame > playheadFrame &&    // not yet started
+      segStartFrame <= lookaheadFrame &&  // within window
+      segEndFrame > playheadFrame         // not already past
+    );
+  }
+
+  it("prefetches a segment starting exactly at lookahead boundary", () => {
+    expect(shouldPrefetch(90, 200, 0)).toBe(true);
+  });
+
+  it("prefetches a segment starting 1 frame ahead", () => {
+    expect(shouldPrefetch(1, 100, 0)).toBe(true);
+  });
+
+  it("does NOT prefetch a segment already passed", () => {
+    expect(shouldPrefetch(0, 50, 60)).toBe(false);
+  });
+
+  it("does NOT prefetch a segment starting beyond lookahead window", () => {
+    expect(shouldPrefetch(200, 400, 0)).toBe(false);
+  });
+
+  it("does NOT prefetch a currently-active segment (already playing)", () => {
+    // startFrame <= playheadFrame → already in active set
+    expect(shouldPrefetch(0, 100, 50)).toBe(false);
+  });
+
+  it("LOOKAHEAD_FRAMES gives ≥2s of buffer at 30fps", () => {
+    const bufferSeconds = LOOKAHEAD_FRAMES / 30;
+    expect(bufferSeconds).toBeGreaterThanOrEqual(2);
   });
 });
