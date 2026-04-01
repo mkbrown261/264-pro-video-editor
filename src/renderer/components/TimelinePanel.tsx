@@ -654,7 +654,8 @@ export function TimelinePanel({
   useEffect(() => {
     if (!lassoBox) return;
     const onMove = (e: MouseEvent) => {
-      const next = { ...lassoBoxRef.current!, curX: e.pageX, curY: e.pageY };
+      // Use clientX/Y — consistent with getBoundingClientRect (viewport coords)
+      const next = { ...lassoBoxRef.current!, curX: e.clientX, curY: e.clientY };
       lassoBoxRef.current = next;
       setLassoBox({ ...next });
     };
@@ -670,11 +671,8 @@ export function TimelinePanel({
           const selected = new Set<string>();
           document.querySelectorAll<HTMLElement>("[data-clip-id]").forEach((el) => {
             const r = el.getBoundingClientRect();
-            const ex1 = r.left + window.scrollX;
-            const ey1 = r.top  + window.scrollY;
-            const ex2 = ex1 + r.width;
-            const ey2 = ey1 + r.height;
-            if (ex2 > x1 && ex1 < x2 && ey2 > y1 && ey1 < y2) {
+            // getBoundingClientRect uses viewport (client) coords — matches clientX/Y
+            if (r.right > x1 && r.left < x2 && r.bottom > y1 && r.top < y2) {
               const cid = el.dataset.clipId;
               if (cid) selected.add(cid);
             }

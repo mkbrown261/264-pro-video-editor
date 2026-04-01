@@ -112,10 +112,12 @@ export default function App() {
   const enableColorGrade = useEditorStore((s) => s.enableColorGrade);
   const setColorGrade = useEditorStore((s) => s.setColorGrade);
   const resetColorGrade = useEditorStore((s) => s.resetColorGrade);
+  const updateSequenceSettings = useEditorStore((s) => s.updateSequenceSettings);
 
   // ── Local UI state ─────────────────────────────────────────────────────────
   const [activePage, setActivePage] = useState<AppPage>("edit");
-  const [exportBusy, setExportBusy] = useState(false);
+  const [exportBusy,  setExportBusy]  = useState(false);
+  const [importBusy,  setImportBusy]  = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null);
   const [bridgeReady, setBridgeReady] = useState(
@@ -179,6 +181,19 @@ export default function App() {
     fps: project.sequence.settings.fps,
     aspectRatio: "16:9"
   });
+
+  // Re-sync the draft every time the settings modal opens so it always shows live values
+  useEffect(() => {
+    if (showSettings) {
+      setSettingsDraft({
+        width: project.sequence.settings.width,
+        height: project.sequence.settings.height,
+        fps: project.sequence.settings.fps,
+        aspectRatio: "16:9",
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSettings]);
 
   // Project file path (for Save vs Save As)
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
@@ -717,11 +732,14 @@ export default function App() {
   async function handleImport() {
     if (!window.editorApi) { setBridgeReady(false); setExportMessage("Import unavailable — restart Electron."); return; }
     setExportMessage(null);
+    setImportBusy(true);
     try {
       const assets = await window.editorApi.openMediaFiles();
       if (assets.length) importAssets(assets);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Import failed.");
+    } finally {
+      setImportBusy(false);
     }
   }
 
@@ -885,7 +903,14 @@ export default function App() {
   }
 
   function handleSaveSettings() {
+    // Apply the drafted settings to the live project
+    updateSequenceSettings({
+      width:  Math.max(1, Math.round(settingsDraft.width)),
+      height: Math.max(1, Math.round(settingsDraft.height)),
+      fps:    settingsDraft.fps,
+    });
     setShowSettings(false);
+    showToast(`✓ Settings updated: ${settingsDraft.width}×${settingsDraft.height} / ${settingsDraft.fps}fps`);
   }
 
   // ── Settings modal ─────────────────────────────────────────────────────────
@@ -1183,6 +1208,7 @@ export default function App() {
                 selectedAssetId={selectedAssetId}
                 selectedSegment={inspectorSegment}
                 transitionMessage={transitionMessage}
+                importing={importBusy}
                 onImport={handleImport}
                 onSelectAsset={selectAsset}
                 onAppendAsset={appendAssetToTimeline}
@@ -1455,6 +1481,7 @@ export default function App() {
                 isPlaying={playback.isPlaying}
                 toolMode={toolMode}
                 colorGrade={inspectorSegment?.clip.colorGrade ?? activeSegment?.clip.colorGrade ?? null}
+                clipEffects={inspectorSegment?.clip.effects ?? activeSegment?.clip.effects ?? null}
                 activeMaskTool="none"
                 selectedMaskId={null}
                 onAddMask={() => {}}

@@ -388,6 +388,26 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       return f === "none" ? "" : f;
     }, [clipEffects]);
 
+    // ── Vignette overlay (cannot be done via CSS filter) ─────────────────────
+    const vignetteEffect = useMemo(() => {
+      if (!clipEffects) return null;
+      return clipEffects.find((e) => e.enabled && e.type === "vignette") ?? null;
+    }, [clipEffects]);
+
+    const vignetteStyle = useMemo((): CSSProperties | null => {
+      if (!vignetteEffect) return null;
+      const intensity = Number(vignetteEffect.params.intensity ?? 0.5);
+      const radius    = Number(vignetteEffect.params.radius    ?? 0.7);
+      const feather   = Number(vignetteEffect.params.feather   ?? 0.5);
+      const stop1 = Math.round(radius * 100);
+      const stop2 = Math.round(Math.min(100, (radius + feather * (1 - radius)) * 100));
+      return {
+        position: "absolute", inset: 0, pointerEvents: "none", borderRadius: "inherit",
+        background: `radial-gradient(ellipse at 50% 50%, transparent ${stop1}%, rgba(0,0,0,${intensity.toFixed(2)}) ${stop2}%)`,
+        zIndex: 5,
+      };
+    }, [vignetteEffect]);
+
     // ── Mask SVG overlay ──────────────────────────────────────────────────────
     const maskSvg = useMemo(
       () => buildSvgMaskOverlay(currentMasks, stageSize.w, stageSize.h, playheadFrame),
@@ -428,7 +448,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                 controls={false}
                 style={{
                   opacity: previewOpacity,
-                  // FIX 7: merge grade filter + effects filter into single CSS filter string
+                  // merge grade filter + effects filter into single CSS filter string
                   filter: [
                     gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : "",
                     effectsFilter,
@@ -437,7 +457,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                 }}
                 muted={true}
                 playsInline
-                preload="metadata"
+                preload="auto"
               />
             </>
           ) : (
@@ -446,6 +466,11 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
               <p>Import footage and add clips to the timeline.</p>
               <span>The viewer follows the playhead during playback.</span>
             </div>
+          )}
+
+          {/* Vignette overlay — rendered as radial-gradient since CSS filter can't do it */}
+          {previewAsset && vignetteStyle && (
+            <div style={vignetteStyle} aria-hidden="true" />
           )}
 
           {/* Transition overlay */}
@@ -520,6 +545,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           step={1}
           value={Math.min(playheadFrame, Math.max(totalFrames - 1, 0))}
           disabled={!timelineReady}
+          onInput={(e) => { stopPlayback(); onSetPlayheadFrame(Number((e.target as HTMLInputElement).value)); }}
           onChange={(e) => { stopPlayback(); onSetPlayheadFrame(Number(e.target.value)); }}
         />
 

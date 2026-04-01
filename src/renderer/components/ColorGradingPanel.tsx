@@ -215,6 +215,7 @@ function ColorWheel({ label, value, onChange }: ColorWheelProps) {
           max={0.5}
           step={0.002}
           value={value.b}
+          onInput={(e) => onChange({ ...value, b: Number((e.target as HTMLInputElement).value) })}
           onChange={(e) => onChange({ ...value, b: Number(e.target.value) })}
         />
       </div>
@@ -290,6 +291,7 @@ function SliderRow({
           max={max}
           step={step}
           value={value}
+          onInput={(e) => onChange(Number((e.target as HTMLInputElement).value))}
           onChange={(e) => onChange(Number(e.target.value))}
         />
       </div>

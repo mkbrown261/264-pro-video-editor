@@ -175,6 +175,9 @@ interface EditorStore {
   // ── Project persistence ──
   loadProjectFromData: (project: EditorProjectState) => void;
   getCurrentProjectSnapshot: () => EditorProjectState;
+
+  // ── Sequence settings ──
+  updateSequenceSettings: (settings: Partial<{ width: number; height: number; fps: number; aspectRatio: string }>) => void;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -1623,5 +1626,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   setActivePage: (page) => set({ activePage: page }),
 
-  setEnvironment: (environment) => set({ environment })
+  setEnvironment: (environment) => set({ environment }),
+
+  // ── Sequence settings ────────────────────────────────────────────────────
+  updateSequenceSettings: (settings) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          settings: { ...state.project.sequence.settings, ...settings }
+        }
+      }
+    }));
+  },
 }));

@@ -108,8 +108,8 @@ export function computeCssFilterFromEffects(effects: ClipEffect[]): string {
         parts.push(`blur(${Number(p.radius ?? 5) * 0.5}px)`);
         break;
       case "sharpen":
-        // Sharpness via contrast + brightness approximation
-        parts.push(`contrast(${1 + Number(p.amount ?? 0.5) * 0.3})`);
+        // Sharpness: high contrast + slight brightness
+        parts.push(`contrast(${1 + Number(p.amount ?? 0.5) * 0.5}) brightness(${1 + Number(p.amount ?? 0.5) * 0.04})`);
         break;
       case "glow":
         parts.push(`brightness(${1 + Number(p.intensity ?? 0.5) * 0.25}) blur(${Number(p.radius ?? 10) * 0.05}px)`);
@@ -124,14 +124,13 @@ export function computeCssFilterFromEffects(effects: ClipEffect[]): string {
         parts.push(`brightness(${1 + Number(p.lightness ?? 0) * 0.5})`);
         break;
       case "noise":
-        // Noise can't be done purely with CSS filter; approximate with contrast
+        // Noise: approximate with contrast
         parts.push(`contrast(${1 + Number(p.amount ?? 0.1) * 0.12})`);
         break;
       case "vignette":
-        // Vignette uses CSS, can't be done via filter; handled by overlay
+        // Vignette handled via CSS overlay — not a CSS filter
         break;
       case "pixelate":
-        // Pixelate: approximate with scale/blur
         parts.push(`blur(${Number(p.size ?? 8) * 0.15}px)`);
         break;
       case "edgeDetect":
@@ -140,9 +139,24 @@ export function computeCssFilterFromEffects(effects: ClipEffect[]): string {
       case "chromaKey":
         // ChromaKey: no CSS equiv; skip
         break;
-      case "contrast":
-        parts.push(`contrast(${1 + Number(p.amount ?? 0)})`);
+      case "contrast": {
+        // B&W / Sepia: desaturate + optional sepia tint
+        const desat = Number(p.amount ?? 0);
+        const sep   = Number(p.sepia ?? 0);
+        if (desat > 0)  parts.push(`grayscale(${desat})`);
+        if (sep   > 0)  parts.push(`sepia(${sep})`);
         break;
+      }
+      case "colorReplace":
+        // Exposure: approximate with brightness (1 stop ≈ 2× brightness)
+        parts.push(`brightness(${Math.pow(2, Number(p.stops ?? 0))})`);
+        break;
+      case "backgroundRemoval": {
+        // RGB Split / chromatic aberration — approximate with hue-rotate + saturate
+        const amt = Number(p.amount ?? 4);
+        if (amt > 0) parts.push(`hue-rotate(${amt * 1.5}deg) saturate(${1 + amt * 0.05})`);
+        break;
+      }
       default:
         break;
     }
@@ -441,6 +455,7 @@ function EffectCard({
                       max={pDef.max}
                       step={pDef.step}
                       value={Number(val)}
+                      onInput={(e) => onUpdate({ ...effect.params, [pDef.key]: Number((e.target as HTMLInputElement).value) })}
                       onChange={(e) => onUpdate({ ...effect.params, [pDef.key]: Number(e.target.value) })}
                     />
                     <span className="effect-param-value">
@@ -548,6 +563,7 @@ function BGRemovalCard({ config, onToggle, onUpdate }: BGRemovalCardProps) {
             <div className="effect-param-control">
               <input type="range" className="effect-range" min={0} max={1} step={0.01}
                 value={config.threshold}
+                onInput={(e) => onUpdate({ threshold: Number((e.target as HTMLInputElement).value) })}
                 onChange={(e) => onUpdate({ threshold: Number(e.target.value) })}
               />
               <span className="effect-param-value">{config.threshold.toFixed(2)}</span>
@@ -558,6 +574,7 @@ function BGRemovalCard({ config, onToggle, onUpdate }: BGRemovalCardProps) {
             <div className="effect-param-control">
               <input type="range" className="effect-range" min={0} max={1} step={0.01}
                 value={config.edgeRefinement}
+                onInput={(e) => onUpdate({ edgeRefinement: Number((e.target as HTMLInputElement).value) })}
                 onChange={(e) => onUpdate({ edgeRefinement: Number(e.target.value) })}
               />
               <span className="effect-param-value">{config.edgeRefinement.toFixed(2)}</span>
@@ -568,6 +585,7 @@ function BGRemovalCard({ config, onToggle, onUpdate }: BGRemovalCardProps) {
             <div className="effect-param-control">
               <input type="range" className="effect-range" min={0} max={1} step={0.01}
                 value={config.spillSuppression}
+                onInput={(e) => onUpdate({ spillSuppression: Number((e.target as HTMLInputElement).value) })}
                 onChange={(e) => onUpdate({ spillSuppression: Number(e.target.value) })}
               />
               <span className="effect-param-value">{config.spillSuppression.toFixed(2)}</span>

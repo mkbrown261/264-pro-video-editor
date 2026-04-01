@@ -8,6 +8,7 @@ interface MediaPoolProps {
   selectedAssetId: string | null;
   selectedSegment: TimelineSegment | null;
   transitionMessage: string | null;
+  importing: boolean;
   onImport: () => Promise<void>;
   onSelectAsset: (assetId: string) => void;
   onAppendAsset: (assetId: string) => void;
@@ -19,6 +20,7 @@ export function MediaPool({
   selectedAssetId,
   selectedSegment,
   transitionMessage,
+  importing,
   onImport,
   onSelectAsset,
   onAppendAsset,
@@ -33,8 +35,15 @@ export function MediaPool({
           <p className="eyebrow">Editorial</p>
           <h2>Media Pool</h2>
         </div>
-        <button className="panel-action" onClick={() => void onImport()}>
-          Import Media
+        <button
+          className="panel-action"
+          onClick={() => void onImport()}
+          disabled={importing}
+          type="button"
+        >
+          {importing ? (
+            <><span className="import-spinner" /> Importing…</>
+          ) : "Import Media"}
         </button>
       </div>
 
