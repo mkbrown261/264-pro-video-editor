@@ -303,6 +303,27 @@ export interface BeatSyncConfig {
   sensitivity: number;  // 0-1
 }
 
+// ── Clip Transform ───────────────────────────────────────────────────────────
+
+export interface ClipTransform {
+  posX: number;     // -1 to 1 (fraction of canvas width, 0 = center)
+  posY: number;     // -1 to 1 (fraction of canvas height, 0 = center)
+  scaleX: number;   // 0.05 to 4  (1 = native size)
+  scaleY: number;   // 0.05 to 4  (1 = native size)
+  rotation: number; // degrees, -180 to 180
+  opacity: number;  // 0 to 1
+  anchorX: number;  // 0 to 1 (0.5 = center)
+  anchorY: number;  // 0 to 1 (0.5 = center)
+}
+
+export const DEFAULT_CLIP_TRANSFORM: ClipTransform = {
+  posX: 0, posY: 0,
+  scaleX: 1, scaleY: 1,
+  rotation: 0,
+  opacity: 1,
+  anchorX: 0.5, anchorY: 0.5,
+};
+
 // ── Timeline Clip (extended) ──────────────────────────────────────────────────
 
 export interface TimelineClip {
@@ -322,6 +343,7 @@ export interface TimelineClip {
   colorGrade: ColorGrade | null;
   volume: number;  // 0-2
   speed: number;   // 0.1-4.0 (1=normal)
+  transform: ClipTransform | null;  // null = use default (identity)
   aiBackgroundRemoval: BackgroundRemovalConfig | null;
   beatSync: BeatSyncConfig | null;
 }
@@ -505,6 +527,7 @@ export function createEmptyClip(
     colorGrade: null,
     volume: 1,
     speed: 1,
+    transform: null,
     aiBackgroundRemoval: null,
     beatSync: null
   };

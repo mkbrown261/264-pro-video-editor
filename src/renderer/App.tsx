@@ -84,6 +84,7 @@ export default function App() {
   const setEnvironment = useEditorStore((s) => s.setEnvironment);
   const setClipVolume = useEditorStore((s) => s.setClipVolume);
   const setClipSpeed = useEditorStore((s) => s.setClipSpeed);
+  const setClipTransform = useEditorStore((s) => s.setClipTransform);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
@@ -1383,6 +1384,8 @@ export default function App() {
               onRippleDelete={() => { pauseViewerPlayback(); removeSelectedClip(); }}
               onSetClipVolume={(vol) => { if (selectedClipId) setClipVolume(selectedClipId, vol); }}
               onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
+              clipTransform={inspectorSegment?.clip.transform ?? null}
+              onSetClipTransform={(updates) => { if (selectedClipId) setClipTransform(selectedClipId, updates); }}
               videoRef={viewerVideoRef}
               onToggleVoiceListening={() => voiceChopRef.current?.listenForCommands()}
               onAnalyzeVoiceChops={() => {

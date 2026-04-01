@@ -5924,3 +5924,150 @@ kbd {
   height: 100%;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   COLLAPSIBLE INSPECTOR CARDS
+   ───────────────────────────────────────────────────────────────────────────── */
+.inspector-card.collapsible {
+  padding: 0;
+  gap: 0;
+}
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-dim);
+}
+.collapsible-header:hover { background: rgba(255,255,255,0.03); }
+.collapsible-arrow {
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  width: 10px;
+}
+.collapsible-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  flex: 1;
+}
+.collapsible-badge {
+  font-size: 0.55rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 10px;
+  padding: 1px 5px;
+  font-weight: 700;
+}
+.collapsible-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 10px 10px;
+}
+.collapsible-body > strong {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.collapsible-body > span {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* ── WebGL dot on transition buttons ── */
+.trans-webgl-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  font-size: 0.5rem;
+  color: var(--accent);
+  line-height: 1;
+}
+.transition-btn { position: relative; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   CLIP TRANSFORM TAB
+   ───────────────────────────────────────────────────────────────────────────── */
+.transform-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.transform-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  width: 18px;
+  flex-shrink: 0;
+}
+.transform-numeric {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 5px;
+  font-size: 0.72rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  text-align: right;
+}
+.transform-numeric:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.transform-reset-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.transform-reset-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
+
+.scale-uniform-btn {
+  margin-top: 2px;
+  width: 100%;
+  font-size: 0.62rem;
+  padding: 3px 6px;
+}
+
+/* Anchor point 3×3 grid */
+.anchor-presets {
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  gap: 3px;
+  margin-top: 4px;
+}
+.anchor-preset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  background: var(--bg-item);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.anchor-preset-btn:hover { background: var(--bg-item-hi); color: var(--text); }
+.anchor-preset-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+

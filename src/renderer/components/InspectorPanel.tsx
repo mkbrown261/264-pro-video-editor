@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import type {
   BackgroundRemovalConfig,
   ClipEffect,
@@ -14,7 +14,27 @@ import { formatDuration, formatTimecode } from "../lib/format";
 import { MaskInspector, type MaskTool } from "./MaskingCanvas";
 import { EffectsPanel } from "./EffectsPanel";
 
-type InspectorTab = "clip" | "masks" | "effects" | "audio" | "voice" | "export";
+type InspectorTab = "clip" | "transform" | "masks" | "effects" | "audio" | "voice" | "export";
+
+// ── ClipTransform (local UI type — persisted via onSetClipTransform) ──────────
+export interface ClipTransformValues {
+  posX: number;       // -1 to 1 (fraction of canvas width)
+  posY: number;       // -1 to 1 (fraction of canvas height)
+  scaleX: number;     // 0.1 to 4
+  scaleY: number;     // 0.1 to 4
+  rotation: number;   // degrees, -180 to 180
+  opacity: number;    // 0 to 1
+  anchorX: number;    // 0 to 1 (normalized, 0.5 = center)
+  anchorY: number;    // 0 to 1 (normalized, 0.5 = center)
+}
+
+export const DEFAULT_TRANSFORM: ClipTransformValues = {
+  posX: 0, posY: 0,
+  scaleX: 1, scaleY: 1,
+  rotation: 0,
+  opacity: 1,
+  anchorX: 0.5, anchorY: 0.5,
+};
 
 interface InspectorPanelProps {
   // State
@@ -68,6 +88,10 @@ interface InspectorPanelProps {
   onSetClipVolume: (volume: number) => void;
   onSetClipSpeed: (speed: number) => void;
 
+  // Transform
+  clipTransform?: ClipTransformValues | null;
+  onSetClipTransform?: (transform: Partial<ClipTransformValues>) => void;
+
   // Voice Chop AI
   onToggleVoiceListening: () => void;
   onAnalyzeVoiceChops: () => void;
@@ -90,35 +114,121 @@ interface InspectorPanelProps {
   videoRef?: React.RefObject<HTMLVideoElement | null>;
 }
 
-// Transition icon map for visual representation
+// ── Complete TRANSITION_ICONS ─────────────────────────────────────────────────
 const TRANSITION_ICONS: Record<ClipTransitionType, string> = {
-  cut:         "│",
-  fade:        "↔",
-  dipBlack:    "▼",
-  dipWhite:    "▽",
-  crossDissolve: "✕",
-  wipe:        "→",
-  wipeLeft:    "◀",
-  wipeRight:   "▶",
-  wipeUp:      "▲",
-  wipeDown:    "▼",
-  push:        "⇒",
-  pushLeft:    "⇐",
-  pushRight:   "⇒",
-  zoom:        "⊕",
-  zoomIn:      "⊕",
-  zoomOut:     "⊖",
-  blur:        "◎",
-  shake:       "≋",
-  rumble:      "~",
-  glitch:      "▣",
-  filmBurn:    "🎞",
-  lensFlare:   "✦"
+  // Basic
+  cut:              "│",
+  fade:             "↔",
+  dipBlack:         "▼",
+  dipWhite:         "▽",
+  dipColor:         "◈",
+  additiveDissolve: "⊕",
+  // Dissolve
+  crossDissolve:    "✕",
+  luminanceDissolve:"◑",
+  filmDissolve:     "⊛",
+  // Wipe (generic + directional)
+  wipe:             "→",
+  wipeLeft:         "◀",
+  wipeRight:        "▶",
+  wipeUp:           "▲",
+  wipeDown:         "▼",
+  wipeDiagTL:       "◢",
+  wipeDiagTR:       "◣",
+  wipeRadial:       "◎",
+  wipeClock:        "⏱",
+  wipeStar:         "★",
+  wipeBlinds:       "≡",
+  wipeSplit:        "⇔",
+  // Push / Cover / Slide (generic + directional)
+  push:             "⇒",
+  pushLeft:         "⇐",
+  pushRight:        "⇒",
+  pushUp:           "⇑",
+  pushDown:         "⇓",
+  cover:            "▣",
+  uncover:          "▢",
+  slideLeft:        "←",
+  slideRight:       "→",
+  // Zoom / Rotation
+  zoom:             "⊕",
+  zoomIn:           "⊕",
+  zoomOut:          "⊖",
+  zoomCross:        "⊗",
+  whipPan:          "⟹",
+  spinCW:           "↻",
+  spinCCW:          "↺",
+  // Stylized
+  blur:             "◎",
+  blurDissolve:     "⊙",
+  pixelate:         "⊞",
+  shake:            "≋",
+  rumble:           "〰",
+  glitch:           "▣",
+  glitchRgb:        "▤",
+  filmBurn:         "🎞",
+  lensFlare:        "✦",
+  lightLeak:        "☀",
+  staticNoise:      "░",
+  ripple:           "≈",
+  prism:            "◁",
+  vhsStatic:        "▒",
+  // Shape Reveals
+  irisCircle:       "◉",
+  irisStar:         "★",
+  irisHeart:        "♥",
+  diamond:          "◆",
+  revealSplitH:     "⇕",
+  revealSplitV:     "⇔",
+  // Film / Cinematic
+  whiteFlash:       "□",
+  blackFlash:       "■",
+  filmFlash:        "⚡",
+  exposure:         "☼",
+  oldFilm:          "📽",
+  vhsRewind:        "⏪",
+  chromaShift:      "⧖",
 };
+
+// Fallback icon for any unknown transition (safety)
+function transIcon(type: ClipTransitionType): string {
+  return TRANSITION_ICONS[type] ?? "→";
+}
 
 const TRANSITION_CATEGORIES = Array.from(new Set(ALL_TRANSITION_TYPES.map((t) => t.category)));
 
-// ── Volume numeric input with 1:1 sync ────────────────────────────────────────
+// ── Collapsible section ───────────────────────────────────────────────────────
+function CollapsibleCard({
+  label,
+  defaultOpen = true,
+  children,
+  badge,
+}: {
+  label: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+  badge?: string | number | null;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`inspector-card collapsible${open ? " open" : " closed"}`}>
+      <button
+        className="collapsible-header"
+        onClick={() => setOpen((v) => !v)}
+        type="button"
+      >
+        <span className="collapsible-arrow">{open ? "▾" : "▸"}</span>
+        <span className="collapsible-label">{label}</span>
+        {badge != null && badge !== "" && (
+          <span className="collapsible-badge">{badge}</span>
+        )}
+      </button>
+      {open && <div className="collapsible-body">{children}</div>}
+    </div>
+  );
+}
+
+// ── Volume control ─────────────────────────────────────────────────────────────
 function VolumeControl({
   value,
   onChange,
@@ -150,7 +260,6 @@ function VolumeControl({
       <input
         type="range" min={0} max={2} step={0.01}
         value={value}
-        /* onInput fires on every frame during drag — 1:1 sync, no debounce */
         onInput={(e) => onChange(Number((e.target as HTMLInputElement).value))}
         onChange={(e) => onChange(Number(e.target.value))}
       />
@@ -161,7 +270,7 @@ function VolumeControl({
   );
 }
 
-// ── Speed numeric input with 0.25x – 4x range ────────────────────────────────
+// ── Speed control ─────────────────────────────────────────────────────────────
 function SpeedControl({
   value,
   onChange,
@@ -192,7 +301,6 @@ function SpeedControl({
       <input
         type="range" min={0.25} max={4} step={0.05}
         value={value}
-        /* onInput fires on every frame during drag — 1:1 sync, no debounce */
         onInput={(e) => onChange(Number((e.target as HTMLInputElement).value))}
         onChange={(e) => onChange(Number(e.target.value))}
       />
@@ -203,6 +311,193 @@ function SpeedControl({
   );
 }
 
+// ── Transform numeric row ─────────────────────────────────────────────────────
+function TransformRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  onChange,
+  onReset,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  onChange: (v: number) => void;
+  onReset?: () => void;
+}) {
+  return (
+    <div className="transform-row">
+      <span className="transform-label">{label}</span>
+      <input
+        className="numeric-input transform-numeric"
+        type="number"
+        min={min} max={max} step={step}
+        value={step < 0.01 ? value.toFixed(3) : step < 0.1 ? value.toFixed(2) : value.toFixed(1)}
+        onChange={(e) => {
+          const v = Math.min(max, Math.max(min, Number(e.target.value)));
+          onChange(v);
+        }}
+      />
+      {unit && <span className="field-unit">{unit}</span>}
+      {onReset && (
+        <button className="transform-reset-btn" onClick={onReset} type="button" title="Reset to default">
+          ↺
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Transform tab body ────────────────────────────────────────────────────────
+function TransformTab({
+  transform,
+  onSet,
+}: {
+  transform: ClipTransformValues;
+  onSet: (updates: Partial<ClipTransformValues>) => void;
+}) {
+  const resetAll = useCallback(() => onSet({ ...DEFAULT_TRANSFORM }), [onSet]);
+
+  return (
+    <div className="inspector-stack">
+      <CollapsibleCard label="Position" defaultOpen>
+        <TransformRow
+          label="X"
+          value={transform.posX}
+          min={-2} max={2} step={0.001}
+          unit="rel"
+          onChange={(v) => onSet({ posX: v })}
+          onReset={() => onSet({ posX: 0 })}
+        />
+        <TransformRow
+          label="Y"
+          value={transform.posY}
+          min={-2} max={2} step={0.001}
+          unit="rel"
+          onChange={(v) => onSet({ posY: v })}
+          onReset={() => onSet({ posY: 0 })}
+        />
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Scale" defaultOpen>
+        <TransformRow
+          label="W"
+          value={transform.scaleX}
+          min={0.05} max={4} step={0.01}
+          unit="×"
+          onChange={(v) => onSet({ scaleX: v })}
+          onReset={() => onSet({ scaleX: 1 })}
+        />
+        <TransformRow
+          label="H"
+          value={transform.scaleY}
+          min={0.05} max={4} step={0.01}
+          unit="×"
+          onChange={(v) => onSet({ scaleY: v })}
+          onReset={() => onSet({ scaleY: 1 })}
+        />
+        <button
+          className="panel-action muted scale-uniform-btn"
+          type="button"
+          onClick={() => onSet({ scaleY: transform.scaleX })}
+          title="Set H scale equal to W scale"
+        >
+          ⇅ Uniform Scale
+        </button>
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Rotation" defaultOpen>
+        <TransformRow
+          label="°"
+          value={transform.rotation}
+          min={-180} max={180} step={0.1}
+          unit="deg"
+          onChange={(v) => onSet({ rotation: v })}
+          onReset={() => onSet({ rotation: 0 })}
+        />
+        <div className="field">
+          <input
+            type="range" min={-180} max={180} step={0.5}
+            value={transform.rotation}
+            onInput={(e) => onSet({ rotation: Number((e.target as HTMLInputElement).value) })}
+            onChange={(e) => onSet({ rotation: Number(e.target.value) })}
+          />
+          <div className="range-labels"><span>-180°</span><span>0°</span><span>180°</span></div>
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Opacity" defaultOpen>
+        <TransformRow
+          label="%"
+          value={Math.round(transform.opacity * 100)}
+          min={0} max={100} step={1}
+          unit="%"
+          onChange={(v) => onSet({ opacity: v / 100 })}
+          onReset={() => onSet({ opacity: 1 })}
+        />
+        <div className="field">
+          <input
+            type="range" min={0} max={1} step={0.01}
+            value={transform.opacity}
+            onInput={(e) => onSet({ opacity: Number((e.target as HTMLInputElement).value) })}
+            onChange={(e) => onSet({ opacity: Number(e.target.value) })}
+          />
+          <div className="range-labels"><span>0%</span><span>50%</span><span>100%</span></div>
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Anchor Point" defaultOpen={false}>
+        <TransformRow
+          label="X"
+          value={transform.anchorX}
+          min={0} max={1} step={0.01}
+          unit="norm"
+          onChange={(v) => onSet({ anchorX: v })}
+          onReset={() => onSet({ anchorX: 0.5 })}
+        />
+        <TransformRow
+          label="Y"
+          value={transform.anchorY}
+          min={0} max={1} step={0.01}
+          unit="norm"
+          onChange={(v) => onSet({ anchorY: v })}
+          onReset={() => onSet({ anchorY: 0.5 })}
+        />
+        <div className="anchor-presets">
+          {[
+            ["↖", 0, 0], ["↑", 0.5, 0], ["↗", 1, 0],
+            ["←", 0, 0.5], ["✛", 0.5, 0.5], ["→", 1, 0.5],
+            ["↙", 0, 1], ["↓", 0.5, 1], ["↘", 1, 1],
+          ].map(([icon, ax, ay]) => (
+            <button
+              key={`${ax}-${ay}`}
+              className={`anchor-preset-btn${transform.anchorX === ax && transform.anchorY === ay ? " active" : ""}`}
+              onClick={() => onSet({ anchorX: ax as number, anchorY: ay as number })}
+              type="button"
+              title={`Anchor ${icon}`}
+            >
+              {icon}
+            </button>
+          ))}
+        </div>
+      </CollapsibleCard>
+
+      <div className="inspector-card">
+        <button className="panel-action muted" onClick={resetAll} type="button">
+          ↺ Reset All Transform
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export function InspectorPanel({
   selectedAsset,
   selectedSegment,
@@ -245,6 +540,8 @@ export function InspectorPanel({
   onRippleDelete,
   onSetClipVolume,
   onSetClipSpeed,
+  clipTransform,
+  onSetClipTransform,
   onToggleVoiceListening,
   onAnalyzeVoiceChops,
   onDetectBpm,
@@ -266,20 +563,24 @@ export function InspectorPanel({
   const maxFadeFrames = selectedSegment
     ? Math.max(0, Math.min(Math.round(fps * 2), selectedSegment.durationFrames - 1))
     : 0;
-  const fadeInFrames = selectedSegment?.clip.transitionIn?.durationFrames ?? 0;
+  const fadeInFrames  = selectedSegment?.clip.transitionIn?.durationFrames  ?? 0;
   const fadeOutFrames = selectedSegment?.clip.transitionOut?.durationFrames ?? 0;
-  const fadeInType = selectedSegment?.clip.transitionIn?.type ?? null;
-  const fadeOutType = selectedSegment?.clip.transitionOut?.type ?? null;
-  const activeTransType = transitionEdge === "in" ? fadeInType : fadeOutType;
+  const fadeInType    = selectedSegment?.clip.transitionIn?.type  ?? null;
+  const fadeOutType   = selectedSegment?.clip.transitionOut?.type ?? null;
+  const activeTransType   = transitionEdge === "in" ? fadeInType   : fadeOutType;
   const activeTransFrames = transitionEdge === "in" ? fadeInFrames : fadeOutFrames;
 
+  // Merge stored transform with defaults so all fields are always present
+  const xform: ClipTransformValues = { ...DEFAULT_TRANSFORM, ...(clipTransform ?? {}) };
+
   const TABS: Array<{ id: InspectorTab; label: string; icon: string }> = [
-    { id: "clip",    label: "Clip",    icon: "📋" },
-    { id: "masks",   label: "Masks",   icon: "⬡" },
-    { id: "effects", label: "Effects", icon: "✦" },
-    { id: "audio",   label: "Audio",   icon: "🎵" },
-    { id: "voice",   label: "Voice AI",icon: "🎤" },
-    { id: "export",  label: "Export",  icon: "📤" }
+    { id: "clip",      label: "Clip",      icon: "📋" },
+    { id: "transform", label: "Transform", icon: "⊹" },
+    { id: "masks",     label: "Masks",     icon: "⬡" },
+    { id: "effects",   label: "Effects",   icon: "✦" },
+    { id: "audio",     label: "Audio",     icon: "🎵" },
+    { id: "voice",     label: "Voice AI",  icon: "🎤" },
+    { id: "export",    label: "Export",    icon: "📤" },
   ];
 
   return (
@@ -306,17 +607,15 @@ export function InspectorPanel({
         {activeTab === "clip" && (
           <div className="inspector-stack">
             {/* Sequence info */}
-            <div className="inspector-card">
-              <p className="inspector-label">Sequence</p>
+            <CollapsibleCard label="Sequence" defaultOpen={false}>
               <strong>{sequenceSettings.width}×{sequenceSettings.height} / {fps}fps</strong>
               <span>{sequenceSettings.audioSampleRate / 1000}kHz audio</span>
-            </div>
+            </CollapsibleCard>
 
             {selectedSegment ? (
               <>
                 {/* Clip info */}
-                <div className="inspector-card">
-                  <p className="inspector-label">Selected Clip</p>
+                <CollapsibleCard label="Selected Clip" defaultOpen>
                   <strong>{selectedSegment.asset.name}</strong>
                   <div className="clip-meta-grid">
                     <span>Track</span><strong>{selectedSegment.track.name}</strong>
@@ -336,12 +635,14 @@ export function InspectorPanel({
                       </>
                     )}
                   </div>
-                </div>
+                </CollapsibleCard>
 
                 {/* Transitions */}
-                <div className="inspector-card">
-                  <p className="inspector-label">Transitions</p>
-
+                <CollapsibleCard
+                  label="Transitions"
+                  defaultOpen
+                  badge={fadeInType || fadeOutType ? "●" : null}
+                >
                   {/* In/Out edge selector */}
                   <div className="transition-edge-tabs">
                     <button
@@ -350,7 +651,7 @@ export function InspectorPanel({
                       type="button"
                     >
                       <span>▶ Transition In</span>
-                      {fadeInType && <span className="trans-edge-badge">{TRANSITION_ICONS[fadeInType]}</span>}
+                      {fadeInType && <span className="trans-edge-badge">{transIcon(fadeInType)}</span>}
                     </button>
                     <button
                       className={`transition-edge-btn${transitionEdge === "out" ? " active" : ""}`}
@@ -358,11 +659,11 @@ export function InspectorPanel({
                       type="button"
                     >
                       <span>◀ Transition Out</span>
-                      {fadeOutType && <span className="trans-edge-badge">{TRANSITION_ICONS[fadeOutType]}</span>}
+                      {fadeOutType && <span className="trans-edge-badge">{transIcon(fadeOutType)}</span>}
                     </button>
                   </div>
 
-                  {/* Duration control for active edge */}
+                  {/* Duration */}
                   <div className="field">
                     <label className="field-header">
                       <span>{transitionEdge === "in" ? "In Duration" : "Out Duration"}</span>
@@ -404,7 +705,7 @@ export function InspectorPanel({
                             key={t.value}
                             className={`transition-btn${isActive ? " active" : ""}`}
                             onClick={() => onSetTransitionType(transitionEdge, t.value)}
-                            title={`Apply ${t.label} to ${transitionEdge === "in" ? "in" : "out"} point`}
+                            title={`Apply ${t.label} to ${transitionEdge === "in" ? "in" : "out"} point${t.webgl ? " (WebGL)" : ""}`}
                             type="button"
                             draggable
                             onDragStart={(e) => {
@@ -412,14 +713,15 @@ export function InspectorPanel({
                               e.dataTransfer.setData("transition/edge", transitionEdge);
                             }}
                           >
-                            <span className="trans-btn-icon">{TRANSITION_ICONS[t.value]}</span>
+                            <span className="trans-btn-icon">{transIcon(t.value)}</span>
                             <span className="trans-btn-label">{t.label}</span>
+                            {t.webgl && <span className="trans-webgl-dot" title="WebGL accelerated">•</span>}
                           </button>
                         );
                       })}
                   </div>
 
-                  {/* Current transition display */}
+                  {/* Current transitions display */}
                   {(fadeInType || fadeOutType) && (
                     <div className="transition-current-row">
                       {fadeInType && (
@@ -430,8 +732,7 @@ export function InspectorPanel({
                           <button
                             className="trans-clear-btn"
                             onClick={() => { onSetTransitionDuration("in", 0); onSetTransitionType("in", "cut"); }}
-                            type="button"
-                            title="Clear transition in"
+                            type="button" title="Clear transition in"
                           >✕</button>
                         </div>
                       )}
@@ -443,8 +744,7 @@ export function InspectorPanel({
                           <button
                             className="trans-clear-btn"
                             onClick={() => { onSetTransitionDuration("out", 0); onSetTransitionType("out", "cut"); }}
-                            type="button"
-                            title="Clear transition out"
+                            type="button" title="Clear transition out"
                           >✕</button>
                         </div>
                       )}
@@ -452,11 +752,10 @@ export function InspectorPanel({
                   )}
 
                   {clipMessage && <span className="clip-message">{clipMessage}</span>}
-                </div>
+                </CollapsibleCard>
 
                 {/* Actions */}
-                <div className="inspector-card">
-                  <p className="inspector-label">Clip Actions</p>
+                <CollapsibleCard label="Clip Actions" defaultOpen>
                   <div className="inline-actions">
                     <button
                       className={`panel-action${!selectedSegment.clip.isEnabled ? " primary" : ""}`}
@@ -465,7 +764,7 @@ export function InspectorPanel({
                     >
                       {selectedSegment.clip.isEnabled ? "Disable" : "Enable"}
                     </button>
-                    {selectedSegment.clip.linkedGroupId && (
+                    {selectedSegment.clip.linkedGroupId ? (
                       <button
                         className="panel-action muted"
                         onClick={() => onDetachLinkedClips(selectedSegment.clip.id)}
@@ -474,8 +773,7 @@ export function InspectorPanel({
                       >
                         🔗 Unlink A/V
                       </button>
-                    )}
-                    {!selectedSegment.clip.linkedGroupId && (
+                    ) : (
                       <button
                         className="panel-action muted"
                         onClick={() => onRelinkClips?.(selectedSegment.clip.id)}
@@ -494,7 +792,7 @@ export function InspectorPanel({
                       Ripple Delete
                     </button>
                   </div>
-                </div>
+                </CollapsibleCard>
               </>
             ) : (
               <div className="inspector-card">
@@ -505,8 +803,7 @@ export function InspectorPanel({
 
             {/* Asset info */}
             {selectedAsset && (
-              <div className="inspector-card">
-                <p className="inspector-label">Source Media</p>
+              <CollapsibleCard label="Source Media" defaultOpen={false}>
                 <strong>{selectedAsset.name}</strong>
                 <div className="clip-meta-grid">
                   <span>Duration</span><strong>{formatDuration(selectedAsset.durationSeconds)}</strong>
@@ -514,9 +811,33 @@ export function InspectorPanel({
                   <span>FPS</span><strong>{selectedAsset.nativeFps.toFixed(2)}</strong>
                   <span>Audio</span><strong>{selectedAsset.hasAudio ? "Yes" : "No"}</strong>
                 </div>
-              </div>
+              </CollapsibleCard>
             )}
           </div>
+        )}
+
+        {/* ── TRANSFORM TAB ── */}
+        {activeTab === "transform" && (
+          selectedSegment ? (
+            onSetClipTransform ? (
+              <TransformTab transform={xform} onSet={onSetClipTransform} />
+            ) : (
+              <div className="inspector-stack">
+                <div className="inspector-card">
+                  <p className="inspector-label">Transform</p>
+                  <span className="hint-text">Transform callbacks not yet wired in App.tsx.<br/>
+                  Add <code>clipTransform</code> and <code>onSetClipTransform</code> props.</span>
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="inspector-stack">
+              <div className="inspector-card">
+                <p className="inspector-label">No Clip Selected</p>
+                <span>Select a video clip to adjust its transform.</span>
+              </div>
+            </div>
+          )
         )}
 
         {/* ── MASKS TAB ── */}
@@ -570,31 +891,25 @@ export function InspectorPanel({
           </div>
         )}
 
-        {/* ── AUDIO TAB (Fix 1 & 2: 1:1 slider sync + numeric inputs) ── */}
+        {/* ── AUDIO TAB ── */}
         {activeTab === "audio" && (
           <div className="inspector-stack">
             {selectedSegment ? (
-              <div className="inspector-card">
-                <p className="inspector-label">Audio Controls</p>
-
-                {/* FIX 1: Volume — onInput fires every frame, numeric input synced 1:1 */}
+              <CollapsibleCard label="Audio Controls" defaultOpen>
                 <VolumeControl
                   value={selectedSegment.clip.volume ?? 1}
                   onChange={onSetClipVolume}
                 />
-
-                {/* FIX 2: Speed — 0.25×–4× range, numeric input, onInput for real-time */}
                 <SpeedControl
                   value={selectedSegment.clip.speed ?? 1}
                   onChange={onSetClipSpeed}
                 />
-
                 {selectedSegment.asset.hasAudio && (
                   <button className="panel-action muted" onClick={onExtractAudio} type="button">
                     Extract Audio to Track
                   </button>
                 )}
-              </div>
+              </CollapsibleCard>
             ) : (
               <div className="inspector-card">
                 <p className="inspector-label">No Clip Selected</p>
@@ -607,9 +922,7 @@ export function InspectorPanel({
         {/* ── VOICE AI TAB ── */}
         {activeTab === "voice" && (
           <div className="inspector-stack">
-            {/* Status */}
-            <div className="inspector-card">
-              <p className="inspector-label">Voice Chop AI</p>
+            <CollapsibleCard label="Voice Chop AI" defaultOpen>
               <div className="voice-status-row">
                 <span className={`status-pill${voiceListening ? " live" : ""}`}>
                   {voiceListening ? "🔴 Listening" : "● Ready"}
@@ -618,7 +931,6 @@ export function InspectorPanel({
               <span className="voice-status-text">{voiceStatus}</span>
               {voiceTranscript && <span className="voice-transcript">"{voiceTranscript}"</span>}
               {voiceLastCommand && <span className="voice-last-cmd">Last: {voiceLastCommand}</span>}
-
               <div className="inline-actions">
                 <button
                   className={`panel-action${voiceListening ? " primary" : ""}`}
@@ -631,11 +943,9 @@ export function InspectorPanel({
                   Chop For Me
                 </button>
               </div>
-            </div>
+            </CollapsibleCard>
 
-            {/* BPM Detection */}
-            <div className="inspector-card">
-              <p className="inspector-label">BPM & Beat Sync</p>
+            <CollapsibleCard label="BPM & Beat Sync" defaultOpen>
               {detectedBpm !== null && (
                 <div className="bpm-display">
                   <span className="bpm-value">{detectedBpm}</span>
@@ -668,62 +978,24 @@ export function InspectorPanel({
                 />
               </div>
               <div className="inline-actions">
-                <button className="panel-action" onClick={onDetectBpm} type="button">
-                  Detect BPM
-                </button>
-                <button className="panel-action muted" onClick={() => onBeatSync("everyBeat")} type="button">
-                  Every Beat
-                </button>
-                <button className="panel-action muted" onClick={() => onBeatSync("every2")} type="button">
-                  Every 2
-                </button>
-                <button className="panel-action muted" onClick={() => onBeatSync("every4")} type="button">
-                  Every 4
-                </button>
+                <button className="panel-action" onClick={onDetectBpm} type="button">Detect BPM</button>
+                <button className="panel-action muted" onClick={() => onBeatSync("everyBeat")} type="button">Every Beat</button>
+                <button className="panel-action muted" onClick={() => onBeatSync("every2")} type="button">Every 2</button>
+                <button className="panel-action muted" onClick={() => onBeatSync("every4")} type="button">Every 4</button>
               </div>
-            </div>
+            </CollapsibleCard>
 
-            {/* Cut Actions */}
-            <div className="inspector-card">
-              <p className="inspector-label">Cut Suggestions</p>
+            <CollapsibleCard label="Cut Suggestions" defaultOpen>
               <span>
                 {voiceSuggestedCutFrames.length
                   ? `${voiceSuggestedCutFrames.length} suggested cut${voiceSuggestedCutFrames.length === 1 ? "" : "s"}`
                   : "No suggestions yet"}
               </span>
               <div className="inline-actions">
-                <button
-                  className="panel-action"
-                  disabled={!voiceSuggestedCutFrames.length}
-                  onClick={onAcceptVoiceCuts}
-                  type="button"
-                >
-                  Apply Cuts
-                </button>
-                <button
-                  className="panel-action muted"
-                  disabled={!voiceSuggestedCutFrames.length}
-                  onClick={onClearVoiceCuts}
-                  type="button"
-                >
-                  Clear
-                </button>
-                <button
-                  className="panel-action muted"
-                  disabled={!voiceSuggestedCutFrames.length}
-                  onClick={onQuantizeVoiceCutsToBeat}
-                  type="button"
-                >
-                  ⌀ Beat
-                </button>
-                <button
-                  className="panel-action muted"
-                  disabled={!voiceSuggestedCutFrames.length}
-                  onClick={onQuantizeVoiceCutsToGrid}
-                  type="button"
-                >
-                  ⌀ Grid
-                </button>
+                <button className="panel-action" disabled={!voiceSuggestedCutFrames.length} onClick={onAcceptVoiceCuts} type="button">Apply Cuts</button>
+                <button className="panel-action muted" disabled={!voiceSuggestedCutFrames.length} onClick={onClearVoiceCuts} type="button">Clear</button>
+                <button className="panel-action muted" disabled={!voiceSuggestedCutFrames.length} onClick={onQuantizeVoiceCutsToBeat} type="button">⌀ Beat</button>
+                <button className="panel-action muted" disabled={!voiceSuggestedCutFrames.length} onClick={onQuantizeVoiceCutsToGrid} type="button">⌀ Grid</button>
               </div>
               <span className="marks-display">
                 Mark In: {voiceMarkInFrame !== null ? formatTimecode(voiceMarkInFrame, fps) : "—"}
@@ -733,23 +1005,19 @@ export function InspectorPanel({
               <p className="hint-text">
                 Say: "cut here" · "mark start/end" · "chop for me" · "detect bpm" · "apply cuts"
               </p>
-            </div>
+            </CollapsibleCard>
           </div>
         )}
 
         {/* ── EXPORT TAB ── */}
         {activeTab === "export" && (
           <div className="inspector-stack">
-            <div className="inspector-card">
-              <p className="inspector-label">Render</p>
+            <CollapsibleCard label="Render" defaultOpen>
               <strong>MP4 H.264 / AAC</strong>
               <div className="clip-meta-grid">
-                <span>Resolution</span>
-                <strong>{sequenceSettings.width}×{sequenceSettings.height}</strong>
-                <span>Frame Rate</span>
-                <strong>{sequenceSettings.fps} fps</strong>
-                <span>Audio</span>
-                <strong>{sequenceSettings.audioSampleRate / 1000} kHz</strong>
+                <span>Resolution</span><strong>{sequenceSettings.width}×{sequenceSettings.height}</strong>
+                <span>Frame Rate</span><strong>{sequenceSettings.fps} fps</strong>
+                <span>Audio</span><strong>{sequenceSettings.audioSampleRate / 1000} kHz</strong>
               </div>
               <button
                 className="panel-action primary export-btn"
@@ -764,10 +1032,9 @@ export function InspectorPanel({
                   {exportMessage}
                 </span>
               )}
-            </div>
+            </CollapsibleCard>
 
-            <div className="inspector-card">
-              <p className="inspector-label">Environment</p>
+            <CollapsibleCard label="Environment" defaultOpen={false}>
               <strong className={environment?.ffmpegAvailable ? "text-success" : "text-warning"}>
                 {environment?.ffmpegAvailable ? "✓ FFmpeg Ready" : "⚠ FFmpeg Unavailable"}
               </strong>
@@ -776,7 +1043,7 @@ export function InspectorPanel({
               {environment?.warnings.map((w) => (
                 <span key={w} className="warning-text">{w}</span>
               ))}
-            </div>
+            </CollapsibleCard>
           </div>
         )}
       </div>

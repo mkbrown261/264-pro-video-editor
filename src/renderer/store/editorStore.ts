@@ -112,6 +112,7 @@ interface EditorStore {
   extractAudioFromSelectedClip: () => string | null;
   setClipVolume: (clipId: string, volume: number) => void;
   setClipSpeed: (clipId: string, speed: number) => void;
+  setClipTransform: (clipId: string, updates: Partial<import("../../shared/models").ClipTransform>) => void;
 
   // ── Masks ──
   addMaskToClip: (clipId: string, mask: ClipMask) => void;
@@ -1175,6 +1176,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       ...c,
       speed: Math.max(0.25, Math.min(4, speed))
     }))));
+  },
+
+  setClipTransform: (clipId, updates) => {
+    set(withUndo("Set Transform", (state) => updateClipInState(state, clipId, (c) => {
+      const existing = c.transform ?? { posX: 0, posY: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1, anchorX: 0.5, anchorY: 0.5 };
+      return { ...c, transform: { ...existing, ...updates } };
+    })));
   },
 
   // ── Masks ─────────────────────────────────────────────────────────────────
