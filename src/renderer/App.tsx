@@ -8,10 +8,12 @@ import {
 } from "./components/ViewerPanel";
 import { ColorGradingPanel } from "./components/ColorGradingPanel";
 import FusionPage from "./components/compositing/FusionPage";
+import { ToastContainer } from "./components/ToastContainer";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
 import { useAsyncImport } from "./hooks/useAsyncImport";
 import { VoiceChopAI } from "./lib/VoiceChopAI";
+import { toast } from "./lib/toast";
 import { useEditorStore } from "./store/editorStore";
 import {
   buildTimelineSegments,
@@ -125,8 +127,11 @@ export default function App() {
   const closeFusion  = useEditorStore((s) => s.closeFusion);
   const setCompGraph = useEditorStore((s) => s.setCompGraph);
 
+  // ── Active page – driven by store so openFusion() triggers re-render ────────
+  const activePage    = useEditorStore((s) => s.activePage) as AppPage;
+  const setActivePage = useEditorStore((s) => s.setActivePage) as (page: AppPage) => void;
+
   // ── Local UI state ─────────────────────────────────────────────────────────
-  const [activePage, setActivePage] = useState<AppPage>("edit");
   const [exportBusy,  setExportBusy]  = useState(false);
   const [importBusy,  setImportBusy]  = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
@@ -173,12 +178,16 @@ export default function App() {
   const [timecodeInput, setTimecodeInput] = useState("");
 
   // ── Toast notifications ────────────────────────────────────────────────────
+  // Legacy inline toast kept for backward compatibility; new code uses the
+  // singleton toast.* API which ToastContainer renders.
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   function showToast(msg: string) {
+    // Forward to the new toast system as well as the legacy inline display
     setToastMessage(msg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToastMessage(null), 3500);
+    toast.info(msg, 3500);
   }
 
   // ── Save Confirmation Modal ────────────────────────────────────────────────
@@ -751,6 +760,21 @@ export default function App() {
 
   useEffect(() => { setTransitionMessage(null); }, [selectedClipId]);
 
+  // ── Bridge exportMessage/transitionMessage → toast notifications ────────────
+  useEffect(() => {
+    if (!exportMessage) return;
+    const isError = exportMessage.startsWith("✗") || exportMessage.toLowerCase().includes("fail") || exportMessage.toLowerCase().includes("error");
+    const isWarning = exportMessage.startsWith("⚠");
+    if (isError)        toast.error(exportMessage, 5000);
+    else if (isWarning) toast.warning(exportMessage, 4000);
+    else                toast.success(exportMessage, 3000);
+  }, [exportMessage]);
+
+  useEffect(() => {
+    if (!transitionMessage) return;
+    toast.info(transitionMessage, 2500);
+  }, [transitionMessage]);
+
   // ── Import/Export ──────────────────────────────────────────────────────────
   // Non-blocking async import pipeline:
   //   1. Immediately adds assets with placeholder thumbnails so the media
@@ -1068,12 +1092,8 @@ export default function App() {
       {renderSettingsModal()}
       {renderRecentPanel()}
 
-      {/* ── Toast notification ── */}
-      {toastMessage && (
-        <div className="app-toast" role="status" aria-live="polite">
-          {toastMessage}
-        </div>
-      )}
+      {/* ── Toast notification system ── */}
+      <ToastContainer />
 
       {/* ── TOP MENU BAR ── */}
       <header className="app-menubar">

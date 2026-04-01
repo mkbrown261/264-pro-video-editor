@@ -20,14 +20,23 @@ import {
 interface FfprobeResponse {
   streams?: Array<{
     codec_type?: string;
+    codec_name?: string;
     width?: number;
     height?: number;
     avg_frame_rate?: string;
     r_frame_rate?: string;
     duration?: string;
+    channels?: number;
+    color_space?: string;
+    color_primaries?: string;
+    color_transfer?: string;
+    sample_aspect_ratio?: string;
+    tags?: { rotate?: string; [key: string]: string | undefined };
   }>;
   format?: {
     duration?: string;
+    size?: string;
+    bit_rate?: string;
   };
 }
 
@@ -265,6 +274,23 @@ export async function probeMediaFile(sourcePath: string): Promise<MediaAsset> {
     ? await generateThumbnail(sourcePath, assetId, environment.ffmpegPath)
     : null;
 
+  // ── Extended metadata ─────────────────────────────────────────────────────
+  const fileSize = Number(parsed.format?.size || 0) || undefined;
+  const bitrate = parsed.format?.bit_rate ? Math.round(Number(parsed.format.bit_rate) / 1000) : undefined;
+  const videoCodec = videoStream.codec_name || undefined;
+  const audioCodec = audioStream?.codec_name || undefined;
+  const audioChannels = audioStream?.channels ? Number(audioStream.channels) : undefined;
+  const colorSpace = videoStream.color_space || videoStream.color_primaries || undefined;
+  // HDR: bt2020 primaries with PQ/HLG transfer characteristics
+  const transfer = videoStream.color_transfer || "";
+  const isHDR = Boolean(
+    (videoStream.color_primaries === "bt2020" || videoStream.color_space === "bt2020nc") &&
+    (transfer === "smpte2084" || transfer === "arib-std-b67" || transfer === "bt2020-10")
+  ) || undefined;
+  // Rotation from side_data_list or display matrix
+  const rotation = videoStream.tags?.rotate ? Number(videoStream.tags.rotate) : undefined;
+  const pixelAspect = videoStream.sample_aspect_ratio !== "0:1" ? videoStream.sample_aspect_ratio : undefined;
+
   return {
     id: assetId,
     name: basename(sourcePath),
@@ -277,7 +303,17 @@ export async function probeMediaFile(sourcePath: string): Promise<MediaAsset> {
     nativeFps,
     width: Number(videoStream.width || 0),
     height: Number(videoStream.height || 0),
-    hasAudio: Boolean(audioStream)
+    hasAudio: Boolean(audioStream),
+    // Extended metadata
+    fileSize,
+    bitrate,
+    videoCodec,
+    audioCodec,
+    audioChannels,
+    colorSpace,
+    isHDR,
+    rotation,
+    pixelAspect,
   };
 }
 

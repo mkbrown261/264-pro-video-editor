@@ -15,6 +15,26 @@ export interface MediaAsset {
   hasAudio: boolean;
   /** Normalised peak amplitudes [0..1], one value per ~100ms of source audio. */
   waveformPeaks?: number[];
+
+  // ── Extended metadata (populated via ffprobe) ─────────────────────────────
+  /** File size in bytes */
+  fileSize?: number;
+  /** Video codec, e.g. "h264", "prores", "hevc" */
+  videoCodec?: string;
+  /** Audio codec, e.g. "aac", "pcm_s16le" */
+  audioCodec?: string;
+  /** Number of audio channels */
+  audioChannels?: number;
+  /** Total bitrate in kbps */
+  bitrate?: number;
+  /** Color space, e.g. "bt709", "bt2020" */
+  colorSpace?: string;
+  /** True if asset has HDR metadata (bt2020/pq/hlg) */
+  isHDR?: boolean;
+  /** Camera rotation in degrees (0, 90, 180, 270) */
+  rotation?: number;
+  /** Pixel aspect ratio, e.g. "1:1" */
+  pixelAspect?: string;
 }
 
 // ── Transitions ───────────────────────────────────────────────────────────────

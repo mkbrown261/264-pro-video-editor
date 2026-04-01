@@ -1547,10 +1547,26 @@ export function TimelinePanel({
                         <div className="timeline-clip-content">
                           <strong className="clip-name">{segment.asset.name}</strong>
                           {clipWidth > 60 && <span className="clip-dur">{formatDuration(segment.durationSeconds)}</span>}
+                          {/* Status badges */}
+                          {!segment.clip.isEnabled && (
+                            <span className="clip-status-badge clip-badge-offline" title="Clip disabled">OFFLINE</span>
+                          )}
+                          {segment.clip.compGraph && (
+                            <span className="clip-status-badge clip-badge-fusion" title="Has Fusion compositing graph">FUSION</span>
+                          )}
+                          {segment.asset.isHDR && (
+                            <span className="clip-status-badge clip-badge-hdr" title="HDR content">HDR</span>
+                          )}
+                          {segment.clip.aiBackgroundRemoval?.enabled && (
+                            <span className="clip-status-badge clip-badge-ai" title="AI background removal active">AI</span>
+                          )}
                           {segment.clip.effects?.some((ef) => ef.enabled) && (
                             <span className="clip-fx-badge" title="Effects applied">✦</span>
                           )}
-                          {(segment.clip.volume !== undefined && segment.clip.volume !== 1) && (
+                          {(segment.clip.volume !== undefined && segment.clip.volume === 0) && (
+                            <span className="clip-status-badge clip-badge-mute" title="Clip muted">MUTE</span>
+                          )}
+                          {(segment.clip.volume !== undefined && segment.clip.volume !== 1 && segment.clip.volume !== 0) && (
                             <span className="clip-vol-badge" title={`Volume: ${Math.round((segment.clip.volume ?? 1) * 100)}%`}>
                               🔊{Math.round((segment.clip.volume ?? 1) * 100)}%
                             </span>
