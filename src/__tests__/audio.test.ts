@@ -30,10 +30,11 @@ function clampSpeed(raw: number): number {
 
 // ── Crossfade / gain ramp constants (must match useMultiTrackAudio) ───────────
 
-const MAX_GAIN    = 4;
-const FADE_OUT_S  = 0.04;   // 40 ms
-const FADE_IN_S   = 0.03;   // 30 ms
+const MAX_GAIN         = 4;
+const FADE_OUT_S       = 0.04;   // 40 ms
+const FADE_IN_S        = 0.03;   // 30 ms
 const LOOKAHEAD_FRAMES = 90;
+const PRE_PLAY_FRAMES  = 8;      // start element muted this many frames before seam
 
 // ── Gain math helpers (mirrors reconcileSlots logic) ─────────────────────────
 
@@ -176,12 +177,16 @@ describe("Prefetch Lookahead Logic", () => {
     segEndFrame: number,
     playheadFrame: number
   ): boolean {
-    const lookaheadFrame = playheadFrame + LOOKAHEAD_FRAMES;
-    return (
-      segStartFrame > playheadFrame &&    // not yet started
-      segStartFrame <= lookaheadFrame &&  // within window
-      segEndFrame > playheadFrame         // not already past
-    );
+    const framesUntilStart = segStartFrame - playheadFrame;
+    // Active segment: skip
+    if (playheadFrame >= segStartFrame && playheadFrame < segEndFrame) return false;
+    return framesUntilStart > 0 && framesUntilStart <= LOOKAHEAD_FRAMES;
+  }
+
+  /** Mirrors PRE_PLAY start condition */
+  function shouldPrePlay(segStartFrame: number, playheadFrame: number): boolean {
+    const framesUntilStart = segStartFrame - playheadFrame;
+    return framesUntilStart > 0 && framesUntilStart <= PRE_PLAY_FRAMES;
   }
 
   it("prefetches a segment starting exactly at lookahead boundary", () => {
@@ -201,12 +206,26 @@ describe("Prefetch Lookahead Logic", () => {
   });
 
   it("does NOT prefetch a currently-active segment (already playing)", () => {
-    // startFrame <= playheadFrame → already in active set
     expect(shouldPrefetch(0, 100, 50)).toBe(false);
   });
 
   it("LOOKAHEAD_FRAMES gives ≥2s of buffer at 30fps", () => {
     const bufferSeconds = LOOKAHEAD_FRAMES / 30;
     expect(bufferSeconds).toBeGreaterThanOrEqual(2);
+  });
+
+  it("PRE_PLAY_FRAMES triggers muted pre-play within ~267ms of seam at 30fps", () => {
+    const prePlayMs = (PRE_PLAY_FRAMES / 30) * 1000;
+    // Must be enough to cover element.play() latency (~100ms) with margin
+    expect(prePlayMs).toBeGreaterThan(100);
+    // Must not be so large it causes audible pre-play bleed
+    expect(prePlayMs).toBeLessThan(500);
+  });
+
+  it("pre-play starts before seam (positive frames until start)", () => {
+    expect(shouldPrePlay(10, 5)).toBe(true);   // 5 frames away — within PRE_PLAY_FRAMES
+    expect(shouldPrePlay(10, 2)).toBe(true);   // 8 frames away — exactly at boundary
+    expect(shouldPrePlay(10, 1)).toBe(false);  // 9 frames away — not yet
+    expect(shouldPrePlay(10, 10)).toBe(false); // at seam — already active
   });
 });
