@@ -314,8 +314,17 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     async function toggleFullscreen() {
       const panel = panelRef.current;
       if (!panel) return;
-      if (document.fullscreenElement === panel) await document.exitFullscreen();
-      else await panel.requestFullscreen();
+      try {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+          // State update handled by fullscreenchange listener
+        } else {
+          await panel.requestFullscreen();
+        }
+      } catch {
+        // requestFullscreen can fail (e.g., called on hidden element) — clear state
+        setIsFullscreen(false);
+      }
     }
 
     useImperativeHandle(ref, () => ({
@@ -339,10 +348,25 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     }, []);
 
     // ── Fullscreen listener ───────────────────────────────────────────────────
+    // FIX 6: Always sync isFullscreen to the actual browser fullscreen state.
+    // On unmount, force-clear the class so it never persists to block other UI.
     useEffect(() => {
-      const h = () => setIsFullscreen(document.fullscreenElement === panelRef.current);
+      const h = () => {
+        const inFs = document.fullscreenElement === panelRef.current;
+        setIsFullscreen(inFs);
+      };
       document.addEventListener("fullscreenchange", h);
-      return () => document.removeEventListener("fullscreenchange", h);
+      // Also handle webkitfullscreenchange for Safari
+      document.addEventListener("webkitfullscreenchange", h);
+      return () => {
+        document.removeEventListener("fullscreenchange", h);
+        document.removeEventListener("webkitfullscreenchange", h);
+        // On unmount, exit fullscreen if this panel owns it
+        if (document.fullscreenElement === panelRef.current) {
+          void document.exitFullscreen().catch(() => {});
+        }
+        setIsFullscreen(false);
+      };
     }, []);
 
     // Audio volume/mute is now managed per-segment by useMultiTrackAudio
@@ -428,6 +452,13 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             aria-hidden="true"
             dangerouslySetInnerHTML={{ __html: gradeStyle.svgFilter }}
           />
+        )}
+
+        {/* ── FIX 7: Effects active badge ── */}
+        {effectsFilter && (
+          <div className="viewer-effects-badge" aria-label="Effects active">
+            FX
+          </div>
         )}
 
         {/* ── Stage ── */}

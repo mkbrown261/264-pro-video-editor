@@ -409,6 +409,20 @@ export function usePlaybackController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.id, isPlaying, playheadFrame]);
 
+  // ── FIX 4: Immediately apply playback speed change to video element ────────
+  // When clip speed changes while playing, update playbackRate in-place
+  // without seeking (no stutter, instant feedback).
+  useEffect(() => {
+    const video = videoRef.current;
+    const seg = activeSegment;
+    if (!video || !seg) return;
+    const newRate = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+    if (Math.abs(video.playbackRate - newRate) > 0.001) {
+      video.playbackRate = newRate;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSegment?.clip.speed]);
+
   // ── sync when PLAYING and video segment changes ───────────────────────────
   // When the active clip changes mid-play we need to reload/seek the video
   // element.  During that async work we null-out playbackStartedAt so the

@@ -105,11 +105,14 @@ export function computeCssFilterFromEffects(effects: ClipEffect[]): string {
     const p = eff.params;
     switch (eff.type) {
       case "blur":
-        parts.push(`blur(${Number(p.radius ?? 5) * 0.5}px)`);
+        // FIX 7: Increased multiplier so blur is clearly visible at default settings.
+        // radius 5 → blur(5px), radius 10 → blur(10px).
+        parts.push(`blur(${Number(p.radius ?? 5) * 1}px)`);
         break;
       case "sharpen":
-        // Sharpness: high contrast + slight brightness
-        parts.push(`contrast(${1 + Number(p.amount ?? 0.5) * 0.5}) brightness(${1 + Number(p.amount ?? 0.5) * 0.04})`);
+        // FIX 7: Sharpen — high contrast is the closest CSS-filter approximation.
+        // amount 0.5 → contrast(2.0), clearly visible.
+        parts.push(`contrast(${1 + Number(p.amount ?? 0.5) * 2}) brightness(${1 + Number(p.amount ?? 0.5) * 0.06})`);
         break;
       case "glow":
         parts.push(`brightness(${1 + Number(p.intensity ?? 0.5) * 0.25}) blur(${Number(p.radius ?? 10) * 0.05}px)`);

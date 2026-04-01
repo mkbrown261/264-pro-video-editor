@@ -5124,7 +5124,8 @@ kbd {
 /* Resizers */
 .app-shell.page-color .left-resizer  { grid-area: color-resizer; }
 .app-shell.page-color .right-resizer { display: none; }
-.app-shell.page-color .timeline-vertical-resizer { grid-area: tl; height: 5px; flex-shrink: 0; }
+/* On color page the timeline-vertical-resizer is not part of the grid — hide it */
+.app-shell.page-color .timeline-vertical-resizer { display: none; }
 /* Viewer panel inside color-page-viewer fills all space above scopes strip */
 .color-page-viewer > .panel.viewer-panel { flex: 1; min-height: 0; grid-area: unset; }
 

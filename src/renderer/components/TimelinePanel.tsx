@@ -1279,7 +1279,8 @@ export function TimelinePanel({
                     // FIX 3: Start lasso when dragging on empty lane area (no clip under cursor)
                     if (e.button !== 0 || toolMode !== "select" || isLocked) return;
                     if ((e.target as HTMLElement).closest("[data-clip-id],.timeline-clip-handle,.fade-handle")) return;
-                    const lb = { startX: e.pageX, startY: e.pageY, curX: e.pageX, curY: e.pageY };
+                    // Use clientX/Y consistently with the move handler (viewport coords)
+                    const lb = { startX: e.clientX, startY: e.clientY, curX: e.clientX, curY: e.clientY };
                     lassoBoxRef.current = lb;
                     setLassoBox(lb);
                     setLassoSelectedIds(new Set());

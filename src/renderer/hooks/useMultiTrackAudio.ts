@@ -301,12 +301,18 @@ export function useMultiTrackAudio({
     await reconcileSlots(segs, true, frame, fps);
   }
 
-  // ── effect: sync when playing state / segments change ─────────────────────
+  // ── effect: sync when playing state / segments / volume / speed change ──────
+  // FIX 3: Include volume and speed in dependency key so that changing
+  // clip volume or speed immediately applies to the audio element even
+  // while the clip ID set is unchanged.
+  const audioSegKey = activeAudioSegments
+    .map((s) => `${s.clip.id}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
+    .join(",");
   useEffect(() => {
     const { activeAudioSegments: segs, playheadFrame: frame, sequenceFps: fps } = stateRef.current;
     void reconcileSlots(segs, isPlaying, frame, fps);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, activeAudioSegments.map((s) => s.clip.id).join(",")]);
+  }, [isPlaying, audioSegKey]);
 
   // ── effect: scrub sync (when NOT playing) ─────────────────────────────────
   useEffect(() => {
