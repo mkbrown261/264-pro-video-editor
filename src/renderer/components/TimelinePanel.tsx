@@ -188,6 +188,9 @@ export function TimelinePanel({
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
+  // Always-current playhead frame for use in closures (avoids stale capture)
+  const playheadFrameRef  = useRef<number>(playheadFrame);
+  useEffect(() => { playheadFrameRef.current = playheadFrame; }, [playheadFrame]);
 
   const propsRef = useRef({
     onSetPlayheadFrame, onSelectClip, onMoveClipTo,
@@ -559,8 +562,8 @@ export function TimelinePanel({
       const g = resolveGhostAt(e.clientX, e.clientY);
 
       // ── Magnetic snap-to-edges + snap-to-playhead ─────────────────────────
-      // Only applies when dragging onto an existing track (DRAG_ON_TRACK intent)
-      if (g && g.intent === "DRAG_ON_TRACK" && snapRef.current.snapEnabled) {
+      // Applies to all drag intents when snap is enabled
+      if (g && snapRef.current.snapEnabled) {
         const ppf = ppfRef.current;
         // Collect all candidate snap points: every clip edge + the playhead
         const candidates: number[] = [];
@@ -573,13 +576,8 @@ export function TimelinePanel({
           if (!isNaN(left + width)) candidates.push(Math.round((left + width) / ppf));
         });
 
-        // Playhead — get current playhead frame from DOM
-        const currentPlayhead = (() => {
-          const ph = document.querySelector<HTMLElement>(".timeline-playhead");
-          if (!ph) return null;
-          return Math.round(parseFloat(ph.style.left ?? "0") / ppf);
-        })();
-        if (currentPlayhead !== null) candidates.push(currentPlayhead);
+        // Playhead — read directly from ref (always current, no stale closure)
+        candidates.push(playheadFrameRef.current);
 
         // Threshold in frames
         const threshFrames = MAGNETIC_SNAP_PX / ppf;
@@ -613,9 +611,9 @@ export function TimelinePanel({
       const g = ghostInfoRef.current;
       if (g) {
         if (g.intent === "DRAG_ON_TRACK") {
-          propsRef.current.onMoveClipTo(dragState.clipId, g.trackId, g.frame);
+          propsRef.current.onMoveClipTo(ds.clipId, g.trackId, g.frame);
         } else {
-          propsRef.current.onAddTracksAndMoveClip?.(dragState.clipId, g.frame, g.insertIndex);
+          propsRef.current.onAddTracksAndMoveClip?.(ds.clipId, g.frame, g.insertIndex);
         }
       }
       ghostInfoRef.current = null;
