@@ -21,58 +21,77 @@ export interface MediaAsset {
 
 export type ClipTransitionType =
   // Basic
-  | "cut"
-  | "fade"
-  | "dipBlack"
-  | "dipWhite"
-  | "additiveDissolve"
+  | "cut"             // Hard cut — no transition
+  | "fade"            // Fade to transparent
+  | "dipBlack"        // Fade through black
+  | "dipWhite"        // Fade through white
+  | "dipColor"        // Fade through custom color
+  | "additiveDissolve"// Additive blend dissolve
   // Dissolve
-  | "crossDissolve"
-  | "luminanceDissolve"
-  | "filmDissolve"
+  | "crossDissolve"   // A and B blend together (WebGL)
+  | "luminanceDissolve" // Dissolve driven by luminance (WebGL)
+  | "filmDissolve"    // Film-like organic dissolve
   // Wipe
-  | "wipe"
-  | "wipeLeft"
-  | "wipeRight"
-  | "wipeUp"
-  | "wipeDown"
-  | "wipeRadial"
-  | "wipeClock"
-  | "wipeSplit"
-  // Push / Slide
-  | "push"
-  | "pushLeft"
-  | "pushRight"
-  | "pushUp"
-  | "pushDown"
-  | "slideLeft"
-  | "slideRight"
-  // Zoom
-  | "zoom"
-  | "zoomIn"
-  | "zoomOut"
-  | "zoomCross"
+  | "wipe"            // Generic wipe (left)
+  | "wipeLeft"        // Reveal new clip from right
+  | "wipeRight"       // Reveal new clip from left
+  | "wipeUp"          // Reveal new clip from bottom
+  | "wipeDown"        // Reveal new clip from top
+  | "wipeDiagTL"      // Diagonal wipe top-left to bottom-right
+  | "wipeDiagTR"      // Diagonal wipe top-right to bottom-left
+  | "wipeRadial"      // Circular reveal from center
+  | "wipeClock"       // Clockhand sweep reveal
+  | "wipeStar"        // Star-shaped reveal
+  | "wipeBlinds"      // Venetian blinds effect
+  | "wipeSplit"       // Split wipe from center
+  // Push / Cover / Slide
+  | "push"            // Generic push (left)
+  | "pushLeft"        // B pushes A out to the left
+  | "pushRight"       // B pushes A out to the right
+  | "pushUp"          // B pushes A upward
+  | "pushDown"        // B pushes A downward
+  | "cover"           // B slides over A (A stays)
+  | "uncover"         // A slides away revealing B (B stays)
+  | "slideLeft"       // A slides left, B fades in
+  | "slideRight"      // A slides right, B fades in
+  // Zoom / Rotation
+  | "zoom"            // Generic zoom in
+  | "zoomIn"          // Zoom into cut point
+  | "zoomOut"         // Zoom out from cut point
+  | "zoomCross"       // A zooms out as B zooms in (WebGL)
+  | "whipPan"         // Fast blur pan (horizontal)
+  | "spinCW"          // Clockwise spin transition
+  | "spinCCW"         // Counter-clockwise spin transition
   // Stylized
-  | "blur"
-  | "blurDissolve"
-  | "shake"
-  | "rumble"
-  | "glitch"
-  | "glitchRgb"
-  | "filmBurn"
-  | "lensFlare"
-  | "lightLeak"
-  | "staticNoise"
+  | "blur"            // Blur dissolve (CSS blur)
+  | "blurDissolve"    // Blur + opacity dissolve
+  | "pixelate"        // Pixelate out then in (WebGL)
+  | "shake"           // Camera shake cut
+  | "rumble"          // Low-frequency camera rumble
+  | "glitch"          // Digital glitch artifact (WebGL)
+  | "glitchRgb"       // Intense RGB glitch (WebGL)
+  | "filmBurn"        // Light leak organic burn (WebGL)
+  | "lensFlare"       // Lens flare sweep
+  | "lightLeak"       // Light leak overlay (WebGL)
+  | "staticNoise"     // Static noise hit
+  | "ripple"          // Water ripple distortion (WebGL)
+  | "prism"           // RGB color split diverge
+  | "vhsStatic"       // VHS static noise (WebGL alias of vhsRewind)
   // Shape Reveals
-  | "irisCircle"
-  | "irisStar"
-  | "irisHeart"
-  | "diamond"
+  | "irisCircle"      // Circle mask expand (revealCircle)
+  | "irisStar"        // Star-shaped reveal
+  | "irisHeart"       // Heart-shaped reveal (revealHeart)
+  | "diamond"         // Diamond mask expand (revealDiamond)
+  | "revealSplitH"    // Split open horizontally
+  | "revealSplitV"    // Split open vertically
   // Film / Cinematic
-  | "whiteFlash"
-  | "blackFlash"
-  | "oldFilm"
-  | "vhsRewind";
+  | "whiteFlash"      // Single white flash frame (WebGL)
+  | "blackFlash"      // Single black flash frame (WebGL)
+  | "filmFlash"       // Film exposure flash (alias of whiteFlash)
+  | "exposure"        // Overexpose then cut
+  | "oldFilm"         // Flicker + grain + cut (WebGL)
+  | "vhsRewind"       // VHS rewind effect (WebGL)
+  | "chromaShift";    // Chromatic aberration sweep
 
 export interface ClipTransition {
   type: ClipTransitionType;
@@ -513,53 +532,72 @@ export type TransitionCategory = typeof TRANSITION_CATEGORIES[number];
 
 export const ALL_TRANSITION_TYPES: Array<{ label: string; value: ClipTransitionType; category: TransitionCategory; webgl?: boolean }> = [
   // Basic
-  { label: "Cut",              value: "cut",             category: "Basic" },
-  { label: "Fade",             value: "fade",            category: "Basic" },
-  { label: "Dip to Black",     value: "dipBlack",        category: "Basic" },
-  { label: "Dip to White",     value: "dipWhite",        category: "Basic" },
-  { label: "Additive Dissolve",value: "additiveDissolve",category: "Basic" },
+  { label: "Cut",               value: "cut",              category: "Basic" },
+  { label: "Fade",              value: "fade",             category: "Basic" },
+  { label: "Dip to Black",      value: "dipBlack",         category: "Basic" },
+  { label: "Dip to White",      value: "dipWhite",         category: "Basic" },
+  { label: "Dip to Color",      value: "dipColor",         category: "Basic" },
+  { label: "Additive Dissolve", value: "additiveDissolve", category: "Basic", webgl: true },
   // Dissolve
-  { label: "Cross Dissolve",   value: "crossDissolve",   category: "Dissolve", webgl: true },
-  { label: "Luminance Dissolve",value:"luminanceDissolve",category: "Dissolve" },
-  { label: "Film Dissolve",    value: "filmDissolve",    category: "Dissolve" },
+  { label: "Cross Dissolve",    value: "crossDissolve",    category: "Dissolve", webgl: true },
+  { label: "Luminance Dissolve",value: "luminanceDissolve",category: "Dissolve", webgl: true },
+  { label: "Film Dissolve",     value: "filmDissolve",     category: "Dissolve", webgl: true },
   // Wipe
-  { label: "Wipe Left",        value: "wipeLeft",        category: "Wipe" },
-  { label: "Wipe Right",       value: "wipeRight",       category: "Wipe" },
-  { label: "Wipe Up",          value: "wipeUp",          category: "Wipe" },
-  { label: "Wipe Down",        value: "wipeDown",        category: "Wipe" },
-  { label: "Radial Wipe",      value: "wipeRadial",      category: "Wipe" },
-  { label: "Clock Wipe",       value: "wipeClock",       category: "Wipe" },
-  { label: "Split Wipe",       value: "wipeSplit",       category: "Wipe" },
-  // Push / Slide
-  { label: "Push Left",        value: "pushLeft",        category: "Push" },
-  { label: "Push Right",       value: "pushRight",       category: "Push" },
-  { label: "Push Up",          value: "pushUp",          category: "Push" },
-  { label: "Push Down",        value: "pushDown",        category: "Push" },
-  { label: "Slide Left",       value: "slideLeft",       category: "Push" },
-  { label: "Slide Right",      value: "slideRight",      category: "Push" },
-  // Zoom
-  { label: "Zoom In",          value: "zoomIn",          category: "Zoom" },
-  { label: "Zoom Out",         value: "zoomOut",         category: "Zoom" },
-  { label: "Zoom Cross",       value: "zoomCross",       category: "Zoom", webgl: true },
+  { label: "Wipe Left",         value: "wipeLeft",         category: "Wipe" },
+  { label: "Wipe Right",        value: "wipeRight",        category: "Wipe" },
+  { label: "Wipe Up",           value: "wipeUp",           category: "Wipe" },
+  { label: "Wipe Down",         value: "wipeDown",         category: "Wipe" },
+  { label: "Diagonal Wipe ↘",   value: "wipeDiagTL",       category: "Wipe" },
+  { label: "Diagonal Wipe ↙",   value: "wipeDiagTR",       category: "Wipe" },
+  { label: "Radial Wipe",       value: "wipeRadial",       category: "Wipe" },
+  { label: "Clock Wipe",        value: "wipeClock",        category: "Wipe" },
+  { label: "Star Wipe",         value: "wipeStar",         category: "Wipe" },
+  { label: "Blinds",            value: "wipeBlinds",       category: "Wipe" },
+  { label: "Split Wipe",        value: "wipeSplit",        category: "Wipe" },
+  // Push / Cover / Slide
+  { label: "Push Left",         value: "pushLeft",         category: "Push" },
+  { label: "Push Right",        value: "pushRight",        category: "Push" },
+  { label: "Push Up",           value: "pushUp",           category: "Push" },
+  { label: "Push Down",         value: "pushDown",         category: "Push" },
+  { label: "Cover",             value: "cover",            category: "Push" },
+  { label: "Uncover",           value: "uncover",          category: "Push" },
+  { label: "Slide Left",        value: "slideLeft",        category: "Push" },
+  { label: "Slide Right",       value: "slideRight",       category: "Push" },
+  // Zoom / Rotation
+  { label: "Zoom In",           value: "zoomIn",           category: "Zoom" },
+  { label: "Zoom Out",          value: "zoomOut",          category: "Zoom" },
+  { label: "Zoom Cross",        value: "zoomCross",        category: "Zoom", webgl: true },
+  { label: "Whip Pan",          value: "whipPan",          category: "Zoom" },
+  { label: "Spin CW",           value: "spinCW",           category: "Zoom" },
+  { label: "Spin CCW",          value: "spinCCW",          category: "Zoom" },
   // Stylized
-  { label: "Blur Dissolve",    value: "blurDissolve",    category: "Stylized" },
-  { label: "Glitch",           value: "glitch",          category: "Stylized", webgl: true },
-  { label: "Glitch RGB",       value: "glitchRgb",       category: "Stylized" },
-  { label: "Film Burn",        value: "filmBurn",        category: "Stylized", webgl: true },
-  { label: "Lens Flare",       value: "lensFlare",       category: "Stylized" },
-  { label: "Light Leak",       value: "lightLeak",       category: "Stylized" },
-  { label: "Static Noise",     value: "staticNoise",     category: "Stylized" },
-  { label: "Shake",            value: "shake",           category: "Stylized" },
-  { label: "Rumble",           value: "rumble",          category: "Stylized" },
+  { label: "Blur",              value: "blur",             category: "Stylized" },
+  { label: "Blur Dissolve",     value: "blurDissolve",     category: "Stylized" },
+  { label: "Pixelate",          value: "pixelate",         category: "Stylized", webgl: true },
+  { label: "Ripple",            value: "ripple",           category: "Stylized", webgl: true },
+  { label: "Glitch",            value: "glitch",           category: "Stylized", webgl: true },
+  { label: "Glitch RGB",        value: "glitchRgb",        category: "Stylized", webgl: true },
+  { label: "Film Burn",         value: "filmBurn",         category: "Stylized", webgl: true },
+  { label: "Lens Flare",        value: "lensFlare",        category: "Stylized" },
+  { label: "Light Leak",        value: "lightLeak",        category: "Stylized", webgl: true },
+  { label: "Static Noise",      value: "staticNoise",      category: "Stylized" },
+  { label: "Shake",             value: "shake",            category: "Stylized" },
+  { label: "Rumble",            value: "rumble",           category: "Stylized" },
+  { label: "Prism",             value: "prism",            category: "Stylized" },
+  { label: "VHS Static",        value: "vhsStatic",        category: "Stylized", webgl: true },
   // Shape Reveals
-  { label: "Iris Circle",      value: "irisCircle",      category: "Shape" },
-  { label: "Iris Star",        value: "irisStar",        category: "Shape" },
-  { label: "Iris Heart",       value: "irisHeart",       category: "Shape" },
-  { label: "Diamond",          value: "diamond",         category: "Shape" },
+  { label: "Iris Circle",       value: "irisCircle",       category: "Shape" },
+  { label: "Iris Star",         value: "irisStar",         category: "Shape" },
+  { label: "Iris Heart",        value: "irisHeart",        category: "Shape" },
+  { label: "Diamond",           value: "diamond",          category: "Shape" },
+  { label: "Split Horizontal",  value: "revealSplitH",     category: "Shape" },
+  { label: "Split Vertical",    value: "revealSplitV",     category: "Shape" },
   // Film / Cinematic
-  { label: "White Flash",      value: "whiteFlash",      category: "Cinematic" },
-  { label: "Black Flash",      value: "blackFlash",      category: "Cinematic" },
-  { label: "Old Film",         value: "oldFilm",         category: "Cinematic" },
-  { label: "VHS Rewind",       value: "vhsRewind",       category: "Cinematic", webgl: true },
-  { label: "Pixelate",         value: "blur",            category: "Cinematic", webgl: true },
+  { label: "White Flash",       value: "whiteFlash",       category: "Cinematic", webgl: true },
+  { label: "Black Flash",       value: "blackFlash",       category: "Cinematic", webgl: true },
+  { label: "Film Flash",        value: "filmFlash",        category: "Cinematic", webgl: true },
+  { label: "Exposure",          value: "exposure",         category: "Cinematic" },
+  { label: "Old Film",          value: "oldFilm",          category: "Cinematic", webgl: true },
+  { label: "VHS Rewind",        value: "vhsRewind",        category: "Cinematic", webgl: true },
+  { label: "Chroma Shift",      value: "chromaShift",      category: "Cinematic" },
 ];

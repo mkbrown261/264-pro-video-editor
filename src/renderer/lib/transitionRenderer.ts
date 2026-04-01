@@ -264,21 +264,30 @@ const FRAG_VHS_REWIND = `
 // ── Shader registry ───────────────────────────────────────────────────────────
 
 const FRAG_BY_TYPE: Partial<Record<ClipTransitionType, string>> = {
-  crossDissolve:    FRAG_CROSS_DISSOLVE,
-  luminanceDissolve:FRAG_CROSS_DISSOLVE,
-  filmDissolve:     FRAG_CROSS_DISSOLVE,
-  additiveDissolve: FRAG_ADDITIVE,
-  glitch:           FRAG_GLITCH,
-  glitchRgb:        FRAG_GLITCH_RGB,
-  filmBurn:         FRAG_FILM_BURN,
-  zoomCross:        FRAG_ZOOM_CROSS,
-  blur:             FRAG_PIXELATE,
-  vhsRewind:        FRAG_VHS_REWIND,
-  whiteFlash:       FRAG_WHITE_FLASH,
-  blackFlash:       FRAG_BLACK_FLASH,
-  ripple:           FRAG_RIPPLE,
-  lightLeak:        FRAG_FILM_BURN,
-  oldFilm:          FRAG_VHS_REWIND,
+  // Dissolve family — cross-frame blending requires WebGL
+  crossDissolve:     FRAG_CROSS_DISSOLVE,
+  luminanceDissolve: FRAG_CROSS_DISSOLVE,  // luminance weighting approximated as cross-dissolve
+  filmDissolve:      FRAG_CROSS_DISSOLVE,  // film-grain dissolve approximated
+  additiveDissolve:  FRAG_ADDITIVE,
+  // Stylized — complex per-pixel effects
+  glitch:            FRAG_GLITCH,
+  glitchRgb:         FRAG_GLITCH_RGB,
+  filmBurn:          FRAG_FILM_BURN,
+  lightLeak:         FRAG_FILM_BURN,        // same warm organic burn
+  vhsStatic:         FRAG_VHS_REWIND,       // VHS static uses same shader
+  // Zoom/Spatial
+  zoomCross:         FRAG_ZOOM_CROSS,
+  // Distortion
+  pixelate:          FRAG_PIXELATE,
+  ripple:            FRAG_RIPPLE,
+  // Cinematic
+  vhsRewind:         FRAG_VHS_REWIND,
+  oldFilm:           FRAG_VHS_REWIND,       // old film approximated with VHS shader
+  whiteFlash:        FRAG_WHITE_FLASH,
+  blackFlash:        FRAG_BLACK_FLASH,
+  filmFlash:         FRAG_WHITE_FLASH,      // film flash = white flash variant
+  // NOTE: "blur" / "blurDissolve" use CSS filter — NOT WebGL
+  // This keeps the <video> element visible and avoids hiding it under a canvas
 };
 
 // ── WebGL helpers ─────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useCallback,
   type CSSProperties
 } from "react";
 import type {
@@ -98,10 +99,12 @@ function getActiveTransitionState(activeSegment: TimelineSegment | null, frame: 
   return              { type: activeSegment.clip.transitionOut?.type ?? "fade", edge: "out", amount: outAmt, progress: 1 - outAmt };
 }
 
+// Note: videoStyle may contain a `transitionFilter` string property (not a real CSS property).
+// The ViewerPanel merges it into the final CSS `filter` alongside grade/effects filters.
 function getTransitionPreviewStyles(
   ts: ActiveTransitionState | null,
   frame: number
-): { overlayStyle: CSSProperties; videoStyle: CSSProperties } {
+): { overlayStyle: CSSProperties; videoStyle: CSSProperties & { transitionFilter?: string } } {
   if (!ts) return { overlayStyle: { opacity: 0 }, videoStyle: {} };
   const { amount, edge, type } = ts;
   const jx = Math.sin(frame * 1.37) * amount * 22;
@@ -123,7 +126,7 @@ function getTransitionPreviewStyles(
     case "zoom":       return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${1 + amount*0.25})`, opacity: Math.max(0, 1 - amount*0.6) } };
     case "zoomOut":    return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${Math.max(0.6, 1 - amount*0.25)})`, opacity: Math.max(0, 1 - amount*0.6) } };
     case "blur":
-    case "blurDissolve":  return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { filter: `blur(${amount*8}px)`, opacity: Math.max(0.1, 1 - amount*0.5) } };
+    case "blurDissolve":  return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { transitionFilter: `blur(${amount*8}px)`, opacity: Math.max(0.1, 1 - amount*0.5) } };
     case "shake":         return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translate(${jx}px,${jy}px) scale(${1+amount*0.02}) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)` } };
     case "rumble":        return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})` } };
     case "glitch":
@@ -133,11 +136,11 @@ function getTransitionPreviewStyles(
     case "lensFlare":     return { overlayStyle: { background: `radial-gradient(circle at 80% 20%, rgba(255,255,255,0.9) 0%, rgba(100,150,255,0.4) 20%, transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: {} };
     case "staticNoise":   return { overlayStyle: { background: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`, opacity: amount*0.7 }, videoStyle: {} };
     case "vhsRewind":     return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.15) 0px,rgba(0,0,0,0.15) 1px,transparent 1px,transparent 4px)", opacity: amount*0.8 }, videoStyle: { transform: `translateY(${Math.sin(frame*5)*amount*6}px)` } };
-    case "oldFilm":       return { overlayStyle: { background: `radial-gradient(ellipse, transparent 70%, rgba(0,0,0,0.7) 100%)`, opacity: amount * 0.6, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { filter: `sepia(${amount*0.5}) contrast(${1+amount*0.1})` } };
+    case "oldFilm":       return { overlayStyle: { background: `radial-gradient(ellipse, transparent 70%, rgba(0,0,0,0.7) 100%)`, opacity: amount * 0.6, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `sepia(${amount*0.5}) contrast(${1+amount*0.1})` } };
     case "whiteFlash":    return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
     case "blackFlash":    return { overlayStyle: { background: "#000", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
     case "irisCircle":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)` } };
-    case "irisStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, filter: "drop-shadow(0 0 2px #fff)" } };
+    case "irisStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, transitionFilter: "drop-shadow(0 0 2px #fff)" } as CSSProperties & { transitionFilter?: string } };
     case "irisHeart":     return { overlayStyle: { background: "#000", opacity: amount * 0.9 }, videoStyle: {} };
     case "diamond":       return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(50% ${amount*100}%, ${100-amount*100}% 50%, 50% ${100-amount*100}%, ${amount*100}% 50%)` : `polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)`, opacity: Math.max(0, 1 - amount*0.3) } };
     case "wipeRadial":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*100}% at 50% 50%)` : `circle(${amount*100}% at 50% 50%)` } };
@@ -150,6 +153,35 @@ function getTransitionPreviewStyles(
     case "luminanceDissolve": return { overlayStyle: { background: "#fff", opacity: amount * 0.5 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
     case "filmDissolve":  return { overlayStyle: { background: `linear-gradient(135deg, rgba(${Math.floor(200+frame%55)},${Math.floor(100+frame%80)},50,0.5), rgba(0,0,0,0.7))`, opacity: amount * 0.7 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
     case "additiveDissolve": return { overlayStyle: { background: "#fff", opacity: amount * amount * 0.6 }, videoStyle: { opacity: Math.max(0, 1 - amount * 0.8) } };
+    // New basic types
+    case "dipColor":      return { overlayStyle: { background: "#800080", opacity: Math.min(1, amount * 1.1) }, videoStyle: {} };
+    // New wipe types
+    case "wipeDiagTL":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(0 0, ${(1-amount)*100}% 0, 0 ${(1-amount)*100}%)` : `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 ${amount*100}%, ${amount*100}% 0)` } };
+    case "wipeDiagTR":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(100% 0, 100% ${(1-amount)*100}%, ${100-(1-amount)*100}% 0)` : `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${(1-amount)*100}% 0, 100% ${(1-amount)*100}%)` } };
+    case "wipeStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, transform: `rotate(${amount*45}deg)` } };
+    case "wipeBlinds":    return { overlayStyle: { background: "repeating-linear-gradient(0deg,#000 0px,#000 4px,transparent 4px,transparent 20px)", opacity: amount * 0.9 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
+    // New push/cover types
+    case "cover":         { const tx = edge === "in" ? `${(1-amount)*100}%` : "0"; return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${tx})` } }; }
+    case "uncover":       { const tx = edge === "out" ? `${amount*-100}%` : "0"; return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${tx})` } }; }
+    // New zoom/rotation types
+    case "whipPan":       { const tx = edge === "in" ? `${(1-amount)*30}%` : `-${amount*30}%`; return { overlayStyle: { opacity: 0 }, videoStyle: { transitionFilter: `blur(${amount*20}px)`, transform: `translateX(${tx})`, opacity: Math.max(0, 1 - amount*0.4) } as CSSProperties & { transitionFilter?: string } }; }
+    case "spinCW":        { const deg = edge === "in" ? (1-amount)*180 : amount*180; return { overlayStyle: { background: "#000", opacity: amount * 0.5 }, videoStyle: { transform: `rotate(${deg}deg) scale(${Math.max(0.3, 1 - amount*0.5)})`, opacity: Math.max(0, 1 - amount * 0.7) } }; }
+    case "spinCCW":       { const deg = edge === "in" ? -(1-amount)*180 : -amount*180; return { overlayStyle: { background: "#000", opacity: amount * 0.5 }, videoStyle: { transform: `rotate(${deg}deg) scale(${Math.max(0.3, 1 - amount*0.5)})`, opacity: Math.max(0, 1 - amount * 0.7) } }; }
+    // New stylized types
+    case "prism":         return { overlayStyle: { background: "linear-gradient(135deg,rgba(255,0,0,0.25),rgba(0,255,0,0.25),rgba(0,0,255,0.25))", opacity: amount * 0.8, mixBlendMode: "screen" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `hue-rotate(${amount*180}deg)`, opacity: Math.max(0.1, 1 - amount*0.6) } as CSSProperties & { transitionFilter?: string } };
+    case "vhsStatic":     return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.25) 0px,rgba(0,0,0,0.25) 2px,transparent 2px,transparent 5px)", opacity: amount*0.9, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `saturate(${1-amount*0.8}) contrast(${1+amount*0.3})`, opacity: Math.max(0.1, 1 - amount*0.4) } as CSSProperties & { transitionFilter?: string } };
+    case "chromaShift":   return { overlayStyle: { background: "transparent", opacity: 0 }, videoStyle: { transitionFilter: `hue-rotate(${Math.sin(frame*0.5)*amount*120}deg) saturate(${1+amount*1.5})`, opacity: Math.max(0.2, 1 - amount*0.5) } as CSSProperties & { transitionFilter?: string } };
+    // New shape reveals
+    case "revealSplitH":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(${amount*50}% 0)` : `inset(0 0 ${amount*50}% 0)` } };
+    case "revealSplitV":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 ${amount*50}%)` : `inset(0 ${(1-amount)*50}%)` } };
+    // New cinematic types
+    case "filmFlash":     return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
+    case "exposure":      return { overlayStyle: { background: "#fff", opacity: Math.pow(amount, 2) * 0.95 }, videoStyle: { transitionFilter: `brightness(${1 + amount * 3})` } as CSSProperties & { transitionFilter?: string } };
+    // WebGL transitions — canvas overlays video; CSS provides a subtle fallback
+    case "pixelate":      return { overlayStyle: { opacity: 0 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) } };
+    case "ripple":        return { overlayStyle: { opacity: 0 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) } };
+    case "zoomCross":     return { overlayStyle: { background: "#000", opacity: amount * 0.15 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) } };
+    case "cut":           return { overlayStyle: { opacity: 0 }, videoStyle: {} };
     default:              return { overlayStyle: { opacity: 0 }, videoStyle: {} };
   }
 }
@@ -394,7 +426,41 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       };
     }, []);
 
-    // ── WebGL transition canvas cleanup ──────────────────────────────────────
+    // ── WebGL transition rendering via RAF loop ───────────────────────────────
+    // IMPORTANT: Never call renderTransitionFrame inside JSX render.
+    // Use a useEffect + RAF loop keyed on the active transition type.
+    useEffect(() => {
+      const canvas = webglCanvasRef.current;
+      const video  = videoRef.current;
+      if (!canvas || !video) return;
+      if (!transitionState || !isWebGLTransition(transitionState.type)) {
+        if (webglRafRef.current) {
+          cancelAnimationFrame(webglRafRef.current);
+          webglRafRef.current = 0;
+        }
+        return;
+      }
+
+      let alive = true;
+      const tick = () => {
+        if (!alive) return;
+        const ts = transitionState; // capture for closure
+        if (ts && isWebGLTransition(ts.type) && canvas && video) {
+          renderTransitionFrame(canvas, ts.type, video, video, ts.progress, performance.now() / 1000);
+        }
+        webglRafRef.current = requestAnimationFrame(tick);
+      };
+      webglRafRef.current = requestAnimationFrame(tick);
+
+      return () => {
+        alive = false;
+        if (webglRafRef.current) cancelAnimationFrame(webglRafRef.current);
+        webglRafRef.current = 0;
+      };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [transitionState?.type, transitionState?.progress]);
+
+    // ── WebGL canvas cleanup on unmount ───────────────────────────────────────
     useEffect(() => {
       return () => {
         if (webglRafRef.current) cancelAnimationFrame(webglRafRef.current);
@@ -421,7 +487,9 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const timelineReady   = totalFrames > 0;
     const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
     const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
-    const { overlayStyle, videoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    const { overlayStyle, videoStyle: rawVideoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    // Extract transitionFilter (blur/sepia from blur & oldFilm transitions) before spreading videoStyle onto <video>
+    const { transitionFilter, ...videoStyle } = rawVideoStyle as CSSProperties & { transitionFilter?: string };
     const currentMasks    = activeSegment?.clip.masks ?? [];
 
     // ── Color grading via SVG feColorMatrix + CSS filters ──────────────────
@@ -514,10 +582,12 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                 controls={false}
                 style={{
                   opacity: previewOpacity,
-                  // merge grade filter + effects filter into single CSS filter string
+                  // merge grade filter + effects filter + transition filter into single CSS filter string
+                  // (transitionFilter is extracted separately and NOT spread via videoStyle to avoid overwrites)
                   filter: [
                     gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : "",
                     effectsFilter,
+                    transitionFilter ?? "",
                   ].filter(Boolean).join(" ") || undefined,
                   ...videoStyle,
                 }}
@@ -547,30 +617,20 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             />
           )}
 
-          {/* WebGL transition canvas (GPU-accelerated transitions) */}
-          {previewAsset && transitionState && isWebGLTransition(transitionState.type) && (() => {
-            // Kick off a WebGL render on the canvas in the next microtask
-            requestAnimationFrame(() => {
-              const canvas = webglCanvasRef.current;
-              const video  = videoRef.current;
-              if (!canvas || !video || !transitionState) return;
-              renderTransitionFrame(
-                canvas,
-                transitionState.type,
-                video,
-                video,
-                transitionState.progress,
-                performance.now() / 1000
-              );
-            });
-            return (
-              <canvas
-                ref={webglCanvasRef}
-                className="viewer-webgl-canvas"
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 10 }}
-              />
-            );
-          })()}
+          {/* WebGL transition canvas — always in DOM so ref is stable;
+              hidden via CSS when no GL transition is active.
+              Rendering is driven by the useEffect + RAF loop above, never
+              called from inside the render function. */}
+          <canvas
+            ref={webglCanvasRef}
+            className="viewer-webgl-canvas"
+            style={{
+              position: "absolute", inset: 0, width: "100%", height: "100%",
+              pointerEvents: "none", zIndex: 10,
+              // Only show when a WebGL transition is actually active
+              display: (previewAsset && transitionState && isWebGLTransition(transitionState.type)) ? "block" : "none",
+            }}
+          />
 
           {/* Mask visual effect overlay — shows tinted fill inside each mask shape */}
           {previewAsset && maskSvg && (

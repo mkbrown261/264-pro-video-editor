@@ -59,17 +59,20 @@ function pushRecent(type: ClipTransitionType, prev: ClipTransitionType[]): ClipT
 function getThumbClass(value: ClipTransitionType): string {
   // Map to one of our CSS animation buckets
   if (value === "cut") return "thumb-cut";
-  if (value === "fade" || value === "dipBlack" || value === "dipWhite" || value === "additiveDissolve") return "thumb-fade";
+  if (value === "fade" || value === "dipBlack" || value === "dipWhite" || value === "dipColor" || value === "additiveDissolve") return "thumb-fade";
   if (value === "crossDissolve" || value === "luminanceDissolve" || value === "filmDissolve" || value === "blurDissolve") return "thumb-dissolve";
   if (value.startsWith("wipe")) return "thumb-wipe";
-  if (value.startsWith("push") || value.startsWith("slide")) return "thumb-push";
-  if (value.startsWith("zoom") || value === "zoomCross") return "thumb-zoom";
+  if (value === "cover" || value === "uncover" || value.startsWith("push") || value.startsWith("slide")) return "thumb-push";
+  if (value === "whipPan" || value === "spinCW" || value === "spinCCW" || value.startsWith("zoom") || value === "zoomCross") return "thumb-zoom";
   if (value === "glitch" || value === "glitchRgb") return "thumb-glitch";
-  if (value === "filmBurn" || value === "lightLeak" || value === "lensFlare") return "thumb-burn";
+  if (value === "filmBurn" || value === "lightLeak" || value === "lensFlare" || value === "prism") return "thumb-burn";
   if (value === "shake" || value === "rumble") return "thumb-shake";
-  if (value === "staticNoise" || value === "oldFilm" || value === "vhsRewind") return "thumb-noise";
-  if (value.startsWith("iris") || value === "diamond") return "thumb-iris";
-  if (value === "whiteFlash") return "thumb-white-flash";
+  if (value === "staticNoise" || value === "oldFilm" || value === "vhsRewind" || value === "vhsStatic") return "thumb-noise";
+  if (value === "pixelate") return "thumb-noise";
+  if (value === "ripple") return "thumb-dissolve";
+  if (value === "chromaShift") return "thumb-glitch";
+  if (value.startsWith("iris") || value === "diamond" || value.startsWith("reveal")) return "thumb-iris";
+  if (value === "whiteFlash" || value === "filmFlash" || value === "exposure") return "thumb-white-flash";
   if (value === "blackFlash") return "thumb-black-flash";
   return "thumb-fade";
 }
