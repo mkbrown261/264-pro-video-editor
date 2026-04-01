@@ -183,6 +183,13 @@ interface EditorStore {
 
   // ── Sequence settings ──
   updateSequenceSettings: (settings: Partial<{ width: number; height: number; fps: number; aspectRatio: string }>) => void;
+
+  // ── Fusion / Compositing ──
+  fusionClipId: string | null;
+  openFusion: (clipId: string) => void;
+  closeFusion: () => void;
+  setCompGraph: (clipId: string, graph: import("../../shared/compositing").CompGraph) => void;
+  clearCompGraph: (clipId: string) => void;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -529,6 +536,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   redoStack: [],
   canUndo: false,
   canRedo: false,
+  fusionClipId: null,
 
   // ── Undo / Redo ───────────────────────────────────────────────────────────
 
@@ -1672,6 +1680,43 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           settings: { ...state.project.sequence.settings, ...settings }
         }
       }
+    }));
+  },
+
+  // ── Fusion / Compositing ─────────────────────────────────────────────────
+  openFusion: (clipId) => {
+    set({ fusionClipId: clipId, activePage: "fusion" as import("../../shared/models").EditorPage });
+  },
+
+  closeFusion: () => {
+    set({ fusionClipId: null, activePage: "edit" as import("../../shared/models").EditorPage });
+  },
+
+  setCompGraph: (clipId, graph) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          clips: state.project.sequence.clips.map((c) =>
+            c.id === clipId ? { ...c, compGraph: graph } : c
+          ),
+        },
+      },
+    }));
+  },
+
+  clearCompGraph: (clipId) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          clips: state.project.sequence.clips.map((c) =>
+            c.id === clipId ? { ...c, compGraph: null } : c
+          ),
+        },
+      },
     }));
   },
 }));

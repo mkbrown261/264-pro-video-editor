@@ -144,6 +144,7 @@ function sanitizeProject(project: EditorProject, _warnings: string[]): EditorPro
             volume: typeof clip.volume === "number" ? clip.volume : 1,
             speed: typeof clip.speed === "number" ? clip.speed : 1,
             transform: clip.transform ?? null,
+            compGraph: clip.compGraph ?? null,
             aiBackgroundRemoval: clip.aiBackgroundRemoval ?? null,
             beatSync: clip.beatSync ?? null
           }))

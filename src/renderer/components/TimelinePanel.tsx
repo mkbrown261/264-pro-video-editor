@@ -127,6 +127,7 @@ interface TimelinePanelProps {
   onRelinkClips?: (clipId: string) => void;
   onSetClipSpeed?: (clipId: string, speed: number) => void;
   onAddFade?: (clipId: string, edge: "in" | "out") => void;
+  onOpenInFusion?: (clipId: string) => void;
   onAddTrack?: (kind: TimelineTrackKind) => void;
   onRemoveTrack?: (trackId: string) => void;
   onRenameTrack?: (trackId: string, name: string) => void;
@@ -180,6 +181,7 @@ export function TimelinePanel({
   onRelinkClips,
   onSetClipSpeed,
   onAddFade,
+  onOpenInFusion,
   onAddTrack,
   onRemoveTrack,
   onRenameTrack,
@@ -793,6 +795,10 @@ export function TimelinePanel({
         </div>
         <div className="ctx-menu-item" onClick={() => { onDeleteClip?.(clipId); setContextMenu(null); }}>
           🗑 Delete
+        </div>
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item ctx-menu-fusion" onClick={() => { onOpenInFusion?.(clipId); setContextMenu(null); }}>
+          ⬡ Open in Fusion
         </div>
         <div className="ctx-menu-sep" />
         <div className="ctx-menu-item" onClick={() => { onToggleClipEnabled?.(clipId); setContextMenu(null); }}>

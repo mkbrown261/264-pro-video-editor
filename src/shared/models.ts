@@ -344,6 +344,7 @@ export interface TimelineClip {
   volume: number;  // 0-2
   speed: number;   // 0.1-4.0 (1=normal)
   transform: ClipTransform | null;  // null = use default (identity)
+  compGraph: import("./compositing.js").CompGraph | null;  // Fusion node graph
   aiBackgroundRemoval: BackgroundRemovalConfig | null;
   beatSync: BeatSyncConfig | null;
 }
@@ -419,7 +420,7 @@ export interface PlaybackState {
 
 export type EditorTool = "select" | "blade";
 
-export type EditorPage = "edit" | "color" | "effects" | "audio";
+export type EditorPage = "edit" | "color" | "effects" | "audio" | "fusion";
 
 export interface EnvironmentStatus {
   ffmpegAvailable: boolean;
@@ -528,6 +529,7 @@ export function createEmptyClip(
     volume: 1,
     speed: 1,
     transform: null,
+    compGraph: null,
     aiBackgroundRemoval: null,
     beatSync: null
   };

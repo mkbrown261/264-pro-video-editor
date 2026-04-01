@@ -7,6 +7,7 @@ import {
   type ViewerPanelHandle
 } from "./components/ViewerPanel";
 import { ColorGradingPanel } from "./components/ColorGradingPanel";
+import FusionPage from "./components/compositing/FusionPage";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
 import { useAsyncImport } from "./hooks/useAsyncImport";
@@ -26,8 +27,8 @@ import type { ClipMask } from "../shared/models";
 import { createEmptyProject } from "../shared/models";
 import type { MaskTool } from "./components/MaskingCanvas";
 
-// Imp 8: Only "edit" | "color" — effects merged into edit inspector
-type AppPage = "edit" | "color";
+// Pages: edit | color | fusion
+type AppPage = "edit" | "color" | "fusion";
 type LayoutPreset = "edit" | "color" | "audio";
 
 interface ProjectSettings {
@@ -117,6 +118,12 @@ export default function App() {
   const setColorGrade = useEditorStore((s) => s.setColorGrade);
   const resetColorGrade = useEditorStore((s) => s.resetColorGrade);
   const updateSequenceSettings = useEditorStore((s) => s.updateSequenceSettings);
+
+  // ── Fusion store actions ────────────────────────────────────────────────────
+  const fusionClipId = useEditorStore((s) => s.fusionClipId);
+  const openFusion   = useEditorStore((s) => s.openFusion);
+  const closeFusion  = useEditorStore((s) => s.closeFusion);
+  const setCompGraph = useEditorStore((s) => s.setCompGraph);
 
   // ── Local UI state ─────────────────────────────────────────────────────────
   const [activePage, setActivePage] = useState<AppPage>("edit");
@@ -1139,14 +1146,14 @@ export default function App() {
 
         {/* Page tabs */}
         <nav className="page-tabs">
-          {(["edit", "color"] as const).map((page) => (
+          {(["edit", "color", "fusion"] as const).map((page) => (
             <button
               key={page}
-              className={`page-tab${activePage === page ? " active" : ""}`}
+              className={`page-tab${activePage === page ? " active" : ""}${page === "fusion" ? " fusion-tab" : ""}`}
               onClick={() => setActivePage(page)}
               type="button"
             >
-              {page.charAt(0).toUpperCase() + page.slice(1)}
+              {page === "fusion" ? "⬡ Fusion" : page.charAt(0).toUpperCase() + page.slice(1)}
             </button>
           ))}
         </nav>
@@ -1460,6 +1467,11 @@ export default function App() {
                 selectClip(clipId);
                 setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
               }}
+              onOpenInFusion={(clipId) => {
+                selectClip(clipId);
+                openFusion(clipId);
+                setActivePage("fusion");
+              }}
               onAddTrack={(kind) => addTrack(kind)}
               onRemoveTrack={(trackId) => removeTrack(trackId)}
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
@@ -1495,6 +1507,17 @@ export default function App() {
                   if (selectedClipId) resetColorGrade(selectedClipId);
                 }}
               />
+              {/* Open in Fusion button */}
+              {selectedClipId && (
+                <div style={{ padding: "8px 10px", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <button
+                    style={{ width: "100%", padding: "6px", background: "rgba(245,197,66,0.1)", border: "1px solid rgba(245,197,66,0.3)", color: "#f5c542", borderRadius: "4px", cursor: "pointer", fontSize: "0.73rem", fontWeight: 700 }}
+                    onClick={() => { openFusion(selectedClipId); setActivePage("fusion"); }}
+                  >
+                    ⬡ Open in Fusion
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Resizer between controls and viewer */}
@@ -1576,6 +1599,11 @@ export default function App() {
                   selectClip(clipId);
                   setTransitionMessage(applyTransitionToSelectedClip(edge, "fade"));
                 }}
+                onOpenInFusion={(clipId) => {
+                  selectClip(clipId);
+                  openFusion(clipId);
+                  setActivePage("fusion");
+                }}
                 onAddTrack={(kind) => addTrack(kind)}
               onRemoveTrack={(trackId) => removeTrack(trackId)}
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
@@ -1592,6 +1620,26 @@ export default function App() {
             </div>
           </>
         )}
+
+        {/* ── FUSION PAGE ── */}
+        {activePage === "fusion" && (() => {
+          const fusClip = fusionClipId
+            ? project.sequence.clips.find(c => c.id === fusionClipId) ?? null
+            : (selectedClipId ? project.sequence.clips.find(c => c.id === selectedClipId) ?? null : null);
+          const fusAsset = fusClip ? project.assets.find(a => a.id === fusClip.assetId) ?? null : null;
+          return (
+            <FusionPage
+              clip={fusClip}
+              asset={fusAsset}
+              allClips={project.sequence.clips}
+              sequenceSettings={project.sequence.settings}
+              playheadFrame={playback.playheadFrame}
+              videoRef={viewerPanelRef as unknown as React.RefObject<HTMLVideoElement | null>}
+              onUpdateGraph={(clipId, graph) => setCompGraph(clipId, graph)}
+              onBack={() => setActivePage("edit")}
+            />
+          );
+        })()}
 
       </main>
     </div>
