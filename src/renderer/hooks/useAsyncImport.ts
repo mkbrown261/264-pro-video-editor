@@ -86,7 +86,7 @@ async function generateThumbnail(
       } catch { /* ignore */ }
     };
 
-    const timeout = window.setTimeout(() => { cleanup(); resolve(null); }, 8000);
+    const timeout = window.setTimeout(() => { cleanup(); resolve(null); }, 3000);
 
     video.addEventListener("error", () => {
       window.clearTimeout(timeout);
@@ -116,8 +116,9 @@ async function generateThumbnail(
     video.load();
 
     video.addEventListener("loadedmetadata", () => {
-      // Seek to 10 % of duration (or 2 s) to get a representative frame
-      video.currentTime = Math.min(2, Math.max(0.1, durationSeconds * 0.10));
+      // Seek to 1 s (or 5% of duration) to get a quick representative frame.
+      // Keep seek time short so browsers don't need to buffer much data.
+      video.currentTime = Math.min(1, Math.max(0.1, durationSeconds * 0.05));
     }, { once: true });
   });
 }

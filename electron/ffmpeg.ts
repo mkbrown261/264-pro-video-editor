@@ -115,17 +115,15 @@ async function generateThumbnail(
 
   try {
     await mkdir(thumbnailDirectory, { recursive: true });
+    // ⚠️  Put -ss BEFORE -i (input seeking) so FFmpeg jumps to the keyframe
+    //    nearest 0.5 s without decoding every preceding frame.  This is the
+    //    difference between ~20 ms and ~2 s on a large H.264 file.
     await runProcess(ffmpegPath, [
-      "-ss",
-      "0.5",
-      "-i",
-      sourcePath,
-      "-frames:v",
-      "1",
-      "-vf",
-      "scale=640:-1",
-      "-q:v",
-      "2",
+      "-ss",    "0.5",   // input seek  ← BEFORE -i
+      "-i",     sourcePath,
+      "-frames:v", "1",
+      "-vf",    "scale=640:-1",
+      "-q:v",   "2",
       "-y",
       thumbnailPath
     ]);
@@ -258,25 +256,22 @@ export async function probeMediaFile(sourcePath: string): Promise<MediaAsset> {
   );
   const assetId = randomUUID();
   const nativeFps = parseRate(videoStream.avg_frame_rate || videoStream.r_frame_rate);
-  const previewFps = normalizeTimelineFps(nativeFps || 30);
-  const [thumbnailPath, previewPath] = environment.ffmpegAvailable
-    ? await Promise.all([
-        generateThumbnail(sourcePath, assetId, environment.ffmpegPath),
-        generatePreviewProxy(
-          sourcePath,
-          assetId,
-          environment.ffmpegPath,
-          Boolean(audioStream),
-          previewFps
-        )
-      ])
-    : [null, null];
+
+  // ── FAST PATH: thumbnail only, no proxy encode ────────────────────────────
+  // generatePreviewProxy is very slow (re-encodes the full video).
+  // We now return immediately using the source file as previewUrl, then
+  // generate the proxy in the background via generateProxiesInBackground().
+  const thumbnailPath = environment.ffmpegAvailable
+    ? await generateThumbnail(sourcePath, assetId, environment.ffmpegPath)
+    : null;
 
   return {
     id: assetId,
     name: basename(sourcePath),
     sourcePath,
-    previewUrl: createMediaUrl(previewPath ?? sourcePath),
+    // Use source file directly — browser can play most H.264/HEVC/VP9 files
+    // natively.  Proxy will replace this once generated in the background.
+    previewUrl: createMediaUrl(sourcePath),
     thumbnailUrl: thumbnailPath ? createMediaUrl(thumbnailPath) : null,
     durationSeconds,
     nativeFps,
@@ -290,6 +285,42 @@ export async function probeMediaFiles(
   sourcePaths: string[]
 ): Promise<MediaAsset[]> {
   return Promise.all(sourcePaths.map((sourcePath) => probeMediaFile(sourcePath)));
+}
+
+/**
+ * generateProxiesInBackground
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Called after probeMediaFiles returns so the renderer is already unblocked.
+ * For each asset, generates a 1280px H.264 proxy and calls onProxyReady with
+ * the assetId + new previewUrl so the renderer can swap the source URL.
+ *
+ * Proxies are generated one at a time to avoid saturating the CPU.
+ */
+export async function generateProxiesInBackground(
+  assets: MediaAsset[],
+  onProxyReady: (assetId: string, previewUrl: string) => void
+): Promise<void> {
+  const environment = getEnvironmentStatus();
+  if (!environment.ffmpegAvailable) return;
+
+  for (const asset of assets) {
+    try {
+      const nativeFps = asset.nativeFps || 30;
+      const previewFps = normalizeTimelineFps(nativeFps);
+      const proxyPath = await generatePreviewProxy(
+        asset.sourcePath,
+        asset.id,
+        environment.ffmpegPath,
+        asset.hasAudio,
+        previewFps
+      );
+      if (proxyPath) {
+        onProxyReady(asset.id, createMediaUrl(proxyPath));
+      }
+    } catch {
+      // proxy failure is non-fatal — source file is already playing
+    }
+  }
 }
 
 export async function exportSequence(

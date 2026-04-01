@@ -81,6 +81,8 @@ interface EditorStore {
   setAssetWaveform: (assetId: string, peaks: number[]) => void;
   /** Patch a thumbnail URL after async generation (non-undoable) */
   setAssetThumbnail: (assetId: string, thumbnailUrl: string) => void;
+  /** Swap previewUrl once background proxy encoding finishes (non-undoable) */
+  setAssetPreviewUrl: (assetId: string, previewUrl: string) => void;
   appendAssetToTimeline: (assetId: string) => void;
   dropAssetAtFrame: (assetId: string, trackId: string, startFrame: number) => void;
   selectAsset: (assetId: string | null) => void;
@@ -629,6 +631,17 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         ...state.project,
         assets: state.project.assets.map((a) =>
           a.id === assetId ? { ...a, thumbnailUrl } : a
+        )
+      }
+    }));
+  },
+
+  setAssetPreviewUrl: (assetId, previewUrl) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        assets: state.project.assets.map((a) =>
+          a.id === assetId ? { ...a, previewUrl } : a
         )
       }
     }));

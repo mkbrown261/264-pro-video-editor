@@ -35,6 +35,8 @@ declare global {
       exportSequence: (request: ExportRequest) => Promise<ExportResponse>;
       getEnvironmentStatus: () => Promise<EnvironmentStatus>;
       onUpdaterStatus: (callback: (status: UpdaterStatus) => void) => () => void;
+      /** Called by main process when a background proxy finishes encoding */
+      onProxyReady: (callback: (assetId: string, previewUrl: string) => void) => () => void;
       // Project persistence
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;

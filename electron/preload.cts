@@ -46,6 +46,16 @@ const editorApi = {
       ipcRenderer.removeListener("updater:status", listener);
     };
   },
+  // ── Background proxy-ready notification ───────────────────────────────────
+  // Called by the main process when a proxy video finishes encoding in the
+  // background.  The renderer swaps the asset's previewUrl to the proxy.
+  onProxyReady: (callback: (assetId: string, previewUrl: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { assetId: string; previewUrl: string }) => {
+      callback(data.assetId, data.previewUrl);
+    };
+    ipcRenderer.on("media:proxy-ready", listener);
+    return () => ipcRenderer.removeListener("media:proxy-ready", listener);
+  },
   // ── Project persistence (.264proj) ────────────────────────────────────────
   saveProject: (json: string, suggestedName: string): Promise<string | null> =>
     ipcRenderer.invoke("project:save", json, suggestedName),

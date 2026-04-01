@@ -123,9 +123,13 @@ async function loadMediaSource(
   assetName: string
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    // 8-second hard timeout — if canplay never fires (e.g. codec unsupported),
+    // we resolve anyway so startPlaybackAtFrame can still set the RAF clock.
+    const timer = window.setTimeout(() => { cleanup(); resolve(); }, 8000);
     const handleCanPlay = () => { cleanup(); resolve(); };
     const handleError   = () => { cleanup(); reject(new Error(`Failed to load ${assetName} into playback.`)); };
     const cleanup = () => {
+      window.clearTimeout(timer);
       element.removeEventListener("canplay", handleCanPlay);
       element.removeEventListener("error",   handleError);
     };
@@ -289,19 +293,28 @@ export function usePlaybackController({
 
   // ── start playback ────────────────────────────────────────────────────────
   async function startPlaybackAtFrame(frame: number): Promise<void> {
-    const { segments: segs, sequenceFps: fps } = stateRef.current;
+    const { segments: segs } = stateRef.current;
     const targetVideo = findActiveVideoSegmentAtFrame(segs, frame);
 
+    // Reset anchor; null out timestamp so RAF doesn't run ahead during load/seek
     stateRef.current.playbackAnchorFrame = frame;
-    stateRef.current.playbackStartedAt = performance.now();
+    stateRef.current.playbackStartedAt = null;   // ← set AFTER load completes
     stateRef.current.playheadFrame = frame;
     stateRef.current.setPlayheadFrame(frame);
 
-    // Start video and audio concurrently
+    // Load, seek and play video + audio.  This may take a moment
+    // (canplay + seeked events).  We MUST NOT start the RAF clock until
+    // both are ready, otherwise elapsed time accumulates during load and
+    // the playhead jumps forward the moment playback actually begins.
     await Promise.all([
       syncVideo(targetVideo, frame, true),
       startAudio(frame)
     ]);
+
+    // ↓ Stamp the clock AFTER media is loaded & playing — this is the
+    //   authoritative zero-point for the RAF loop.
+    stateRef.current.playbackStartedAt = performance.now();
+    stateRef.current.playbackAnchorFrame = frame;  // anchor stays at start frame
 
     if (!stateRef.current.isPlaying) {
       stateRef.current.isPlaying = true;
@@ -352,10 +365,14 @@ export function usePlaybackController({
         totalFrames: total
       } = stateRef.current;
 
-      const startedAt = playbackStartedAt ?? timestamp;
-      if (!stateRef.current.playbackStartedAt) {
-        stateRef.current.playbackStartedAt = timestamp;
+      // If playbackStartedAt is null, media is still loading — skip this
+      // frame so the playhead doesn't drift forward during load/seek.
+      if (playbackStartedAt === null) {
+        rafRef.current = requestAnimationFrame(step);
+        return;
       }
+
+      const startedAt = playbackStartedAt;
 
       const elapsedFrames = ((timestamp - startedAt) / 1000) * fps;
       const nextFrame = Math.min(total - 1, Math.round(playbackAnchorFrame + elapsedFrames));
@@ -393,9 +410,19 @@ export function usePlaybackController({
   }, [activeSegment?.clip.id, isPlaying, playheadFrame]);
 
   // ── sync when PLAYING and video segment changes ───────────────────────────
+  // When the active clip changes mid-play we need to reload/seek the video
+  // element.  During that async work we null-out playbackStartedAt so the
+  // RAF loop holds the playhead still; once play() resolves we re-stamp it
+  // so elapsed-time counting starts fresh from the current frame.
   useEffect(() => {
     if (!isPlaying) return;
-    void syncVideo(activeSegment, playheadFrame, true);
+    const frameAtChange = stateRef.current.playheadFrame;
+    stateRef.current.playbackStartedAt = null;  // freeze RAF during load
+    void syncVideo(activeSegment, frameAtChange, true).then(() => {
+      // Re-anchor from the frame we were at when the segment changed
+      stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
+      stateRef.current.playbackStartedAt = performance.now();
+    });
     // Audio segment changes are handled by useMultiTrackAudio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.id, isPlaying]);

@@ -129,9 +129,15 @@ async function seekTo(element: HTMLAudioElement, targetTime: number, fps: number
 // ── load helper ───────────────────────────────────────────────────────────────
 async function loadSrc(element: HTMLAudioElement, url: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      // Don't reject on timeout — the element might still play; just proceed.
+      resolve();
+    }, 5000);
     const onCanPlay = () => { cleanup(); resolve(); };
     const onError   = () => { cleanup(); reject(new Error(`Audio load failed: ${url}`)); };
     const cleanup = () => {
+      window.clearTimeout(timer);
       element.removeEventListener("canplay", onCanPlay);
       element.removeEventListener("error",   onError);
     };

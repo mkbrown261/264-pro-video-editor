@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 import type { ExportRequest } from "../src/shared/models.js";
 import {
   exportSequence,
+  generateProxiesInBackground,
   getEnvironmentStatus,
   probeMediaFiles
 } from "./ffmpeg.js";
@@ -314,9 +315,9 @@ ipcMain.handle("system:environment", () => {
 });
 
 ipcMain.handle("media:open-files", async (event) => {
-  const window = BrowserWindow.fromWebContents(event.sender);
-  const result = window
-    ? await dialog.showOpenDialog(window, {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = win
+    ? await dialog.showOpenDialog(win, {
         title: "Import Media",
         properties: ["openFile", "multiSelections"],
         filters: [
@@ -349,7 +350,19 @@ ipcMain.handle("media:open-files", async (event) => {
     return [];
   }
 
-  return probeMediaFiles(result.filePaths);
+  // Fast probe: metadata + thumbnail only, returns immediately
+  const assets = await probeMediaFiles(result.filePaths);
+
+  // Kick off proxy generation in the background (non-blocking).
+  // When each proxy is ready, notify the renderer to swap the previewUrl.
+  void generateProxiesInBackground(assets, (assetId, previewUrl) => {
+    const targetWin = BrowserWindow.fromWebContents(event.sender);
+    if (targetWin && !targetWin.isDestroyed()) {
+      targetWin.webContents.send("media:proxy-ready", { assetId, previewUrl });
+    }
+  });
+
+  return assets;
 });
 
 ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
