@@ -35,6 +35,7 @@ export interface ViewerPanelHandle {
 
 interface ViewerPanelProps {
   activeSegment: TimelineSegment | null;
+  /** @deprecated kept for API compat — multi-track audio is managed internally */
   activeAudioSegment: TimelineSegment | null;
   segments: TimelineSegment[];
   selectedAsset: MediaAsset | null;
@@ -278,19 +279,28 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
 
     const panelRef   = useRef<HTMLElement | null>(null);
     const videoRef   = useRef<HTMLVideoElement | null>(null);
+    // Dummy audioRef — kept for API compat with usePlaybackController signature
     const audioRef   = useRef<HTMLAudioElement | null>(null);
     const stageRef   = useRef<HTMLDivElement | null>(null);
+
+    // ── Hierarchical rendering: only the topmost visible video segment ────────
+    // activeSegment (prop) is already the highest-trackIndex video segment
+    // as computed by findAllActiveVideoSegments in App.tsx.
+    // All audio segments across ALL tracks are mixed by useMultiTrackAudio
+    // inside usePlaybackController — no per-segment tracking needed here.
 
     const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
     const [isFullscreen,    setIsFullscreen]    = useState(false);
     const [stageSize,       setStageSize]       = useState({ w: 960, h: 540 });
 
     // ── Playback controller ───────────────────────────────────────────────────
+    // activeAudioSegment is kept in props for API compat but audio is now
+    // managed by useMultiTrackAudio inside usePlaybackController.
     const { togglePlayback, pausePlayback, stopPlayback } = usePlaybackController({
       videoRef,
       audioRef,
       activeSegment,
-      activeAudioSegment,
+      activeAudioSegment: activeAudioSegment,
       segments,
       isPlaying,
       playheadFrame,
@@ -335,16 +345,8 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       return () => document.removeEventListener("fullscreenchange", h);
     }, []);
 
-    // ── Sync audio element volume/mute from clip settings ─────────────────────
-    useEffect(() => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      const vol = activeAudioSegment?.clip.volume ?? 1;
-      const track = activeAudioSegment?.track;
-      const muted = track?.muted ?? false;
-      audio.volume = Math.max(0, Math.min(1, vol));
-      audio.muted = muted;
-    }, [activeAudioSegment?.clip.volume, activeAudioSegment?.track?.muted]);
+    // Audio volume/mute is now managed per-segment by useMultiTrackAudio
+    // inside usePlaybackController.  No audio element to sync here.
 
     // ── Fallback: load preview asset when no timeline clip is active ──────────
     useEffect(() => {
@@ -506,7 +508,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           )}
         </div>
 
-        <audio ref={audioRef} preload="metadata" />
+        {/* Audio is fully managed by useMultiTrackAudio — no <audio> element needed here */}
 
         {/* ── Transport bar ── */}
         <div className="transport-bar">

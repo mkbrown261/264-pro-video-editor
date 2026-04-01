@@ -9,12 +9,14 @@ import {
 import { ColorGradingPanel } from "./components/ColorGradingPanel";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
+import { useAsyncImport } from "./hooks/useAsyncImport";
 import { VoiceChopAI } from "./lib/VoiceChopAI";
 import { useEditorStore } from "./store/editorStore";
 import {
   buildTimelineSegments,
   buildTrackLayouts,
   findPlayableSegmentAtFrame,
+  findAllActiveVideoSegments,
   type TimelineSegment,
   getTotalDurationFrames
 } from "../shared/timeline";
@@ -53,6 +55,7 @@ export default function App() {
   const canRedo = useEditorStore((s) => s.canRedo);
 
   const importAssets = useEditorStore((s) => s.importAssets);
+  const setAssetThumbnail = useEditorStore((s) => s.setAssetThumbnail);
   const appendAssetToTimeline = useEditorStore((s) => s.appendAssetToTimeline);
   const dropAssetAtFrame = useEditorStore((s) => s.dropAssetAtFrame);
   const selectAsset = useEditorStore((s) => s.selectAsset);
@@ -244,7 +247,15 @@ export default function App() {
   const segments = buildTimelineSegments(project.sequence, project.assets);
   const trackLayouts = buildTrackLayouts(project.sequence, project.assets, segments);
   const totalFrames = getTotalDurationFrames(segments);
-  const activeSegment = findPlayableSegmentAtFrame(segments, playback.playheadFrame, "video");
+
+  // ── Hierarchical rendering: topmost visible video clip only ───────────────
+  // findAllActiveVideoSegments returns ALL overlapping video clips sorted
+  // by trackIndex desc.  The first element is the clip we show in the viewer.
+  // Lower clips are hidden unless transparency/mask allows see-through.
+  const activeVideoSegments = findAllActiveVideoSegments(segments, playback.playheadFrame);
+  // Primary active video segment — shown in the viewer
+  const activeSegment = activeVideoSegments[0] ?? null;
+
   const activeAudioSegment = findPlayableSegmentAtFrame(segments, playback.playheadFrame, "audio");
   const selectedSegment = segments.find((s) => s.clip.id === selectedClipId) ?? null;
   const inspectorSegment =
@@ -729,18 +740,26 @@ export default function App() {
   useEffect(() => { setTransitionMessage(null); }, [selectedClipId]);
 
   // ── Import/Export ──────────────────────────────────────────────────────────
-  async function handleImport() {
-    if (!window.editorApi) { setBridgeReady(false); setExportMessage("Import unavailable — restart Electron."); return; }
-    setExportMessage(null);
-    setImportBusy(true);
-    try {
-      const assets = await window.editorApi.openMediaFiles();
+  // Non-blocking async import pipeline:
+  //   1. Immediately adds assets with placeholder thumbnails so the media
+  //      pool is populated and the timeline is usable right away.
+  //   2. Generates thumbnails in background, patches them into the store.
+  const { triggerImport } = useAsyncImport({
+    onAssetsReady: (assets) => {
       if (assets.length) importAssets(assets);
-    } catch (err) {
-      setExportMessage(err instanceof Error ? err.message : "Import failed.");
-    } finally {
-      setImportBusy(false);
+      setExportMessage(null);
+    },
+    onThumbnailReady: (assetId, thumbnailUrl) => {
+      setAssetThumbnail(assetId, thumbnailUrl);
+    },
+    onImportingChange: (busy) => {
+      setImportBusy(busy);
     }
+  });
+
+  async function handleImport() {
+    setExportMessage(null);
+    await triggerImport();
   }
 
   async function handleExport() {

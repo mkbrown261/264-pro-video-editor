@@ -265,6 +265,34 @@ export function findPlayableSegmentAtFrame(
   return findSegmentAtFrame(filterPlayableSegments(segments, trackKind), playheadFrame);
 }
 
+/**
+ * findAllActiveVideoSegments
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Returns ALL enabled, non-muted video segments that overlap the current
+ * playhead — sorted by trackIndex descending (highest priority first).
+ *
+ * Used by the hierarchical rendering engine:
+ *   - segments[0] = topmost clip (rendered on the visible video element)
+ *   - segments[1..n] = lower clips (rendered as composited layers, visible
+ *     only through opacity < 1 / masks / alpha on the clip above them)
+ *
+ * Solo semantics match filterPlayableSegments.
+ */
+export function findAllActiveVideoSegments(
+  segments: TimelineSegment[],
+  playheadFrame: number
+): TimelineSegment[] {
+  const playable = filterPlayableSegments(segments, "video");
+  const covering = playable.filter(
+    (s) => playheadFrame >= s.startFrame && playheadFrame < s.endFrame
+  );
+  // Sort highest trackIndex first (topmost visual layer first)
+  return covering.sort((a, b) => {
+    if (a.trackIndex !== b.trackIndex) return b.trackIndex - a.trackIndex;
+    return b.startFrame - a.startFrame;
+  });
+}
+
 export function findNextPlayableSegmentAtOrAfterFrame(
   segments: TimelineSegment[],
   playheadFrame: number,
