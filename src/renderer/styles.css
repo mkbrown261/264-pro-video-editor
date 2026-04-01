@@ -1203,10 +1203,10 @@ kbd {
   background: var(--separator);
 }
 
-/* Color page slots */
-.color-page-grading  { grid-area: left;     display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
-.color-page-viewer   { grid-area: viewer;   display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-.color-page-timeline { grid-area: tl;       display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+/* Color page slots — unified area names */
+.color-page-grading  { grid-area: color-left;  display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
+.color-page-viewer   { grid-area: color-right; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.color-page-timeline { grid-area: tl;          display:flex; flex-direction:column; min-height:0; overflow:hidden; }
 
 /* Effects page slots */
 .effects-page-panel    { grid-area: left;     display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
@@ -2295,50 +2295,12 @@ kbd {
    ══════════════════════════════════════════════════════════════════════════════ */
 
 /* Override the app-shell for the color page */
-.app-shell.page-color {
-  display: grid !important;
-  grid-template-columns: 340px 3px 1fr;
-  grid-template-rows: minmax(0, 1fr) 200px;
-  grid-template-areas:
-    "color-controls  col-resizer  color-viewer"
-    "color-timeline  color-timeline  color-timeline";
-  gap: 1px;
-  background: var(--separator);
-}
-
-.color-page-grading {
-  grid-area: color-controls !important;
-  display: flex !important;
-  flex-direction: column !important;
-  min-height: 0 !important;
-  background: var(--bg-panel) !important;
-  overflow: hidden !important;
-}
-
-.color-page-viewer {
-  grid-area: color-viewer !important;
-  display: flex !important;
-  flex-direction: column !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
-}
-
-.color-page-timeline {
-  grid-area: color-timeline !important;
-  display: flex !important;
-  flex-direction: column !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
-}
-
-/* The resizer in the color page */
-.app-shell.page-color .left-resizer {
-  grid-area: col-resizer !important;
-}
-
-.app-shell.page-color .right-resizer {
-  display: none !important;
-}
+/* FIX 8: Color page — unified grid area names (defer to lines 5143+) */
+.color-page-grading  { grid-area: color-left !important;  display:flex !important; flex-direction:column !important; min-height:0 !important; background:var(--bg-panel) !important; overflow:hidden !important; }
+.color-page-viewer   { grid-area: color-right !important; display:flex !important; flex-direction:column !important; min-height:0 !important; overflow:hidden !important; }
+.color-page-timeline { grid-area: tl !important;          display:flex !important; flex-direction:column !important; min-height:0 !important; overflow:hidden !important; }
+.app-shell.page-color .left-resizer  { grid-area: color-resizer !important; }
+.app-shell.page-color .right-resizer { display: none !important; }
 
 /* ══════════════════════════════════════════════════════════════════════════════
    BUTTON SYSTEM OVERHAUL — proper states, 150-200ms transitions, no gray lies
@@ -5236,4 +5198,176 @@ kbd {
   height: 8px;
   background: #4a9eff;
   border: 1px solid rgba(255,255,255,0.6);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PRECISION FIXES — Round 2 (Audio sync, Lasso, Effects, ESC, etc.)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── FIX 1/2: Audio/Speed controls — numeric input + range labels ─────── */
+.field-value-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.numeric-input {
+  width: 60px;
+  background: var(--bg-input, #1c1c1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 3px;
+  color: var(--text, #e0e0e0);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 2px 5px;
+  text-align: right;
+  outline: none;
+  font-family: "SF Mono", "Consolas", monospace;
+}
+.numeric-input:focus {
+  border-color: var(--accent, #4f8ef7);
+  background: var(--bg-input-hi, #232326);
+}
+.numeric-input::-webkit-inner-spin-button,
+.numeric-input::-webkit-outer-spin-button { opacity: 0.6; }
+
+.field-unit {
+  font-size: 0.7rem;
+  color: var(--text-muted, #888);
+  min-width: 14px;
+}
+
+.range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.62rem;
+  color: var(--text-dim, #666);
+  padding: 1px 2px 0;
+}
+
+/* ── FIX 3: Lasso rubber-band selection box ──────────────────────────────── */
+.lasso-selection-box {
+  border: 1.5px dashed #4f8ef7;
+  background: rgba(79, 142, 247, 0.07);
+  pointer-events: none;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(79, 142, 247, 0.15);
+}
+
+/* Lasso-selected clips get a blue highlight outline */
+.timeline-clip.lasso-selected {
+  outline: 2px solid #4f8ef7;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.22) !important;
+}
+
+/* ── FIX 3: Lasso multi-select action bar ─────────────────────────────────── */
+.lasso-action-bar {
+  position: sticky;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-panel, #1c1c1e);
+  border: 1px solid var(--accent, #4f8ef7);
+  border-radius: 8px;
+  padding: 6px 14px;
+  z-index: 300;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  white-space: nowrap;
+  margin: 6px auto;
+}
+
+.lasso-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent, #4f8ef7);
+  margin-right: 4px;
+}
+
+/* ── FIX 6: Fullscreen exit — viewer panel fullscreen state ─────────────── */
+.viewer-panel-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
+  border-radius: 0 !important;
+  background: #000 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+}
+/* When fullscreen: ensure video fills the stage correctly */
+.viewer-panel-fullscreen .viewer-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── FIX 7: Effects filter visible badge ─────────────────────────────────── */
+.viewer-effects-badge {
+  position: absolute;
+  top: 6px;
+  right: 60px;
+  background: rgba(224, 120, 32, 0.85);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* ── FIX 9: Snap indicator line — blue, precise alignment only ───────────── */
+.snap-indicator-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #4f8ef7;
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 40;
+  box-shadow: 0 0 4px rgba(79,142,247,0.6);
+}
+
+/* ── FIX 11: Motion tracking controls in MaskInspector ──────────────────── */
+.mask-tracking-section {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(79, 142, 247, 0.06);
+  border: 1px solid rgba(79, 142, 247, 0.15);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mask-tracking-status {
+  font-size: 0.68rem;
+}
+
+.tracking-active-badge {
+  color: #4f8ef7;
+  font-weight: 700;
+}
+
+.tracking-idle-text {
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+
+.tracking-path-svg {
+  width: 100%;
+  height: 36px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.mask-tracking-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }

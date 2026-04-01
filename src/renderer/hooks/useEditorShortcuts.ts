@@ -281,7 +281,14 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           break;
         case "escape":
           event.preventDefault();
-          onSelectTool();
+          // FIX 6: ESC exits fullscreen if active — NEVER shows blank blue screen
+          if (document.fullscreenElement) {
+            void document.exitFullscreen().catch(() => {
+              // exitFullscreen can throw if no fullscreen active — safe to ignore
+            });
+          } else {
+            onSelectTool();
+          }
           break;
         default:
           break;

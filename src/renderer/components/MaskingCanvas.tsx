@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { BezierPoint, ClipMask, MaskShape, MaskType, Vec2 } from "../../shared/models";
 import { createId } from "../../shared/models";
 
@@ -634,6 +634,8 @@ interface MaskInspectorProps {
   selectedMaskId: string | null;
   activeTool: MaskTool;
   playheadFrame: number;
+  /** Optional video ref for motion tracking analysis */
+  videoRef?: React.RefObject<HTMLVideoElement | null>;
   onSelectMask: (id: string | null) => void;
   onSetActiveTool: (tool: MaskTool) => void;
   onAddMask: (mask: ClipMask) => void;
@@ -645,12 +647,15 @@ export function MaskInspector({
   masks,
   selectedMaskId,
   activeTool,
+  playheadFrame,
+  videoRef,
   onSelectMask,
   onSetActiveTool,
   onUpdateMask,
   onRemoveMask
 }: MaskInspectorProps) {
   const selectedMask = masks.find((m) => m.id === selectedMaskId) ?? null;
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const TOOLS: Array<{ label: string; value: MaskTool; icon: string; tooltip: string }> = [
     { label: "Select",    value: "select",    icon: "↖",  tooltip: "Select / move masks"        },
@@ -762,6 +767,104 @@ export function MaskInspector({
               onChange={(e) => onUpdateMask(selectedMask.id, { trackingEnabled: e.target.checked })}
             />
           </div>
+
+          {/* FIX 11: Motion tracking controls */}
+          {selectedMask.trackingEnabled && (
+            <div className="mask-tracking-section">
+              <div className="mask-tracking-status">
+                {selectedMask.trackingData.length > 0
+                  ? <span className="tracking-active-badge">● {selectedMask.trackingData.length} keyframes tracked</span>
+                  : <span className="tracking-idle-text">No tracking data. Click ⋔ Analyze below.</span>
+                }
+              </div>
+
+              {/* Tracking path preview SVG */}
+              {selectedMask.trackingData.length > 1 && (
+                <svg className="tracking-path-svg" viewBox="0 0 100 40" preserveAspectRatio="none">
+                  <polyline
+                    points={selectedMask.trackingData.map((kf, i) => {
+                      const total = selectedMask.trackingData.length;
+                      const x = (i / Math.max(1, total - 1)) * 100;
+                      const y = 20 + kf.dy * 18;
+                      return `${x.toFixed(1)},${Math.max(2, Math.min(38, y)).toFixed(1)}`;
+                    }).join(" ")}
+                    fill="none" stroke="#4f8ef7" strokeWidth="1.5"
+                  />
+                </svg>
+              )}
+
+              <div className="mask-tracking-actions">
+                <button
+                  className={`panel-action${isAnalyzing ? " primary" : " muted"}`}
+                  type="button"
+                  disabled={isAnalyzing || !videoRef?.current}
+                  title={!videoRef?.current ? "Load a clip in the viewer first" : "Analyze video motion for this mask"}
+                  onClick={async () => {
+                    const video = videoRef?.current;
+                    if (!video || !selectedMask) return;
+                    if (selectedMask.shape.type === "freehand" || selectedMask.shape.type === "bezier") return;
+                    setIsAnalyzing(true);
+                    const savedTime = video.currentTime;
+                    try {
+                      const fps = 24;
+                      const keyframes: import("../../shared/models").TrackingKeyframe[] = [];
+                      const { x, y, width, height } = selectedMask.shape as { x: number; y: number; width: number; height: number };
+                      const offscreen = new OffscreenCanvas(160, 90);
+                      const ctx = offscreen.getContext("2d")!;
+                      ctx.drawImage(video, 0, 0, 160, 90);
+                      const rx = Math.floor(x * 160);
+                      const ry = Math.floor(y * 90);
+                      const rw = Math.max(2, Math.floor(width * 160));
+                      const rh = Math.max(2, Math.floor(height * 90));
+                      const refData = ctx.getImageData(rx, ry, rw, rh).data;
+                      // Sample frames over next ~5 seconds
+                      const totalFrames = Math.min(fps * 5, 120);
+                      const step = Math.max(1, Math.floor(fps / 10));
+                      for (let f = 0; f < totalFrames; f += step) {
+                        video.currentTime = savedTime + (f / fps);
+                        await new Promise<void>((res) => {
+                          const h = () => { video.removeEventListener("seeked", h); res(); };
+                          video.addEventListener("seeked", h, { once: true });
+                          setTimeout(res, 200);
+                        });
+                        ctx.drawImage(video, 0, 0, 160, 90);
+                        const searchPx = 10;
+                        let bestDx = 0, bestDy = 0, bestSad = Infinity;
+                        for (let dy = -searchPx; dy <= searchPx; dy++) {
+                          for (let dx = -searchPx; dx <= searchPx; dx++) {
+                            const cx2 = rx + dx, cy2 = ry + dy;
+                            if (cx2 < 0 || cy2 < 0 || cx2 + rw > 160 || cy2 + rh > 90) continue;
+                            const cand = ctx.getImageData(cx2, cy2, rw, rh).data;
+                            let sad = 0;
+                            for (let pi = 0; pi < refData.length; pi += 4) {
+                              sad += Math.abs(cand[pi] - refData[pi]) + Math.abs(cand[pi+1] - refData[pi+1]) + Math.abs(cand[pi+2] - refData[pi+2]);
+                            }
+                            if (sad < bestSad) { bestSad = sad; bestDx = dx; bestDy = dy; }
+                          }
+                        }
+                        keyframes.push({ frame: playheadFrame + f, dx: bestDx / 160, dy: bestDy / 90 });
+                      }
+                      onUpdateMask(selectedMask.id, { trackingData: keyframes });
+                    } finally {
+                      video.currentTime = savedTime;
+                      setIsAnalyzing(false);
+                    }
+                  }}
+                >
+                  {isAnalyzing ? "⏳ Analyzing…" : "⋔ Analyze & Track"}
+                </button>
+                {selectedMask.trackingData.length > 0 && (
+                  <button
+                    className="panel-action danger"
+                    type="button"
+                    onClick={() => onUpdateMask(selectedMask.id, { trackingData: [] })}
+                  >
+                    ️ Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Numeric inputs for precise entry */}
           {(selectedMask.shape.type === "rectangle" || selectedMask.shape.type === "ellipse") && (

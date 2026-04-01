@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState, useRef } from "react";
 import type {
   BackgroundRemovalConfig,
   ClipEffect,
@@ -85,6 +85,9 @@ interface InspectorPanelProps {
 
   // Color grade (for effects page display)
   colorGrade?: ColorGrade | null;
+
+  // Video ref for motion tracking in masks
+  videoRef?: React.RefObject<HTMLVideoElement | null>;
 }
 
 // Transition icon map for visual representation
@@ -114,6 +117,91 @@ const TRANSITION_ICONS: Record<ClipTransitionType, string> = {
 };
 
 const TRANSITION_CATEGORIES = Array.from(new Set(ALL_TRANSITION_TYPES.map((t) => t.category)));
+
+// ── Volume numeric input with 1:1 sync ────────────────────────────────────────
+function VolumeControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const pct = Math.round(value * 100);
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="field">
+      <label className="field-header">
+        <span>Volume</span>
+        <div className="field-value-row">
+          <input
+            ref={inputRef}
+            className="numeric-input"
+            type="number"
+            min={0} max={200} step={1}
+            value={pct}
+            onChange={(e) => {
+              const v = Math.min(200, Math.max(0, Number(e.target.value)));
+              onChange(v / 100);
+            }}
+          />
+          <span className="field-unit">%</span>
+        </div>
+      </label>
+      <input
+        type="range" min={0} max={2} step={0.01}
+        value={value}
+        /* onInput fires on every frame during drag — 1:1 sync, no debounce */
+        onInput={(e) => onChange(Number((e.target as HTMLInputElement).value))}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      <div className="range-labels">
+        <span>0%</span><span>100%</span><span>200%</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Speed numeric input with 0.25x – 4x range ────────────────────────────────
+function SpeedControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="field">
+      <label className="field-header">
+        <span>Speed</span>
+        <div className="field-value-row">
+          <input
+            ref={inputRef}
+            className="numeric-input"
+            type="number"
+            min={0.25} max={4} step={0.05}
+            value={value.toFixed(2)}
+            onChange={(e) => {
+              const v = Math.min(4, Math.max(0.25, Number(e.target.value)));
+              onChange(v);
+            }}
+          />
+          <span className="field-unit">×</span>
+        </div>
+      </label>
+      <input
+        type="range" min={0.25} max={4} step={0.05}
+        value={value}
+        /* onInput fires on every frame during drag — 1:1 sync, no debounce */
+        onInput={(e) => onChange(Number((e.target as HTMLInputElement).value))}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      <div className="range-labels">
+        <span>0.25×</span><span>1×</span><span>2×</span><span>4×</span>
+      </div>
+    </div>
+  );
+}
 
 export function InspectorPanel({
   selectedAsset,
@@ -167,7 +255,8 @@ export function InspectorPanel({
   onQuantizeVoiceCutsToGrid,
   onSetVoiceBpm,
   onSetVoiceGridFrames,
-  onExport
+  onExport,
+  videoRef,
 }: InspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("clip");
   const [transitionCategory, setTransitionCategory] = useState("Basic");
@@ -285,6 +374,7 @@ export function InspectorPanel({
                       type="range"
                       className="transition-duration-range"
                       value={Math.min(activeTransFrames, maxFadeFrames)}
+                      onInput={(e) => onSetTransitionDuration(transitionEdge, Number((e.target as HTMLInputElement).value))}
                       onChange={(e) => onSetTransitionDuration(transitionEdge, Number(e.target.value))}
                     />
                   </div>
@@ -441,6 +531,7 @@ export function InspectorPanel({
                   selectedMaskId={selectedMaskId}
                   activeTool={activeMaskTool}
                   playheadFrame={selectedSegment.startFrame}
+                  videoRef={videoRef}
                   onSelectMask={onSelectMask}
                   onSetActiveTool={onSetActiveMaskTool}
                   onAddMask={onAddMask}
@@ -479,34 +570,25 @@ export function InspectorPanel({
           </div>
         )}
 
-        {/* ── AUDIO TAB ── */}
+        {/* ── AUDIO TAB (Fix 1 & 2: 1:1 slider sync + numeric inputs) ── */}
         {activeTab === "audio" && (
           <div className="inspector-stack">
             {selectedSegment ? (
               <div className="inspector-card">
                 <p className="inspector-label">Audio Controls</p>
-                <div className="field">
-                  <label className="field-header">
-                    <span>Volume</span>
-                    <strong>{Math.round((selectedSegment.clip.volume ?? 1) * 100)}%</strong>
-                  </label>
-                  <input
-                    type="range" min={0} max={2} step={0.01}
-                    value={selectedSegment.clip.volume ?? 1}
-                    onChange={(e) => onSetClipVolume(Number(e.target.value))}
-                  />
-                </div>
-                <div className="field">
-                  <label className="field-header">
-                    <span>Speed</span>
-                    <strong>{(selectedSegment.clip.speed ?? 1).toFixed(2)}×</strong>
-                  </label>
-                  <input
-                    type="range" min={0.25} max={4} step={0.05}
-                    value={selectedSegment.clip.speed ?? 1}
-                    onChange={(e) => onSetClipSpeed(Number(e.target.value))}
-                  />
-                </div>
+
+                {/* FIX 1: Volume — onInput fires every frame, numeric input synced 1:1 */}
+                <VolumeControl
+                  value={selectedSegment.clip.volume ?? 1}
+                  onChange={onSetClipVolume}
+                />
+
+                {/* FIX 2: Speed — 0.25×–4× range, numeric input, onInput for real-time */}
+                <SpeedControl
+                  value={selectedSegment.clip.speed ?? 1}
+                  onChange={onSetClipSpeed}
+                />
+
                 {selectedSegment.asset.hasAudio && (
                   <button className="panel-action muted" onClick={onExtractAudio} type="button">
                     Extract Audio to Track
@@ -569,6 +651,7 @@ export function InspectorPanel({
                 <input
                   type="range" min={40} max={240} step={1}
                   value={voiceBpm}
+                  onInput={(e) => onSetVoiceBpm(Number((e.target as HTMLInputElement).value))}
                   onChange={(e) => onSetVoiceBpm(Number(e.target.value))}
                 />
               </div>
@@ -580,6 +663,7 @@ export function InspectorPanel({
                 <input
                   type="range" min={1} max={Math.max(fps * 2, 24)} step={1}
                   value={voiceGridFrames}
+                  onInput={(e) => onSetVoiceGridFrames(Number((e.target as HTMLInputElement).value))}
                   onChange={(e) => onSetVoiceGridFrames(Number(e.target.value))}
                 />
               </div>

@@ -8,6 +8,7 @@ import {
   type CSSProperties
 } from "react";
 import type {
+  ClipEffect,
   ClipMask,
   ClipTransitionType,
   ColorGrade,
@@ -22,6 +23,7 @@ import { formatTimecode } from "../lib/format";
 import { usePlaybackController } from "../hooks/usePlaybackController";
 import { MaskingCanvas, type MaskTool } from "./MaskingCanvas";
 import { getGradeFilterStyle, GRADE_FILTER_ID } from "../lib/colorGradeRenderer";
+import { computeCssFilterFromEffects } from "./EffectsPanel";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -43,6 +45,8 @@ interface ViewerPanelProps {
   toolMode: EditorTool;
   /** Color grade for the current clip — applied as a CSS filter on the video element */
   colorGrade?: ColorGrade | null;
+  /** Effects stack — blur, sharpen, etc. applied on top of grade */
+  clipEffects?: ClipEffect[] | null;
   // Masking
   activeMaskTool: MaskTool;
   selectedMaskId: string | null;
@@ -258,6 +262,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     isPlaying,
     toolMode,
     colorGrade,
+    clipEffects,
     activeMaskTool,
     selectedMaskId,
     onAddMask,
@@ -375,6 +380,14 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     );
     const hasGrade    = Boolean(colorGrade);
 
+    // ── Effects CSS filter (blur, sharpen, brightness, etc.) ─────────────────
+    // FIX 7: compute filter from active effects and merge with grade filter
+    const effectsFilter = useMemo(() => {
+      if (!clipEffects || clipEffects.length === 0) return "";
+      const f = computeCssFilterFromEffects(clipEffects);
+      return f === "none" ? "" : f;
+    }, [clipEffects]);
+
     // ── Mask SVG overlay ──────────────────────────────────────────────────────
     const maskSvg = useMemo(
       () => buildSvgMaskOverlay(currentMasks, stageSize.w, stageSize.h, playheadFrame),
@@ -415,7 +428,11 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                 controls={false}
                 style={{
                   opacity: previewOpacity,
-                  filter:  gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : undefined,
+                  // FIX 7: merge grade filter + effects filter into single CSS filter string
+                  filter: [
+                    gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : "",
+                    effectsFilter,
+                  ].filter(Boolean).join(" ") || undefined,
                   ...videoStyle,
                 }}
                 muted={true}

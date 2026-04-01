@@ -250,6 +250,12 @@ export function TimelinePanel({
   // Pixel threshold for magnetic snap-to-edge/playhead to engage
   const MAGNETIC_SNAP_PX = 10;
 
+  // ── FIX 3: Lasso rubber-band multi-select ────────────────────────────────
+  interface LassoBox { startX: number; startY: number; curX: number; curY: number; }
+  const [lassoBox, setLassoBox] = useState<LassoBox | null>(null);
+  const lassoBoxRef = useRef<LassoBox | null>(null);
+  const [lassoSelectedIds, setLassoSelectedIds] = useState<Set<string>>(new Set());
+
   // ── Track reorder drag ────────────────────────────────────────────────────
   const [trackReorderDrag, setTrackReorderDrag] = useState<{
     trackId: string;
@@ -565,19 +571,31 @@ export function TimelinePanel({
       // Applies to all drag intents when snap is enabled
       if (g && snapRef.current.snapEnabled) {
         const ppf = ppfRef.current;
-        // Collect all candidate snap points: every clip edge + the playhead
-        const candidates: number[] = [];
 
-        // All clip edges from all visible lanes
+        // FIX 9: Collect ONLY clip edges (not playhead) for the blue snap indicator.
+        // Skip the clip being dragged to avoid snapping to itself.
+        const clipEdges: number[] = [];
+        const allCandidates: number[] = [];
+
         document.querySelectorAll<HTMLElement>(".timeline-clip").forEach((el) => {
+          // Skip the clip being dragged
+          if (el.dataset.clipId === ds.clipId) return;
           const left  = parseFloat(el.style.left  ?? "0");
           const width = parseFloat(el.style.width ?? "0");
-          if (!isNaN(left))         candidates.push(Math.round(left  / ppf));
-          if (!isNaN(left + width)) candidates.push(Math.round((left + width) / ppf));
+          if (!isNaN(left)) {
+            const f = Math.round(left / ppf);
+            clipEdges.push(f);
+            allCandidates.push(f);
+          }
+          if (!isNaN(left + width)) {
+            const f = Math.round((left + width) / ppf);
+            clipEdges.push(f);
+            allCandidates.push(f);
+          }
         });
 
-        // Playhead — read directly from ref (always current, no stale closure)
-        candidates.push(playheadFrameRef.current);
+        // Playhead snapping (no blue indicator for playhead snaps)
+        allCandidates.push(playheadFrameRef.current);
 
         // Threshold in frames
         const threshFrames = MAGNETIC_SNAP_PX / ppf;
@@ -585,15 +603,20 @@ export function TimelinePanel({
         // Find closest candidate within threshold
         let bestFrame: number | null = null;
         let bestDist = threshFrames;
-        for (const candidate of candidates) {
+        let bestIsClipEdge = false;
+        for (const candidate of allCandidates) {
           const dist = Math.abs(g.frame - candidate);
-          if (dist < bestDist) { bestDist = dist; bestFrame = candidate; }
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestFrame = candidate;
+            bestIsClipEdge = clipEdges.includes(candidate);
+          }
         }
 
         if (bestFrame !== null) {
-          // Snap: override the ghost frame and show indicator
           g.frame = bestFrame;
-          setSnapIndicatorFrame(bestFrame);
+          // FIX 9: Blue snap line ONLY appears when snapping to another clip's edge
+          setSnapIndicatorFrame(bestIsClipEdge ? bestFrame : null);
         } else {
           setSnapIndicatorFrame(null);
         }
@@ -626,6 +649,49 @@ export function TimelinePanel({
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [dragState]);
+
+  // ── FIX 3: Lasso rubber-band selection mouse tracking ─────────────────────
+  useEffect(() => {
+    if (!lassoBox) return;
+    const onMove = (e: MouseEvent) => {
+      const next = { ...lassoBoxRef.current!, curX: e.pageX, curY: e.pageY };
+      lassoBoxRef.current = next;
+      setLassoBox({ ...next });
+    };
+    const onUp = () => {
+      const lb = lassoBoxRef.current;
+      if (lb) {
+        const x1 = Math.min(lb.startX, lb.curX);
+        const y1 = Math.min(lb.startY, lb.curY);
+        const x2 = Math.max(lb.startX, lb.curX);
+        const y2 = Math.max(lb.startY, lb.curY);
+        // Only register selection if lasso has meaningful size
+        if (x2 - x1 > 6 || y2 - y1 > 6) {
+          const selected = new Set<string>();
+          document.querySelectorAll<HTMLElement>("[data-clip-id]").forEach((el) => {
+            const r = el.getBoundingClientRect();
+            const ex1 = r.left + window.scrollX;
+            const ey1 = r.top  + window.scrollY;
+            const ex2 = ex1 + r.width;
+            const ey2 = ey1 + r.height;
+            if (ex2 > x1 && ex1 < x2 && ey2 > y1 && ey1 < y2) {
+              const cid = el.dataset.clipId;
+              if (cid) selected.add(cid);
+            }
+          });
+          setLassoSelectedIds(selected);
+          if (selected.size === 1) {
+            propsRef.current.onSelectClip?.([...selected][0]);
+          }
+        }
+      }
+      lassoBoxRef.current = null;
+      setLassoBox(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [lassoBox]);
 
   // ── Track reorder drag ────────────────────────────────────────────────────
   useEffect(() => {
@@ -1208,6 +1274,17 @@ export function TimelinePanel({
                     const px = e.clientX - r.left + scrollLeft;
                     const frame = Math.max(0, Math.min(Math.round(px / pixelsPerFrame), timelineFrames));
                     onSetPlayheadFrame(frame);
+                    // Clear lasso selection on empty click
+                    setLassoSelectedIds(new Set());
+                  }}
+                  onMouseDown={(e) => {
+                    // FIX 3: Start lasso when dragging on empty lane area (no clip under cursor)
+                    if (e.button !== 0 || toolMode !== "select" || isLocked) return;
+                    if ((e.target as HTMLElement).closest("[data-clip-id],.timeline-clip-handle,.fade-handle")) return;
+                    const lb = { startX: e.pageX, startY: e.pageY, curX: e.pageX, curY: e.pageY };
+                    lassoBoxRef.current = lb;
+                    setLassoBox(lb);
+                    setLassoSelectedIds(new Set());
                   }}
                 >
                   {/* Guide lines */}
@@ -1270,10 +1347,14 @@ export function TimelinePanel({
                     const fadeInPx      = fadeInFrames  * pixelsPerFrame;
                     const fadeOutPx     = fadeOutFrames * pixelsPerFrame;
 
+                    // FIX 3: lasso highlight
+                    const isLassoSelected = lassoSelectedIds.has(segment.clip.id);
+
                     const clipClass = [
                       "timeline-clip",
                       segment.track.kind === "video" ? "video-clip" : "audio-clip",
                       isSelected  ? "selected"  : "",
+                      isLassoSelected ? "lasso-selected" : "",
                       !segment.clip.isEnabled ? "disabled" : "",
                       isDragging  ? "dragging"  : "",
                       isDraggingToNewTrack ? "dragging-to-new-track" : "",
@@ -1283,6 +1364,7 @@ export function TimelinePanel({
                     return (
                       <div
                         key={segment.clip.id}
+                        data-clip-id={segment.clip.id}
                         className={clipClass}
                         style={{
                           left: displayLeft,
@@ -1542,6 +1624,54 @@ export function TimelinePanel({
           )}
         </div>
       </div>
+
+      {/* ── FIX 3: Lasso rubber-band selection box (fixed viewport overlay) ── */}
+      {lassoBox && (() => {
+        const x1 = Math.min(lassoBox.startX, lassoBox.curX);
+        const y1 = Math.min(lassoBox.startY, lassoBox.curY);
+        const w  = Math.abs(lassoBox.curX - lassoBox.startX);
+        const h  = Math.abs(lassoBox.curY - lassoBox.startY);
+        return (
+          <div
+            className="lasso-selection-box"
+            style={{ position: "fixed", left: x1, top: y1, width: w, height: h, zIndex: 9998, pointerEvents: "none" }}
+          />
+        );
+      })()}
+
+      {/* ── FIX 3: Lasso multi-select action bar ── */}
+      {lassoSelectedIds.size > 1 && !lassoBox && (
+        <div className="lasso-action-bar">
+          <span className="lasso-count">{lassoSelectedIds.size} clips selected</span>
+          <button
+            className="panel-action danger"
+            type="button"
+            onClick={() => {
+              lassoSelectedIds.forEach((id) => onDeleteClip?.(id));
+              setLassoSelectedIds(new Set());
+            }}
+          >
+            🗑 Delete All
+          </button>
+          <button
+            className="panel-action muted"
+            type="button"
+            onClick={() => {
+              lassoSelectedIds.forEach((id) => onDuplicateClip?.(id));
+              setLassoSelectedIds(new Set());
+            }}
+          >
+            ⧉ Duplicate All
+          </button>
+          <button
+            className="panel-action muted"
+            type="button"
+            onClick={() => setLassoSelectedIds(new Set())}
+          >
+            ✕ Clear
+          </button>
+        </div>
+      )}
     </section>
   );
 }

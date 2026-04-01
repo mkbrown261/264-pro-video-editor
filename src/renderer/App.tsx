@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import React, { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MediaPool } from "./components/MediaPool";
 import { TimelinePanel } from "./components/TimelinePanel";
@@ -39,6 +39,8 @@ export default function App() {
   const viewerPanelRef = useRef<ViewerPanelHandle | null>(null);
   // Stable video ref passed to ColorGradingPanel — must never be re-created
   const colorPageVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Ref that always points to the current viewer's video element (for motion tracking)
+  const viewerVideoRef = useRef<HTMLVideoElement | null>(null);
 
   // ── Store ──────────────────────────────────────────────────────────────────
   const project = useEditorStore((s) => s.project);
@@ -259,7 +261,9 @@ export default function App() {
 
   // Sync colorPageVideoRef with the ViewerPanel's video element on every render
   useEffect(() => {
-    colorPageVideoRef.current = viewerPanelRef.current?.getVideoRef() ?? null;
+    const vid = viewerPanelRef.current?.getVideoRef() ?? null;
+    colorPageVideoRef.current = vid;
+    viewerVideoRef.current = vid;
   });
 
   useEffect(() => {
@@ -614,6 +618,19 @@ export default function App() {
       setSaveConfirm({ action: "close" });
     });
     return unsub;
+  }, [projectDirty]);
+
+  // FIX 8: Browser-level beforeunload safety net — always warns on unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!projectDirty) return;
+      e.preventDefault();
+      // Modern browsers show their own dialog; returning a string triggers legacy behavior
+      e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
   }, [projectDirty]);
 
   // ── Auto-save every 5 minutes when project is dirty ───────────────────────
@@ -1246,6 +1263,7 @@ export default function App() {
               isPlaying={playback.isPlaying}
               toolMode={toolMode}
               colorGrade={activeSegment?.clip.colorGrade ?? null}
+              clipEffects={activeSegment?.clip.effects ?? null}
               activeMaskTool={activeMaskTool}
               selectedMaskId={selectedMaskId}
               onAddMask={handleAddMask}
@@ -1315,6 +1333,7 @@ export default function App() {
               onRippleDelete={() => { pauseViewerPlayback(); removeSelectedClip(); }}
               onSetClipVolume={(vol) => { if (selectedClipId) setClipVolume(selectedClipId, vol); }}
               onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
+              videoRef={viewerVideoRef}
               onToggleVoiceListening={() => voiceChopRef.current?.listenForCommands()}
               onAnalyzeVoiceChops={() => {
                 const target = (inspectorSegment?.track.kind === "video" ? inspectorSegment : null) ?? activeSegment;
