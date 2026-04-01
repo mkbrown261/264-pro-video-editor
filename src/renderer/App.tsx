@@ -1150,8 +1150,19 @@ export default function App() {
             <button
               key={page}
               className={`page-tab${activePage === page ? " active" : ""}${page === "fusion" ? " fusion-tab" : ""}`}
-              onClick={() => setActivePage(page)}
+              onClick={() => {
+                if (page === "fusion") {
+                  const clipId = selectedClipId ?? project.sequence.clips.find(c => {
+                    const asset = project.assets.find(a => a.id === c.assetId);
+                    return asset?.kind === "video";
+                  })?.id ?? "";
+                  openFusion(clipId);
+                } else {
+                  setActivePage(page);
+                }
+              }}
               type="button"
+              title={page === "fusion" ? "Open Fusion node compositor" : undefined}
             >
               {page === "fusion" ? "⬡ Fusion" : page.charAt(0).toUpperCase() + page.slice(1)}
             </button>
