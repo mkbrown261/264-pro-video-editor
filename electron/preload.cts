@@ -73,6 +73,10 @@ const editorApi = {
     ipcRenderer.on("app:before-close", listener);
     return () => ipcRenderer.removeListener("app:before-close", listener);
   },
+  // Called by the renderer once the UI has mounted and is ready to show
+  notifyAppReady: (): void => {
+    ipcRenderer.send("app:renderer-ready");
+  },
 };
 
 contextBridge.exposeInMainWorld("editorApi", editorApi);

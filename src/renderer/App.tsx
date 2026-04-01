@@ -682,6 +682,10 @@ export default function App() {
   useEffect(() => {
     if (!window.editorApi) { setBridgeReady(false); return; }
     setBridgeReady(true);
+
+    // Tell the main process the renderer is ready so the splash screen dismisses
+    try { window.editorApi.notifyAppReady?.(); } catch { /* non-fatal */ }
+
     let cancelled = false;
 
     void window.editorApi.getEnvironmentStatus()

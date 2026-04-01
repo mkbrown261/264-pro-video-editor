@@ -185,7 +185,103 @@ async function createMediaResponse(request: Request): Promise<Response> {
   }
 }
 
-function createMainWindow(): BrowserWindow {
+// ── Splash screen ─────────────────────────────────────────────────────────────
+
+function createSplashWindow(): BrowserWindow {
+  const splashPath = join(__dirname, "../../build-assets/splash.png");
+
+  const splash = new BrowserWindow({
+    width: 960,
+    height: 540,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    center: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  // Build a minimal self-contained HTML splash page
+  const splashHtml = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; background:transparent; overflow:hidden; }
+  .wrap {
+    width:100%; height:100%;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    animation: fadeIn 0.45s ease forwards;
+  }
+  @keyframes fadeIn { from { opacity:0; transform:scale(0.97); } to { opacity:1; transform:scale(1); } }
+  img {
+    width:100%; height:100%;
+    object-fit:cover;
+    border-radius:12px;
+    -webkit-user-drag:none;
+    pointer-events:none;
+  }
+  .bar-wrap {
+    position:absolute; bottom:28px; left:50%; transform:translateX(-50%);
+    width:260px; display:flex; flex-direction:column; align-items:center; gap:8px;
+  }
+  .bar-track {
+    width:100%; height:3px;
+    background:rgba(255,255,255,0.18);
+    border-radius:99px; overflow:hidden;
+  }
+  .bar-fill {
+    height:100%; width:0%;
+    background:linear-gradient(90deg,#e0a800,#ffcc40);
+    border-radius:99px;
+    animation: loadBar 1.8s cubic-bezier(0.4,0,0.2,1) forwards;
+  }
+  @keyframes loadBar {
+    0%   { width:0%; }
+    40%  { width:55%; }
+    75%  { width:80%; }
+    95%  { width:92%; }
+    100% { width:100%; }
+  }
+  .tag {
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:11px; font-weight:500; letter-spacing:0.12em;
+    color:rgba(255,255,255,0.5);
+    text-transform:uppercase;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <img src="file://${splashPath.replace(/\\/g, "/")}" alt="264 Pro Video Editor"/>
+  <div class="bar-wrap">
+    <div class="bar-track"><div class="bar-fill"></div></div>
+    <span class="tag">Loading…</span>
+  </div>
+</div>
+</body>
+</html>`;
+
+  void splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`);
+
+  splash.once("ready-to-show", () => {
+    splash.show();
+  });
+
+  return splash;
+}
+
+// ── Main window ───────────────────────────────────────────────────────────────
+
+function createMainWindow(splashWindow: BrowserWindow | null): BrowserWindow {
   const window = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -194,6 +290,7 @@ function createMainWindow(): BrowserWindow {
     backgroundColor: "#091017",
     title: "264 Pro Video Editor",
     icon: join(__dirname, "../../build-assets/icon.png"),
+    show: false,          // hidden until splash dismisses
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -215,13 +312,41 @@ function createMainWindow(): BrowserWindow {
     window.setTitle("264 Pro Video Editor");
   });
 
+  // ── Dismiss splash and reveal main window ─────────────────────────────────
+  // Called when the renderer explicitly signals it's ready, OR automatically
+  // after did-finish-load as a fallback (covers dev-server mode).
+  let splashDismissed = false;
+
+  function dismissSplash(delay = 0) {
+    if (splashDismissed) return;
+    splashDismissed = true;
+    setTimeout(() => {
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.close();
+      }
+      if (!window.isDestroyed()) {
+        window.show();
+        window.focus();
+      }
+    }, delay);
+  }
+
+  // Renderer calls window.editorApi.notifyAppReady() once mounted
+  ipcMain.once("app:renderer-ready", () => {
+    // Short grace period so the first paint is complete
+    dismissSplash(200);
+  });
+
+  // Fallback: dismiss 1.2s after DOM is loaded even if no IPC signal arrives
+  window.webContents.once("did-finish-load", () => {
+    setTimeout(() => dismissSplash(0), 1200);
+  });
+
   // ── Close guard: ask renderer if there are unsaved changes ───────────────
-  // Use a flag so we can bypass the guard after user confirms.
   let closeConfirmed = false;
   window.on("close", (e) => {
-    if (closeConfirmed) return; // already confirmed
+    if (closeConfirmed) return;
     e.preventDefault();
-    // Ask renderer to handle dirty-check modal
     window.webContents.send("app:before-close");
   });
 
@@ -231,7 +356,9 @@ function createMainWindow(): BrowserWindow {
 app.whenReady().then(() => {
   protocol.handle("media", (request) => createMediaResponse(request));
 
-  const mainWindow = createMainWindow();
+  // Show splash immediately, then load the main window behind it
+  const splashWindow = createSplashWindow();
+  const mainWindow = createMainWindow(splashWindow);
 
   // --- Auto-updater setup ---
   // Only run in production (not during dev server)
@@ -299,7 +426,7 @@ app.whenReady().then(() => {
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+      createMainWindow(null);
     }
   });
 });

@@ -45,6 +45,8 @@ declare global {
       confirmClose: () => Promise<void>;
       installUpdate: () => Promise<void>;
       onBeforeClose: (callback: () => void) => () => void;
+      /** Signal to the main process that the renderer is mounted and ready */
+      notifyAppReady?: () => void;
     };
   }
 }
