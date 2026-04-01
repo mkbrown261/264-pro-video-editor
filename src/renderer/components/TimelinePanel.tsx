@@ -6,6 +6,7 @@ import {
   type TimelineSegment
 } from "../../shared/timeline";
 import { formatDuration, formatTimecode } from "../lib/format";
+import { TRANSITION_DRAG_TYPE } from "./TransitionsPanel";
 
 type TrimEdge = "start" | "end";
 
@@ -116,6 +117,7 @@ interface TimelinePanelProps {
   onDropAsset: (assetId: string, trackId: string, startFrame: number) => void;
   onUpdateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   onSetTransitionDuration: (clipId: string, edge: "in" | "out", durationFrames: number) => void;
+  onDropTransition?: (clipId: string, transitionType: string, edge: "in" | "out") => void;
   // Context menu actions
   onDeleteClip?: (clipId: string) => void;
   onDuplicateClip?: (clipId: string) => void;
@@ -185,6 +187,7 @@ export function TimelinePanel({
   onAddTracksAndMoveClip,
   onReorderTrack,
   onRegisterZoomControls,
+  onDropTransition,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -195,7 +198,7 @@ export function TimelinePanel({
   const propsRef = useRef({
     onSetPlayheadFrame, onSelectClip, onMoveClipTo,
     onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
-    onUpdateTrack, onSetTransitionDuration,
+    onUpdateTrack, onSetTransitionDuration, onDropTransition,
     toolMode, sequenceFps,
     onAddTrack, onAddTracksAndMoveClip, onReorderTrack
   });
@@ -203,7 +206,7 @@ export function TimelinePanel({
     propsRef.current = {
       onSetPlayheadFrame, onSelectClip, onMoveClipTo,
       onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
-      onUpdateTrack, onSetTransitionDuration,
+      onUpdateTrack, onSetTransitionDuration, onDropTransition,
       toolMode, sequenceFps,
       onAddTrack, onAddTracksAndMoveClip, onReorderTrack
     };
@@ -1378,6 +1381,24 @@ export function TimelinePanel({
                               }
                             : {})
                         }}
+                        onDragOver={(e) => {
+                          if (e.dataTransfer.types.includes(TRANSITION_DRAG_TYPE)) {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = "copy";
+                          }
+                        }}
+                        onDrop={(e) => {
+                          const transitionType = e.dataTransfer.getData(TRANSITION_DRAG_TYPE);
+                          if (!transitionType) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          // Determine if dropped on left half (in) or right half (out)
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const relX = e.clientX - rect.left;
+                          const edge: "in" | "out" = relX < rect.width / 2 ? "in" : "out";
+                          propsRef.current.onDropTransition?.(segment.clip.id, transitionType, edge);
+                          propsRef.current.onSelectClip(segment.clip.id);
+                        }}
                         onMouseDown={(event) => {
                           if (event.button !== 0 || isLocked) return;
                           const handleEl = (event.target as HTMLElement).closest(".timeline-clip-handle,.fade-handle");
@@ -1511,8 +1532,8 @@ export function TimelinePanel({
 
                         {/* Transition in pill */}
                         {segment.clip.transitionIn && (
-                          <span className="timeline-transition-pill in">
-                            {getClipTransitionDurationFrames(segment.clip.transitionIn, segment.durationFrames)}f
+                          <span className="timeline-transition-pill in" title={`In: ${segment.clip.transitionIn.type} (${getClipTransitionDurationFrames(segment.clip.transitionIn, segment.durationFrames)}f)`}>
+                            ◁ {segment.clip.transitionIn.type.replace(/([A-Z])/g, ' $1').trim().slice(0,8)}
                           </span>
                         )}
 
@@ -1537,8 +1558,8 @@ export function TimelinePanel({
 
                         {/* Transition out pill */}
                         {segment.clip.transitionOut && (
-                          <span className="timeline-transition-pill out">
-                            {getClipTransitionDurationFrames(segment.clip.transitionOut, segment.durationFrames)}f
+                          <span className="timeline-transition-pill out" title={`Out: ${segment.clip.transitionOut.type} (${getClipTransitionDurationFrames(segment.clip.transitionOut, segment.durationFrames)}f)`}>
+                            {segment.clip.transitionOut.type.replace(/([A-Z])/g, ' $1').trim().slice(0,8)} ▷
                           </span>
                         )}
 

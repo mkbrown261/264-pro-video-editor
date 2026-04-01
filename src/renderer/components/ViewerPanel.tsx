@@ -24,6 +24,7 @@ import { usePlaybackController } from "../hooks/usePlaybackController";
 import { MaskingCanvas, type MaskTool } from "./MaskingCanvas";
 import { getGradeFilterStyle, GRADE_FILTER_ID } from "../lib/colorGradeRenderer";
 import { computeCssFilterFromEffects } from "./EffectsPanel";
+import { isWebGLTransition, renderTransitionFrame, disposeTransitionRenderer } from "../lib/transitionRenderer";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -121,13 +122,35 @@ function getTransitionPreviewStyles(
     case "zoomIn":
     case "zoom":       return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${1 + amount*0.25})`, opacity: Math.max(0, 1 - amount*0.6) } };
     case "zoomOut":    return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${Math.max(0.6, 1 - amount*0.25)})`, opacity: Math.max(0, 1 - amount*0.6) } };
-    case "blur":       return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { opacity: Math.max(0.1, 1 - amount*0.5) } };
-    case "shake":      return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translate(${jx}px,${jy}px) scale(${1+amount*0.02}) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)` } };
-    case "rumble":     return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})` } };
-    case "glitch":     return { overlayStyle: { background: "repeating-linear-gradient(180deg,rgba(95,196,255,0.22) 0px,rgba(95,196,255,0.22) 2px,transparent 2px,transparent 6px)", opacity: amount*0.9, mixBlendMode: "screen" }, videoStyle: { transform: `translate(${Math.sin(frame*3.7)*amount*18}px,${Math.cos(frame*4.4)*amount*8}px) skew(${Math.sin(frame*2.6)*amount*2.5}deg)` } };
-    case "filmBurn":   return { overlayStyle: { background: `radial-gradient(circle at ${50+Math.sin(frame)*30}% ${50+Math.cos(frame)*20}%, rgba(255,160,30,0.7) 0%, rgba(0,0,0,0.95) 70%)`, opacity: amount*0.85 }, videoStyle: {} };
-    case "lensFlare":  return { overlayStyle: { background: `radial-gradient(circle at 80% 20%, rgba(255,255,255,0.9) 0%, rgba(100,150,255,0.4) 20%, transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: {} };
-    default:           return { overlayStyle: { opacity: 0 }, videoStyle: {} };
+    case "blur":
+    case "blurDissolve":  return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { filter: `blur(${amount*8}px)`, opacity: Math.max(0.1, 1 - amount*0.5) } };
+    case "shake":         return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translate(${jx}px,${jy}px) scale(${1+amount*0.02}) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)` } };
+    case "rumble":        return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})` } };
+    case "glitch":
+    case "glitchRgb":     return { overlayStyle: { background: "repeating-linear-gradient(180deg,rgba(95,196,255,0.22) 0px,rgba(95,196,255,0.22) 2px,transparent 2px,transparent 6px)", opacity: amount*0.9, mixBlendMode: "screen" }, videoStyle: { transform: `translate(${Math.sin(frame*3.7)*amount*18}px,${Math.cos(frame*4.4)*amount*8}px) skew(${Math.sin(frame*2.6)*amount*2.5}deg)` } };
+    case "filmBurn":
+    case "lightLeak":     return { overlayStyle: { background: `radial-gradient(circle at ${50+Math.sin(frame)*30}% ${50+Math.cos(frame)*20}%, rgba(255,160,30,0.7) 0%, rgba(0,0,0,0.95) 70%)`, opacity: amount*0.85 }, videoStyle: {} };
+    case "lensFlare":     return { overlayStyle: { background: `radial-gradient(circle at 80% 20%, rgba(255,255,255,0.9) 0%, rgba(100,150,255,0.4) 20%, transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: {} };
+    case "staticNoise":   return { overlayStyle: { background: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`, opacity: amount*0.7 }, videoStyle: {} };
+    case "vhsRewind":     return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.15) 0px,rgba(0,0,0,0.15) 1px,transparent 1px,transparent 4px)", opacity: amount*0.8 }, videoStyle: { transform: `translateY(${Math.sin(frame*5)*amount*6}px)` } };
+    case "oldFilm":       return { overlayStyle: { background: `radial-gradient(ellipse, transparent 70%, rgba(0,0,0,0.7) 100%)`, opacity: amount * 0.6, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { filter: `sepia(${amount*0.5}) contrast(${1+amount*0.1})` } };
+    case "whiteFlash":    return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
+    case "blackFlash":    return { overlayStyle: { background: "#000", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
+    case "irisCircle":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)` } };
+    case "irisStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, filter: "drop-shadow(0 0 2px #fff)" } };
+    case "irisHeart":     return { overlayStyle: { background: "#000", opacity: amount * 0.9 }, videoStyle: {} };
+    case "diamond":       return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(50% ${amount*100}%, ${100-amount*100}% 50%, 50% ${100-amount*100}%, ${amount*100}% 50%)` : `polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)`, opacity: Math.max(0, 1 - amount*0.3) } };
+    case "wipeRadial":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*100}% at 50% 50%)` : `circle(${amount*100}% at 50% 50%)` } };
+    case "wipeClock":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*80}%)` : `circle(${amount*80}%)` } };
+    case "wipeSplit":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 ${amount*50}%)` : `inset(0 ${(1-amount)*50}%)` } };
+    case "pushUp":        return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateY(${edge === "in" ? amount*100 : -amount*100}%)` } };
+    case "pushDown":      return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateY(${edge === "in" ? -amount*100 : amount*100}%)` } };
+    case "slideLeft":     return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${edge === "in" ? amount*100 : -amount*100}%)`, opacity: Math.max(0, 1 - amount*0.4) } };
+    case "slideRight":    return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${edge === "in" ? -amount*100 : amount*100}%)`, opacity: Math.max(0, 1 - amount*0.4) } };
+    case "luminanceDissolve": return { overlayStyle: { background: "#fff", opacity: amount * 0.5 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
+    case "filmDissolve":  return { overlayStyle: { background: `linear-gradient(135deg, rgba(${Math.floor(200+frame%55)},${Math.floor(100+frame%80)},50,0.5), rgba(0,0,0,0.7))`, opacity: amount * 0.7 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
+    case "additiveDissolve": return { overlayStyle: { background: "#fff", opacity: amount * amount * 0.6 }, videoStyle: { opacity: Math.max(0, 1 - amount * 0.8) } };
+    default:              return { overlayStyle: { opacity: 0 }, videoStyle: {} };
   }
 }
 
@@ -277,11 +300,13 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onStepFrames,
   }, ref) {
 
-    const panelRef   = useRef<HTMLElement | null>(null);
-    const videoRef   = useRef<HTMLVideoElement | null>(null);
+    const panelRef       = useRef<HTMLElement | null>(null);
+    const videoRef       = useRef<HTMLVideoElement | null>(null);
     // Dummy audioRef — kept for API compat with usePlaybackController signature
-    const audioRef   = useRef<HTMLAudioElement | null>(null);
-    const stageRef   = useRef<HTMLDivElement | null>(null);
+    const audioRef       = useRef<HTMLAudioElement | null>(null);
+    const stageRef       = useRef<HTMLDivElement | null>(null);
+    const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const webglRafRef    = useRef<number>(0);
 
     // ── Hierarchical rendering: only the topmost visible video segment ────────
     // activeSegment (prop) is already the highest-trackIndex video segment
@@ -366,6 +391,14 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           void document.exitFullscreen().catch(() => {});
         }
         setIsFullscreen(false);
+      };
+    }, []);
+
+    // ── WebGL transition canvas cleanup ──────────────────────────────────────
+    useEffect(() => {
+      return () => {
+        if (webglRafRef.current) cancelAnimationFrame(webglRafRef.current);
+        if (webglCanvasRef.current) disposeTransitionRenderer(webglCanvasRef.current);
       };
     }, []);
 
@@ -506,13 +539,38 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             <div style={vignetteStyle} aria-hidden="true" />
           )}
 
-          {/* Transition overlay */}
-          {previewAsset && (
+          {/* Transition overlay (CSS-based for non-WebGL transitions) */}
+          {previewAsset && transitionState && !isWebGLTransition(transitionState.type) && (
             <div
-              className={`viewer-transition-overlay${transitionState ? ` ${transitionState.type}` : ""}`}
+              className={`viewer-transition-overlay ${transitionState.type}`}
               style={overlayStyle}
             />
           )}
+
+          {/* WebGL transition canvas (GPU-accelerated transitions) */}
+          {previewAsset && transitionState && isWebGLTransition(transitionState.type) && (() => {
+            // Kick off a WebGL render on the canvas in the next microtask
+            requestAnimationFrame(() => {
+              const canvas = webglCanvasRef.current;
+              const video  = videoRef.current;
+              if (!canvas || !video || !transitionState) return;
+              renderTransitionFrame(
+                canvas,
+                transitionState.type,
+                video,
+                video,
+                transitionState.progress,
+                performance.now() / 1000
+              );
+            });
+            return (
+              <canvas
+                ref={webglCanvasRef}
+                className="viewer-webgl-canvas"
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 10 }}
+              />
+            );
+          })()}
 
           {/* Mask visual effect overlay — shows tinted fill inside each mask shape */}
           {previewAsset && maskSvg && (

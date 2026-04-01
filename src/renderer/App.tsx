@@ -1232,9 +1232,15 @@ export default function App() {
                 onSelectAsset={selectAsset}
                 onAppendAsset={appendAssetToTimeline}
                 onApplyTransition={(edge) => {
-                pauseViewerPlayback();
-                setTransitionMessage(applyTransitionToSelectedClip(edge));
-              }}
+                  pauseViewerPlayback();
+                  setTransitionMessage(applyTransitionToSelectedClip(edge));
+                }}
+                onApplyTransitionType={(type, edge, durationFrames) => {
+                  pauseViewerPlayback();
+                  const msg1 = setSelectedClipTransitionType(edge, type);
+                  const msg2 = setSelectedClipTransitionDuration(edge, durationFrames);
+                  setTransitionMessage(msg1 ?? msg2);
+                }}
               />
             </div>
 
@@ -1454,6 +1460,11 @@ export default function App() {
               onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
               onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
+              onDropTransition={(clipId, transType, edge) => {
+                selectClip(clipId);
+                const msg1 = setSelectedClipTransitionType(edge, transType as import("../../shared/models").ClipTransitionType);
+                setTransitionMessage(msg1);
+              }}
             />
           </>
         )}
@@ -1565,6 +1576,11 @@ export default function App() {
               onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
               onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
+              onDropTransition={(clipId, transType, edge) => {
+                selectClip(clipId);
+                const msg1 = setSelectedClipTransitionType(edge, transType as import("../../shared/models").ClipTransitionType);
+                setTransitionMessage(msg1);
+              }}
               />
             </div>
           </>

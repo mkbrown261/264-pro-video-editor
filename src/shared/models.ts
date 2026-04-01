@@ -20,28 +20,59 @@ export interface MediaAsset {
 // ── Transitions ───────────────────────────────────────────────────────────────
 
 export type ClipTransitionType =
+  // Basic
   | "cut"
   | "fade"
   | "dipBlack"
   | "dipWhite"
+  | "additiveDissolve"
+  // Dissolve
   | "crossDissolve"
+  | "luminanceDissolve"
+  | "filmDissolve"
+  // Wipe
   | "wipe"
   | "wipeLeft"
   | "wipeRight"
   | "wipeUp"
   | "wipeDown"
+  | "wipeRadial"
+  | "wipeClock"
+  | "wipeSplit"
+  // Push / Slide
   | "push"
   | "pushLeft"
   | "pushRight"
+  | "pushUp"
+  | "pushDown"
+  | "slideLeft"
+  | "slideRight"
+  // Zoom
   | "zoom"
   | "zoomIn"
   | "zoomOut"
+  | "zoomCross"
+  // Stylized
   | "blur"
+  | "blurDissolve"
   | "shake"
   | "rumble"
   | "glitch"
+  | "glitchRgb"
   | "filmBurn"
-  | "lensFlare";
+  | "lensFlare"
+  | "lightLeak"
+  | "staticNoise"
+  // Shape Reveals
+  | "irisCircle"
+  | "irisStar"
+  | "irisHeart"
+  | "diamond"
+  // Film / Cinematic
+  | "whiteFlash"
+  | "blackFlash"
+  | "oldFilm"
+  | "vhsRewind";
 
 export interface ClipTransition {
   type: ClipTransitionType;
@@ -184,19 +215,53 @@ export interface ColorGrade {
 // ── Effects ───────────────────────────────────────────────────────────────────
 
 export type EffectType =
+  // Color
   | "blur"
   | "sharpen"
-  | "glow"
   | "brightness"
   | "contrast"
+  | "hueShift"
+  | "curves"
+  | "colorBalance"
+  | "colorTemperature"
+  | "vibrance"
+  | "shadows"
+  // Texture / Film
   | "noise"
+  | "filmGrain"
+  | "halftone"
+  | "oldFilmEffect"
+  | "scanlines"
+  // Stylized
+  | "glow"
   | "vignette"
+  | "rgbSplit"
+  | "glowWarp"
+  | "pixelate"
+  | "edgeDetect"
+  | "posterize"
+  | "solarize"
+  | "duotone"
+  | "nightVision"
+  | "infrared"
+  // Distortion
+  | "lensDistort"
+  | "fishEye"
+  | "tiltShift"
+  | "motionBlur"
+  | "radialBlur"
+  | "depthOfField"
+  // Keying
   | "chromaKey"
   | "backgroundRemoval"
   | "colorReplace"
-  | "hueShift"
-  | "pixelate"
-  | "edgeDetect";
+  | "lumaKey"
+  // Transform
+  | "mirror"
+  | "kaleidoscope"
+  | "vhsEffect"
+  | "glitchEffect"
+  | "painterly";
 
 export interface ClipEffect {
   id: string;
@@ -443,25 +508,58 @@ export function createEmptyProject(): EditorProject {
   };
 }
 
-export const ALL_TRANSITION_TYPES: Array<{ label: string; value: ClipTransitionType; category: string }> = [
-  { label: "Cut", value: "cut", category: "Basic" },
-  { label: "Fade", value: "fade", category: "Basic" },
-  { label: "Dip to Black", value: "dipBlack", category: "Basic" },
-  { label: "Dip to White", value: "dipWhite", category: "Basic" },
-  { label: "Cross Dissolve", value: "crossDissolve", category: "Dissolve" },
-  { label: "Wipe", value: "wipe", category: "Wipe" },
-  { label: "Wipe Left", value: "wipeLeft", category: "Wipe" },
-  { label: "Wipe Right", value: "wipeRight", category: "Wipe" },
-  { label: "Wipe Up", value: "wipeUp", category: "Wipe" },
-  { label: "Wipe Down", value: "wipeDown", category: "Wipe" },
-  { label: "Push Left", value: "pushLeft", category: "Push" },
-  { label: "Push Right", value: "pushRight", category: "Push" },
-  { label: "Zoom In", value: "zoomIn", category: "Zoom" },
-  { label: "Zoom Out", value: "zoomOut", category: "Zoom" },
-  { label: "Blur", value: "blur", category: "Stylized" },
-  { label: "Shake", value: "shake", category: "Stylized" },
-  { label: "Rumble", value: "rumble", category: "Stylized" },
-  { label: "Glitch", value: "glitch", category: "Stylized" },
-  { label: "Film Burn", value: "filmBurn", category: "Stylized" },
-  { label: "Lens Flare", value: "lensFlare", category: "Stylized" }
+export const TRANSITION_CATEGORIES = ["Basic", "Dissolve", "Wipe", "Push", "Zoom", "Stylized", "Shape", "Cinematic"] as const;
+export type TransitionCategory = typeof TRANSITION_CATEGORIES[number];
+
+export const ALL_TRANSITION_TYPES: Array<{ label: string; value: ClipTransitionType; category: TransitionCategory; webgl?: boolean }> = [
+  // Basic
+  { label: "Cut",              value: "cut",             category: "Basic" },
+  { label: "Fade",             value: "fade",            category: "Basic" },
+  { label: "Dip to Black",     value: "dipBlack",        category: "Basic" },
+  { label: "Dip to White",     value: "dipWhite",        category: "Basic" },
+  { label: "Additive Dissolve",value: "additiveDissolve",category: "Basic" },
+  // Dissolve
+  { label: "Cross Dissolve",   value: "crossDissolve",   category: "Dissolve", webgl: true },
+  { label: "Luminance Dissolve",value:"luminanceDissolve",category: "Dissolve" },
+  { label: "Film Dissolve",    value: "filmDissolve",    category: "Dissolve" },
+  // Wipe
+  { label: "Wipe Left",        value: "wipeLeft",        category: "Wipe" },
+  { label: "Wipe Right",       value: "wipeRight",       category: "Wipe" },
+  { label: "Wipe Up",          value: "wipeUp",          category: "Wipe" },
+  { label: "Wipe Down",        value: "wipeDown",        category: "Wipe" },
+  { label: "Radial Wipe",      value: "wipeRadial",      category: "Wipe" },
+  { label: "Clock Wipe",       value: "wipeClock",       category: "Wipe" },
+  { label: "Split Wipe",       value: "wipeSplit",       category: "Wipe" },
+  // Push / Slide
+  { label: "Push Left",        value: "pushLeft",        category: "Push" },
+  { label: "Push Right",       value: "pushRight",       category: "Push" },
+  { label: "Push Up",          value: "pushUp",          category: "Push" },
+  { label: "Push Down",        value: "pushDown",        category: "Push" },
+  { label: "Slide Left",       value: "slideLeft",       category: "Push" },
+  { label: "Slide Right",      value: "slideRight",      category: "Push" },
+  // Zoom
+  { label: "Zoom In",          value: "zoomIn",          category: "Zoom" },
+  { label: "Zoom Out",         value: "zoomOut",         category: "Zoom" },
+  { label: "Zoom Cross",       value: "zoomCross",       category: "Zoom", webgl: true },
+  // Stylized
+  { label: "Blur Dissolve",    value: "blurDissolve",    category: "Stylized" },
+  { label: "Glitch",           value: "glitch",          category: "Stylized", webgl: true },
+  { label: "Glitch RGB",       value: "glitchRgb",       category: "Stylized" },
+  { label: "Film Burn",        value: "filmBurn",        category: "Stylized", webgl: true },
+  { label: "Lens Flare",       value: "lensFlare",       category: "Stylized" },
+  { label: "Light Leak",       value: "lightLeak",       category: "Stylized" },
+  { label: "Static Noise",     value: "staticNoise",     category: "Stylized" },
+  { label: "Shake",            value: "shake",           category: "Stylized" },
+  { label: "Rumble",           value: "rumble",          category: "Stylized" },
+  // Shape Reveals
+  { label: "Iris Circle",      value: "irisCircle",      category: "Shape" },
+  { label: "Iris Star",        value: "irisStar",        category: "Shape" },
+  { label: "Iris Heart",       value: "irisHeart",       category: "Shape" },
+  { label: "Diamond",          value: "diamond",         category: "Shape" },
+  // Film / Cinematic
+  { label: "White Flash",      value: "whiteFlash",      category: "Cinematic" },
+  { label: "Black Flash",      value: "blackFlash",      category: "Cinematic" },
+  { label: "Old Film",         value: "oldFilm",         category: "Cinematic" },
+  { label: "VHS Rewind",       value: "vhsRewind",       category: "Cinematic", webgl: true },
+  { label: "Pixelate",         value: "blur",            category: "Cinematic", webgl: true },
 ];
