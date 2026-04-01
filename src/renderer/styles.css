@@ -1190,8 +1190,8 @@ kbd {
    3-column + timeline grid as the Edit page.
    ══════════════════════════════════════════════════════════════════════════════ */
 
-/* The app-shell must fill when any page is active */
-.app-shell.page-color,
+/* The app-shell.page-color grid is defined at the bottom of this file (search IMP 5).
+   Effects page uses the same 5-col edit layout. */
 .app-shell.page-effects {
   display: grid;
   grid-template-columns: var(--left-panel-width, 280px) 3px minmax(460px,1fr) 3px var(--right-panel-width, 320px);
@@ -1203,26 +1203,10 @@ kbd {
   background: var(--separator);
 }
 
-/* Color page slots — unified area names */
-.color-page-grading  { grid-area: color-left;  display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
-.color-page-viewer   { grid-area: color-right; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-.color-page-timeline { grid-area: tl;          display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-
 /* Effects page slots */
 .effects-page-panel    { grid-area: left;     display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
 .effects-page-viewer   { grid-area: viewer;   display:flex; flex-direction:column; min-height:0; overflow:hidden; }
 .effects-page-timeline { grid-area: tl;       display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-
-/* Remove old wrapper divs that were collapsing the layout */
-.color-page, .effects-page {
-  display: contents;
-}
-
-/* Right side resizers on color/effects pages */
-.app-shell.page-color  .left-resizer,
-.app-shell.page-effects .left-resizer  { grid-area: left-resizer; }
-.app-shell.page-color  .right-resizer,
-.app-shell.page-effects .right-resizer { grid-area: right-resizer; display:none; }
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SETTINGS PANEL  (modal overlay)
@@ -2294,13 +2278,11 @@ kbd {
      Right col: Viewer (top) + Scopes (bottom-right)
    ══════════════════════════════════════════════════════════════════════════════ */
 
-/* Override the app-shell for the color page */
-/* FIX 8: Color page — unified grid area names (defer to lines 5143+) */
-.color-page-grading  { grid-area: color-left !important;  display:flex !important; flex-direction:column !important; min-height:0 !important; background:var(--bg-panel) !important; overflow:hidden !important; }
-.color-page-viewer   { grid-area: color-right !important; display:flex !important; flex-direction:column !important; min-height:0 !important; overflow:hidden !important; }
-.color-page-timeline { grid-area: tl !important;          display:flex !important; flex-direction:column !important; min-height:0 !important; overflow:hidden !important; }
-.app-shell.page-color .left-resizer  { grid-area: color-resizer !important; }
-.app-shell.page-color .right-resizer { display: none !important; }
+/* Color page grid defined once at the bottom of this file (IMP 5 section). */
+/* These classes use the grid areas declared there. */
+.color-page-grading  { grid-area: color-left;   display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
+.color-page-viewer   { grid-area: color-right;  display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.color-page-timeline { grid-area: tl;           display:flex; flex-direction:column; min-height:0; overflow:hidden; }
 
 /* ══════════════════════════════════════════════════════════════════════════════
    BUTTON SYSTEM OVERHAUL — proper states, 150-200ms transitions, no gray lies
@@ -5060,8 +5042,26 @@ kbd {
 .app-shell[style*="--right-panel-width: 0px"] .inspector-panel { display: none; }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   IMP 7: VERTICAL TOOL TOOLBAR
+   IMP 7: VERTICAL TOOL TOOLBAR — lives inside .viewer-with-toolbar
    ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Wrapper that holds the toolbar + viewer panel together in the viewer grid area */
+.viewer-with-toolbar {
+  grid-area: viewer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+/* The viewer panel inside fills all remaining space */
+.viewer-with-toolbar > .viewer-panel {
+  flex: 1;
+  min-height: 0;
+  /* Override grid-area since parent is already in the viewer cell */
+  grid-area: unset;
+}
+
 .tool-toolbar {
   position: absolute;
   left: 4px;
@@ -5077,6 +5077,8 @@ kbd {
   border-radius: 4px;
   padding: 6px 4px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  /* Toolbar is inside .viewer-with-toolbar, so absolute is relative to that */
+  pointer-events: auto;
 }
 .tool-btn {
   display: flex;
@@ -5100,10 +5102,13 @@ kbd {
 .tool-toolbar-sep { width: 24px; height: 1px; background: rgba(255,255,255,0.08); margin: 3px 0; }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   IMP 5: COLOR PAGE — UPDATED LAYOUT (viewer top, wheels below, scopes strip)
+   IMP 5: COLOR PAGE — SINGLE AUTHORITATIVE LAYOUT DEFINITION
+   340 px color grading panel | 3 px resizer | viewer (fills remaining)
+   Bottom row: timeline
    ══════════════════════════════════════════════════════════════════════════════ */
 .app-shell.page-color {
   display: grid;
+  position: relative;
   grid-template-columns: 340px 3px 1fr;
   grid-template-rows: minmax(0, 1fr) var(--timeline-height, 220px);
   grid-template-areas:
@@ -5112,13 +5117,16 @@ kbd {
   gap: 1px;
   background: var(--separator);
 }
-.color-page-grading  { grid-area: color-left;   display:flex; flex-direction:column; min-height:0; background:var(--bg-panel); overflow:hidden; }
+/* Slots — these match the grid-template-areas above */
+.color-page-grading  { grid-area: color-left;   display:flex; flex-direction:column; min-height:0; overflow:hidden; background:var(--bg-panel); }
 .color-page-viewer   { grid-area: color-right;  display:flex; flex-direction:column; min-height:0; overflow:hidden; }
 .color-page-timeline { grid-area: tl;           display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-
+/* Resizers */
 .app-shell.page-color .left-resizer  { grid-area: color-resizer; }
 .app-shell.page-color .right-resizer { display: none; }
-.app-shell.page-color .timeline-vertical-resizer { grid-area: tl; height: 5px; }
+.app-shell.page-color .timeline-vertical-resizer { grid-area: tl; height: 5px; flex-shrink: 0; }
+/* Viewer panel inside color-page-viewer fills all space above scopes strip */
+.color-page-viewer > .panel.viewer-panel { flex: 1; min-height: 0; grid-area: unset; }
 
 /* Scopes strip at bottom of color page viewer */
 .color-scopes-strip {

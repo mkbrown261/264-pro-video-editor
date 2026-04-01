@@ -1173,58 +1173,6 @@ export default function App() {
       {/* ── MAIN WORKSPACE ── */}
       <main ref={appShellRef} className={`app-shell page-${activePage}`} style={shellStyle}>
 
-        {/* Imp 7: Vertical Tool Toolbar */}
-        {activePage === "edit" && (
-          <div className="tool-toolbar">
-            <button
-              className={`tool-btn${toolMode === "select" ? " active" : ""}`}
-              onClick={() => setToolMode("select")}
-              title="Select (A / V)"
-              type="button"
-            >
-              ⤴️
-              <span className="tool-btn-label">Select</span>
-            </button>
-            <button
-              className={`tool-btn${toolMode === "blade" ? " active" : ""}`}
-              onClick={toggleBladeTool}
-              title="Blade (B)"
-              type="button"
-            >
-              ✂️
-              <span className="tool-btn-label">Blade</span>
-            </button>
-            <div className="tool-toolbar-sep" />
-            <button
-              className="tool-btn"
-              onClick={() => timelineZoomRef.current?.zoomIn()}
-              title="Zoom In (])"
-              type="button"
-            >
-              🔍+
-              <span className="tool-btn-label">Zoom+</span>
-            </button>
-            <button
-              className="tool-btn"
-              onClick={() => timelineZoomRef.current?.zoomOut()}
-              title="Zoom Out ([)"
-              type="button"
-            >
-              🔍−
-              <span className="tool-btn-label">Zoom−</span>
-            </button>
-            <button
-              className="tool-btn"
-              onClick={() => timelineZoomRef.current?.fitToWindow()}
-              title="Fit Timeline (Shift+Z)"
-              type="button"
-            >
-              □
-              <span className="tool-btn-label">Fit</span>
-            </button>
-          </div>
-        )}
-
         {/* ── EDIT PAGE ── */}
         {activePage === "edit" && (
           <>
@@ -1251,31 +1199,82 @@ export default function App() {
               role="separator"
             />
 
-            <ViewerPanel
-              ref={viewerPanelRef}
-              activeSegment={activeSegment}
-              activeAudioSegment={activeAudioSegment}
-              segments={segments}
-              selectedAsset={selectedAsset}
-              playheadFrame={playback.playheadFrame}
-              totalFrames={totalFrames}
-              sequenceFps={project.sequence.settings.fps}
-              isPlaying={playback.isPlaying}
-              toolMode={toolMode}
-              colorGrade={activeSegment?.clip.colorGrade ?? null}
-              clipEffects={activeSegment?.clip.effects ?? null}
-              activeMaskTool={activeMaskTool}
-              selectedMaskId={selectedMaskId}
-              onAddMask={handleAddMask}
-              onUpdateMask={handleUpdateMask}
-              onSelectMask={setSelectedMaskId}
-              onSetPlaybackPlaying={setPlaybackPlaying}
-              onSetToolMode={setToolMode}
-              onToggleBladeTool={toggleBladeTool}
-              onSplitAtPlayhead={splitSelectedClipAtPlayhead}
-              onSetPlayheadFrame={setPlayheadFrame}
-              onStepFrames={handleStepFrames}
-            />
+            {/* Imp 7: Vertical Tool Toolbar — inside viewer cell so it doesn't block grid interactions */}
+            <div className="viewer-with-toolbar">
+              <div className="tool-toolbar">
+                <button
+                  className={`tool-btn${toolMode === "select" ? " active" : ""}`}
+                  onClick={() => setToolMode("select")}
+                  title="Select (A / V)"
+                  type="button"
+                >
+                  ⤴️
+                  <span className="tool-btn-label">Select</span>
+                </button>
+                <button
+                  className={`tool-btn${toolMode === "blade" ? " active" : ""}`}
+                  onClick={toggleBladeTool}
+                  title="Blade (B)"
+                  type="button"
+                >
+                  ✂️
+                  <span className="tool-btn-label">Blade</span>
+                </button>
+                <div className="tool-toolbar-sep" />
+                <button
+                  className="tool-btn"
+                  onClick={() => timelineZoomRef.current?.zoomIn()}
+                  title="Zoom In (])"
+                  type="button"
+                >
+                  🔍+
+                  <span className="tool-btn-label">Zoom+</span>
+                </button>
+                <button
+                  className="tool-btn"
+                  onClick={() => timelineZoomRef.current?.zoomOut()}
+                  title="Zoom Out ([)"
+                  type="button"
+                >
+                  🔍−
+                  <span className="tool-btn-label">Zoom−</span>
+                </button>
+                <button
+                  className="tool-btn"
+                  onClick={() => timelineZoomRef.current?.fitToWindow()}
+                  title="Fit Timeline (Shift+Z)"
+                  type="button"
+                >
+                  □
+                  <span className="tool-btn-label">Fit</span>
+                </button>
+              </div>
+              <ViewerPanel
+                ref={viewerPanelRef}
+                activeSegment={activeSegment}
+                activeAudioSegment={activeAudioSegment}
+                segments={segments}
+                selectedAsset={selectedAsset}
+                playheadFrame={playback.playheadFrame}
+                totalFrames={totalFrames}
+                sequenceFps={project.sequence.settings.fps}
+                isPlaying={playback.isPlaying}
+                toolMode={toolMode}
+                colorGrade={activeSegment?.clip.colorGrade ?? null}
+                clipEffects={activeSegment?.clip.effects ?? null}
+                activeMaskTool={activeMaskTool}
+                selectedMaskId={selectedMaskId}
+                onAddMask={handleAddMask}
+                onUpdateMask={handleUpdateMask}
+                onSelectMask={setSelectedMaskId}
+                onSetPlaybackPlaying={setPlaybackPlaying}
+                onSetToolMode={setToolMode}
+                onToggleBladeTool={toggleBladeTool}
+                onSplitAtPlayhead={splitSelectedClipAtPlayhead}
+                onSetPlayheadFrame={setPlayheadFrame}
+                onStepFrames={handleStepFrames}
+              />
+            </div>
 
             <div
               className={`panel-resizer right-resizer${inspectorOpen ? "" : " panel-resizer-hidden"}`}
