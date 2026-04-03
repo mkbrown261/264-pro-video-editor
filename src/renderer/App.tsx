@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { FlowStatePanel } from "./components/FlowStatePanel";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MediaPool } from "./components/MediaPool";
 import { TimelinePanel } from "./components/TimelinePanel";
@@ -177,6 +178,14 @@ export default function App() {
   const [timecodeEditing, setTimecodeEditing] = useState(false);
   const [timecodeInput, setTimecodeInput] = useState("");
 
+  // ── FlowState Panel ────────────────────────────────────────────────────────
+  const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
+
+  // ── FlowState Tier ────────────────────────────────────────────────────────
+  // Loaded once on mount; governs AI panel access and feature visibility
+  const [fsTier, setFsTier] = useState<string>('free');
+  const [fsLinked, setFsLinked] = useState(false);
+
   // ── Toast notifications ────────────────────────────────────────────────────
   // Legacy inline toast kept for backward compatibility; new code uses the
   // singleton toast.* API which ToastContainer renders.
@@ -203,6 +212,22 @@ export default function App() {
   });
 
   // Re-sync the draft every time the settings modal opens so it always shows live values
+  // ── FlowState tier load + activity ping on mount ──────────────────────────
+  useEffect(() => {
+    if (!window.flowstateAPI) return;
+    window.flowstateAPI.getUser().then((user) => {
+      if (!user) return;
+      setFsTier(user.tier);
+      setFsLinked(true);
+      // Ping activity: project_opened
+      void window.flowstateAPI!.apiCall('/api/264pro/activity', 'POST', {
+        event: 'project_opened',
+        projectName: project.name ?? 'Untitled',
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (showSettings) {
       setSettingsDraft({
@@ -421,6 +446,17 @@ export default function App() {
         }
       }
       setProjectDirty(false);
+      // Context sync to FlowState on save
+      if (window.flowstateAPI && fsLinked) {
+        void window.flowstateAPI.apiCall('/api/264pro/context-sync', 'POST', {
+          projectName: project.name ?? 'Untitled',
+          trackCount: project.tracks?.length ?? project.sequence?.tracks?.length ?? 0,
+          clipCount: project.sequence.clips.length,
+          fps: project.sequence.settings.fps,
+          resolution: `${project.sequence.settings.width}×${project.sequence.settings.height}`,
+          lastModified: new Date().toISOString(),
+        });
+      }
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Save failed.");
     }
@@ -448,6 +484,16 @@ export default function App() {
       const filtered = prev.filter((r) => r.path !== path).slice(0, 9);
       const next = [entry, ...filtered];
       try { localStorage.setItem("264pro_recent_projects", JSON.stringify(next)); } catch { /* ignore */ }
+      // Sync to FlowState
+      if (window.flowstateAPI && fsLinked) {
+        void window.flowstateAPI.apiCall('/api/264pro/sync-projects', 'POST', {
+          projects: next.map((r, i) => ({
+            id: `local_${i}`,
+            name: r.name,
+            lastModified: new Date().toISOString(),
+          })),
+        });
+      }
       return next;
     });
   }
@@ -808,6 +854,15 @@ export default function App() {
       setExportBusy(true);
       const result = await window.editorApi.exportSequence({ outputPath, project });
       setExportMessage(`✓ Rendered to ${result.outputPath}`);
+      // Notify FlowState of export activity
+      if (window.flowstateAPI && fsLinked) {
+        void window.flowstateAPI.apiCall('/api/264pro/activity', 'POST', {
+          event: 'export_completed',
+          projectName: project.name ?? 'Untitled',
+          format: 'mp4',
+          outputPath: result.outputPath,
+        });
+      }
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Render failed.");
     } finally {
@@ -1245,6 +1300,34 @@ export default function App() {
           >
             Inspector ▦
           </button>
+
+          {/* FlowState Panel toggle */}
+          <button
+            className={`panel-toggle-btn${flowstatePanelOpen ? " on" : ""}`}
+            onClick={() => setFlowstatePanelOpen((v) => !v)}
+            title={fsLinked ? `FlowState AI Panel (${fsTier})` : "FlowState AI Panel — not linked"}
+            type="button"
+            style={{
+              background: flowstatePanelOpen
+                ? "linear-gradient(135deg,rgba(224,120,32,0.25),rgba(168,85,247,0.25))"
+                : undefined,
+              borderColor: flowstatePanelOpen ? "rgba(168,85,247,0.4)" : undefined,
+              color: flowstatePanelOpen ? "#d0a0ff" : undefined,
+            }}
+          >
+            {fsLinked ? "🌊" : "🔗"} FlowState
+            {fsLinked && (
+              <span style={{
+                marginLeft: 4,
+                width: 6, height: 6,
+                borderRadius: "50%",
+                background: "#10b981",
+                display: "inline-block",
+                verticalAlign: "middle",
+                flexShrink: 0,
+              }} />
+            )}
+          </button>
         </div>
 
         <div className="menubar-status">
@@ -1673,6 +1756,12 @@ export default function App() {
         })()}
 
       </main>
+
+      {/* ── FLOWSTATE PANEL (slide-in overlay) ── */}
+      <FlowStatePanel
+        isOpen={flowstatePanelOpen}
+        onClose={() => setFlowstatePanelOpen(false)}
+      />
     </div>
   );
 }

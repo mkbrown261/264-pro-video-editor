@@ -80,3 +80,28 @@ const editorApi = {
 };
 
 contextBridge.exposeInMainWorld("editorApi", editorApi);
+
+// ── Gate / Auth API (used by gate.html before main editor loads) ──────────────
+const electronAPI = {
+  openExternal: (url: string): void => { void ipcRenderer.invoke("gate:open-external", url); },
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke("gate:get-version"),
+  startAuthFlow: (state: string): void => { void ipcRenderer.invoke("gate:start-auth", state); },
+  submitDevKey: (key: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("gate:submit-dev-key", key),
+  onAuthResult: (cb: (success: boolean, error?: string) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, success: boolean, error?: string) => cb(success, error);
+    ipcRenderer.on("gate:auth-result", listener);
+    return () => ipcRenderer.removeListener("gate:auth-result", listener);
+  },
+};
+contextBridge.exposeInMainWorld("electronAPI", electronAPI);
+
+// ── FlowState Panel API (used by FlowStatePanel.tsx in the editor renderer) ───
+const flowstateAPI = {
+  getToken: (): Promise<string | null> => ipcRenderer.invoke("flowstate:get-token"),
+  getUser: (): Promise<{ name: string; email: string; picture: string; tier: string } | null> =>
+    ipcRenderer.invoke("flowstate:get-user"),
+  apiCall: (path: string, method: string, body?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("flowstate:api-call", path, method, body),
+};
+contextBridge.exposeInMainWorld("flowstateAPI", flowstateAPI);

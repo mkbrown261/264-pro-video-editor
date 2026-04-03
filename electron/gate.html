@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>264 Pro — Sign In</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%; width: 100%;
+      font-family: 'Inter', 'SF Pro Text', system-ui, -apple-system, sans-serif;
+      background: #0f0f1a;
+      color: #f0f0f0;
+      overflow: hidden;
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+    .window { display: flex; flex-direction: column; height: 100%; }
+
+    /* macOS traffic lights spacer */
+    .titlebar {
+      height: 28px;
+      min-height: 28px;
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+    }
+
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 40px 40px;
+      -webkit-app-region: no-drag;
+    }
+
+    .logo-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+    .logo-badge {
+      width: 72px; height: 72px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #e07820, #a855f7);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 32px rgba(168,85,247,0.35);
+    }
+    .app-name {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #e07820, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .app-sub {
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      margin-top: 3px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .headline {
+      font-size: 17px;
+      font-weight: 700;
+      color: #e8e8e8;
+      text-align: center;
+      margin-bottom: 8px;
+      line-height: 1.4;
+    }
+    .subline {
+      font-size: 13px;
+      color: rgba(255,255,255,0.45);
+      text-align: center;
+      line-height: 1.6;
+      max-width: 320px;
+      margin-bottom: 28px;
+    }
+
+    /* Screens */
+    #screen-main   { display: flex; flex-direction: column; align-items: center; width: 100%; }
+    #screen-link   { display: none; flex-direction: column; align-items: center; width: 100%; }
+    #screen-waiting{ display: none; flex-direction: column; align-items: center; width: 100%; }
+    #screen-dev    { display: none; flex-direction: column; align-items: center; width: 100%; }
+
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; max-width: 320px;
+      padding: 13px 24px;
+      border-radius: 12px;
+      font-size: 14px; font-weight: 700;
+      cursor: pointer;
+      border: none;
+      transition: all 0.18s;
+      -webkit-app-region: no-drag;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #e07820, #a855f7);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(168,85,247,0.3);
+    }
+    .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
+    .btn-secondary {
+      background: rgba(255,255,255,0.07);
+      color: rgba(255,255,255,0.7);
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.12); }
+    .btn-ghost {
+      background: transparent;
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px;
+    }
+    .btn-ghost:hover { color: rgba(255,255,255,0.7); }
+    .btn + .btn { margin-top: 10px; }
+
+    .back-btn {
+      display: flex; align-items: center; gap: 6px;
+      background: none; border: none;
+      color: rgba(255,255,255,0.4); font-size: 12px; font-weight: 600;
+      cursor: pointer; padding: 6px 0;
+      margin-bottom: 20px;
+      transition: color 0.15s;
+      -webkit-app-region: no-drag;
+      align-self: flex-start;
+    }
+    .back-btn:hover { color: rgba(255,255,255,0.7); }
+
+    .divider {
+      width: 100%; max-width: 320px;
+      display: flex; align-items: center; gap: 10px;
+      margin: 14px 0;
+    }
+    .divider hr { flex: 1; border: none; border-top: 1px solid rgba(255,255,255,0.1); }
+    .divider span { font-size: 11px; color: rgba(255,255,255,0.3); white-space: nowrap; }
+
+    .waiting-spinner {
+      width: 36px; height: 36px;
+      border: 3px solid rgba(168,85,247,0.2);
+      border-top-color: #a855f7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .dev-input {
+      width: 100%; max-width: 320px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #f0f0f0;
+      font-size: 13px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      letter-spacing: 0.04em;
+      outline: none;
+      margin-bottom: 10px;
+      -webkit-app-region: no-drag;
+    }
+    .dev-input:focus { border-color: rgba(168,85,247,0.5); }
+    .dev-input::placeholder { color: rgba(255,255,255,0.25); }
+
+    .error-msg {
+      font-size: 12px; color: #f87171; text-align: center;
+      margin-top: 8px; min-height: 18px;
+    }
+
+    .version-tag {
+      position: absolute;
+      bottom: 16px;
+      right: 20px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.2);
+      -webkit-app-region: no-drag;
+    }
+  </style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar"></div>
+  <div class="content">
+
+    <!-- ── MAIN SCREEN ───────────────────────────────────────────────── -->
+    <div id="screen-main">
+      <div class="logo-area">
+        <div class="logo-badge">🎬</div>
+        <div class="app-name">264 Pro</div>
+        <div class="app-sub">Video Editor · FlowState Ecosystem</div>
+      </div>
+
+      <div class="headline">264 Pro is part of FlowState.</div>
+      <div class="subline">Sign in to your FlowState account to unlock the full editor — AI assistant, Notion sync, and seamless project tracking included.</div>
+
+      <button class="btn btn-primary" id="btn-get-flowstate">
+        🚀 &nbsp;Get FlowState — it's free
+      </button>
+      <button class="btn btn-secondary" id="btn-have-account">
+        I already have FlowState
+      </button>
+
+      <div class="divider"><hr><span>developer</span><hr></div>
+
+      <button class="btn btn-ghost" id="btn-dev-key">
+        Enter dev bypass key
+      </button>
+    </div>
+
+    <!-- ── LINK SCREEN ───────────────────────────────────────────────── -->
+    <div id="screen-link">
+      <button class="back-btn" id="btn-back-main">← Back</button>
+
+      <div class="logo-area" style="margin-bottom:20px">
+        <div class="logo-badge" style="width:56px;height:56px;font-size:24px;border-radius:16px">🔗</div>
+        <div class="app-name" style="font-size:18px">Link your account</div>
+      </div>
+
+      <div class="subline" style="margin-bottom:24px">
+        This connects 264 Pro to your FlowState workspace. Your AI assistant, projects, and Notion board will be available directly inside the editor.
+      </div>
+
+      <button class="btn btn-primary" id="btn-signin-flowstate">
+        Sign in with FlowState
+      </button>
+
+      <div class="error-msg" id="link-error"></div>
+    </div>
+
+    <!-- ── WAITING SCREEN ────────────────────────────────────────────── -->
+    <div id="screen-waiting">
+      <div class="waiting-spinner"></div>
+      <div class="headline" style="font-size:15px;margin-bottom:8px">Waiting for FlowState…</div>
+      <div class="subline" style="margin-bottom:20px">Complete sign-in in your browser, then return here.</div>
+      <button class="btn btn-ghost" id="btn-cancel-wait">Cancel</button>
+    </div>
+
+    <!-- ── DEV KEY SCREEN ────────────────────────────────────────────── -->
+    <div id="screen-dev">
+      <button class="back-btn" id="btn-back-dev">← Back</button>
+      <div class="headline" style="margin-bottom:8px;font-size:15px">Dev Bypass Key</div>
+      <div class="subline" style="margin-bottom:16px;font-size:12px">Enter your developer key to skip FlowState authentication.</div>
+      <input class="dev-input" id="dev-key-input" type="text" placeholder="DEV-FS264-MKBROWN-2026-BYPASS" spellcheck="false" autocomplete="off">
+      <button class="btn btn-primary" id="btn-submit-dev">Unlock Editor</button>
+      <div class="error-msg" id="dev-error"></div>
+    </div>
+
+  </div>
+  <span class="version-tag" id="app-version">v1.1.0</span>
+</div>
+
+<script>
+  const DEV_BYPASS_KEY = 'DEV-FS264-MKBROWN-2026-BYPASS';
+  const FS_BASE_URL    = 'https://flowstate-67g.pages.dev';  // production FlowState
+
+  function show(screenId) {
+    ['screen-main','screen-link','screen-waiting','screen-dev'].forEach(id => {
+      const el = document.getElementById(id);
+      el.style.display = (id === screenId) ? 'flex' : 'none';
+    });
+  }
+
+  // ── Navigation ───────────────────────────────────────────────────────
+  document.getElementById('btn-have-account').onclick = () => show('screen-link');
+  document.getElementById('btn-back-main').onclick    = () => show('screen-main');
+  document.getElementById('btn-back-dev').onclick     = () => show('screen-main');
+  document.getElementById('btn-dev-key').onclick      = () => { show('screen-dev'); document.getElementById('dev-key-input').focus(); };
+  document.getElementById('btn-cancel-wait').onclick  = () => show('screen-link');
+
+  // ── Get FlowState ────────────────────────────────────────────────────
+  document.getElementById('btn-get-flowstate').onclick = () => {
+    window.electronAPI.openExternal(FS_BASE_URL + '?ref=264pro');
+  };
+
+  // ── Sign in with FlowState (deep link OAuth) ─────────────────────────
+  document.getElementById('btn-signin-flowstate').onclick = () => {
+    const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    window.electronAPI.startAuthFlow(state, FS_BASE_URL);
+    show('screen-waiting');
+    document.getElementById('link-error').textContent = '';
+  };
+
+  // ── Dev bypass key ───────────────────────────────────────────────────
+  document.getElementById('btn-submit-dev').onclick = submitDevKey;
+  document.getElementById('dev-key-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitDevKey();
+  });
+
+  function submitDevKey() {
+    const key = document.getElementById('dev-key-input').value.trim();
+    if (key === DEV_BYPASS_KEY) {
+      window.electronAPI.submitDevKey(key);
+    } else {
+      document.getElementById('dev-error').textContent = 'Invalid key. Check your developer documentation.';
+      document.getElementById('dev-key-input').style.borderColor = 'rgba(248,113,113,0.5)';
+    }
+  }
+
+  // ── Listen for auth result from main process ─────────────────────────
+  window.electronAPI.onAuthResult((success, error) => {
+    if (success) {
+      // Main process will close this window and open editor
+    } else {
+      show('screen-link');
+      document.getElementById('link-error').textContent = error || 'Authentication failed. Please try again.';
+    }
+  });
+
+  // ── Set app version ──────────────────────────────────────────────────
+  window.electronAPI.getAppVersion().then(v => {
+    document.getElementById('app-version').textContent = 'v' + v;
+  });
+</script>
+</body>
+</html>

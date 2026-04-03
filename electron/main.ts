@@ -14,6 +14,17 @@ import {
   probeMediaFiles
 } from "./ffmpeg.js";
 
+// ── FlowState Integration Constants ──────────────────────────────────────────
+const DEV_BYPASS_KEY  = 'DEV-FS264-MKBROWN-2026-BYPASS';
+const FS_BASE_URL     = 'https://flowstate-67g.pages.dev';
+const FS_VERIFY_URL   = `${FS_BASE_URL}/api/264pro/verify-token`;
+const LS_TOKEN_KEY    = 'fs_link_token';
+const LS_USER_KEY     = 'fs_user';
+
+// In-memory state for the current auth flow
+let pendingAuthState: string | null = null;
+let gateWindow: BrowserWindow | null = null;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const VIDEO_FILE_EXTENSIONS = [
@@ -353,12 +364,82 @@ function createMainWindow(splashWindow: BrowserWindow | null): BrowserWindow {
   return window;
 }
 
-app.whenReady().then(() => {
-  protocol.handle("media", (request) => createMediaResponse(request));
+// ── FlowState Gate: verify token on launch ────────────────────────────────────
+async function verifyStoredToken(token: string): Promise<{
+  valid: boolean; user?: { name: string; email: string; picture: string }; tier?: string;
+}> {
+  try {
+    const res = await fetch(FS_VERIFY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    return res.json() as any;
+  } catch {
+    return { valid: false };
+  }
+}
 
-  // Show splash immediately, then load the main window behind it
+function createGateWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 600, height: 500,
+    resizable: false, center: true,
+    frame: false, transparent: false,
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#0f0f1a',
+    webPreferences: {
+      preload:          join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration:  false,
+    },
+    title: '264 Pro — Sign In',
+  });
+  win.loadFile(join(__dirname, 'gate.html'));
+  return win;
+}
+
+async function launchWithGate(): Promise<void> {
+  // ── Try stored token first ────────────────────────────────────────────
+  // We read from a temp file since we can't access localStorage from main
+  let storedToken: string | null = null;
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    storedToken = (await readFile(tokenPath, 'utf8')).trim();
+  } catch { /* no stored token */ }
+
+  if (storedToken) {
+    // Dev bypass — no network call needed
+    if (storedToken === DEV_BYPASS_KEY) {
+      launchEditor();
+      return;
+    }
+    // Verify with FlowState
+    const result = await verifyStoredToken(storedToken);
+    if (result.valid) {
+      launchEditor();
+      return;
+    }
+    // Token invalid — clear it
+    try { await writeFile(tokenPath, ''); } catch {}
+  }
+
+  // ── No valid token — show gate ────────────────────────────────────────
+  gateWindow = createGateWindow();
+  gateWindow.on('closed', () => {
+    // If gate closes and no main window, quit
+    if (BrowserWindow.getAllWindows().length === 0) {
+      app.quit();
+    }
+  });
+}
+
+function launchEditor(): void {
   const splashWindow = createSplashWindow();
-  const mainWindow = createMainWindow(splashWindow);
+  const mainWindow   = createMainWindow(splashWindow);
+  setupAutoUpdater(mainWindow);
+}
+
+function setupAutoUpdater(mainWindow: BrowserWindow): void {
 
   // --- Auto-updater setup ---
   // Only run in production (not during dev server)
@@ -429,7 +510,7 @@ app.whenReady().then(() => {
       createMainWindow(null);
     }
   });
-});
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -589,4 +670,146 @@ ipcMain.handle("updater:install-now", () => {
 
 ipcMain.handle("app:open-external", (_event, url: string) => {
   void shell.openExternal(url);
+});
+
+// ── Gate / Auth IPC ───────────────────────────────────────────────────────────
+
+ipcMain.handle("gate:get-version", () => app.getVersion());
+
+ipcMain.handle("gate:open-external", (_event, url: string) => {
+  void shell.openExternal(url);
+});
+
+// Kick off OAuth in system browser, register deep-link handler
+ipcMain.handle("gate:start-auth", (_event, state: string) => {
+  pendingAuthState = state;
+  const authUrl = `${FS_BASE_URL}/api/264pro/auth?state=${encodeURIComponent(state)}&redirect=264pro://auth`;
+  void shell.openExternal(authUrl);
+});
+
+// Dev bypass key submitted from gate
+ipcMain.handle("gate:submit-dev-key", async (_event, key: string) => {
+  if (key !== DEV_BYPASS_KEY) {
+    return { success: false, error: 'Invalid key' };
+  }
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  await writeFile(tokenPath, DEV_BYPASS_KEY, 'utf8');
+  // Close gate and open editor
+  if (gateWindow && !gateWindow.isDestroyed()) {
+    gateWindow.close();
+    gateWindow = null;
+  }
+  launchEditor();
+  return { success: true };
+});
+
+// ── FlowState Panel IPC (called from renderer after editor is open) ───────────
+
+ipcMain.handle("flowstate:get-token", async () => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try { return (await readFile(tokenPath, 'utf8')).trim(); } catch { return null; }
+});
+
+ipcMain.handle("flowstate:get-user", async () => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    if (!token || token === DEV_BYPASS_KEY) {
+      return token === DEV_BYPASS_KEY
+        ? { name: 'Dev User', email: 'dev@264pro.local', tier: 'team_growth', picture: '' }
+        : null;
+    }
+    const res = await fetch(FS_VERIFY_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json() as any;
+    return data.valid ? { ...data.user, tier: data.tier } : null;
+  } catch { return null; }
+});
+
+ipcMain.handle("flowstate:api-call", async (_event, path: string, method: string, body: unknown) => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    const res = await fetch(`${FS_BASE_URL}${path}`, {
+      method: method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return res.json();
+  } catch (e: any) {
+    return { error: e.message };
+  }
+});
+
+// ── Deep-link handler (264pro://auth?token=...&state=...) ─────────────────────
+// Register custom protocol on macOS/Linux; on Windows use second-instance
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('264pro', process.execPath, [process.argv[1]]);
+  }
+} else {
+  app.setAsDefaultProtocolClient('264pro');
+}
+
+function handleDeepLink(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'auth') {
+      const token = parsed.searchParams.get('token');
+      const state = parsed.searchParams.get('state');
+      if (!token || state !== pendingAuthState) {
+        // Notify gate of failure
+        if (gateWindow && !gateWindow.isDestroyed()) {
+          gateWindow.webContents.send('gate:auth-result', false, 'State mismatch — please try again.');
+        }
+        return;
+      }
+      // Persist token
+      const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+      void writeFile(tokenPath, token, 'utf8').then(async () => {
+        // Verify token once more
+        const result = await verifyStoredToken(token);
+        if (result.valid) {
+          if (gateWindow && !gateWindow.isDestroyed()) {
+            gateWindow.close();
+            gateWindow = null;
+          }
+          launchEditor();
+        } else {
+          if (gateWindow && !gateWindow.isDestroyed()) {
+            gateWindow.webContents.send('gate:auth-result', false, 'Token rejected by FlowState.');
+          }
+        }
+      });
+    }
+  } catch {
+    // ignore malformed URLs
+  }
+}
+
+// macOS: open-url event
+app.on('open-url', (_event, url) => {
+  handleDeepLink(url);
+});
+
+// Windows/Linux: second-instance argv
+app.on('second-instance', (_event, argv) => {
+  const url = argv.find(a => a.startsWith('264pro://'));
+  if (url) handleDeepLink(url);
+  // Focus gate or main window
+  const wins = BrowserWindow.getAllWindows();
+  if (wins[0]) { if (wins[0].isMinimized()) wins[0].restore(); wins[0].focus(); }
+});
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+app.whenReady().then(() => {
+  // Register media:// protocol handler
+  protocol.handle("media", createMediaResponse);
+
+  void launchWithGate();
 });
