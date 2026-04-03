@@ -436,79 +436,87 @@ async function launchWithGate(): Promise<void> {
 function launchEditor(): void {
   const splashWindow = createSplashWindow();
   const mainWindow   = createMainWindow(splashWindow);
-  setupAutoUpdater(mainWindow);
+  wireUpdaterToWindow(mainWindow);
 }
 
-function setupAutoUpdater(mainWindow: BrowserWindow): void {
+// ── Auto-updater ──────────────────────────────────────────────────────────────
+// initAutoUpdater() runs immediately from app.whenReady() — it starts silently
+// checking for updates right away, before the gate or editor opens.
+// wireUpdaterToWindow() is called once the editor window exists so IPC events
+// can be forwarded to the renderer.
+//
+// This ensures:
+//  1. Updates are checked even if the gate is showing (old installs without a
+//     token will still get notified and can update to the gated version).
+//  2. The "checking-for-update" / "update-available" etc. events are always
+//     forwarded to whichever BrowserWindow is the main editor window.
 
-  // --- Auto-updater setup ---
-  // Only run in production (not during dev server)
-  if (!process.env.VITE_DEV_SERVER_URL) {
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+let pendingUpdaterStatus: object | null = null;  // buffer events before window exists
 
-    autoUpdater.on("checking-for-update", () => {
-      mainWindow.webContents.send("updater:status", { state: "checking" });
+function initAutoUpdater(): void {
+  if (process.env.VITE_DEV_SERVER_URL) return; // skip in dev
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = null; // suppress console noise in prod
+
+  function broadcast(payload: object) {
+    pendingUpdaterStatus = payload;
+    // Send to every open window (gate + editor)
+    BrowserWindow.getAllWindows().forEach(w => {
+      if (!w.isDestroyed()) w.webContents.send("updater:status", payload);
     });
-
-    autoUpdater.on("update-available", (info) => {
-      mainWindow.webContents.send("updater:status", {
-        state: "available",
-        version: info.version
-      });
-    });
-
-    autoUpdater.on("update-not-available", () => {
-      mainWindow.webContents.send("updater:status", { state: "up-to-date" });
-    });
-
-    autoUpdater.on("download-progress", (progress) => {
-      mainWindow.webContents.send("updater:status", {
-        state: "downloading",
-        percent: Math.round(progress.percent),
-        transferred: progress.transferred,
-        total: progress.total
-      });
-    });
-
-    autoUpdater.on("update-downloaded", (info) => {
-      mainWindow.webContents.send("updater:status", {
-        state: "ready",
-        version: info.version
-      });
-      // Show native dialog asking to restart and install now
-      void dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "Update Ready",
-        message: `264 Pro v${info.version} has been downloaded.`,
-        detail: "Restart now to install the update, or it will be installed automatically on next quit.",
-        buttons: ["Restart & Install", "Later"],
-        defaultId: 0,
-        cancelId: 1
-      }).then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.quitAndInstall(false, true);
-        }
-      });
-    });
-
-    autoUpdater.on("error", (err) => {
-      mainWindow.webContents.send("updater:status", {
-        state: "error",
-        message: err.message
-      });
-    });
-
-    // Check for updates 5 seconds after launch, then every 2 hours
-    setTimeout(() => { void autoUpdater.checkForUpdates(); }, 5000);
-    setInterval(() => { void autoUpdater.checkForUpdates(); }, 2 * 60 * 60 * 1000);
   }
-  // --- End auto-updater ---
 
+  autoUpdater.on("checking-for-update", () =>
+    broadcast({ state: "checking" }));
+
+  autoUpdater.on("update-available", (info) =>
+    broadcast({ state: "available", version: info.version }));
+
+  autoUpdater.on("update-not-available", () =>
+    broadcast({ state: "up-to-date" }));
+
+  autoUpdater.on("download-progress", (progress) =>
+    broadcast({
+      state: "downloading",
+      percent: Math.round(progress.percent),
+      transferred: progress.transferred,
+      total: progress.total,
+    }));
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    broadcast({ state: "ready", version: info.version });
+    // Show native dialog on whichever window is focused
+    const focusedWin = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!focusedWin) return;
+    const { response } = await dialog.showMessageBox(focusedWin, {
+      type: "info",
+      title: "264 Pro Update Ready",
+      message: `v${info.version} is ready to install.`,
+      detail: "Restart now to apply the update, or it installs automatically on next quit.",
+      buttons: ["Restart & Install", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) autoUpdater.quitAndInstall(false, true);
+  });
+
+  autoUpdater.on("error", (err) =>
+    broadcast({ state: "error", message: err.message }));
+
+  // Check 5 s after launch, then every 2 h
+  setTimeout(() => { void autoUpdater.checkForUpdates(); }, 5_000);
+  setInterval(() => { void autoUpdater.checkForUpdates(); }, 2 * 60 * 60 * 1_000);
+}
+
+function wireUpdaterToWindow(mainWindow: BrowserWindow): void {
+  // Replay any status that arrived before the window existed
+  if (pendingUpdaterStatus) {
+    mainWindow.webContents.send("updater:status", pendingUpdaterStatus);
+  }
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow(null);
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createMainWindow(null);
   });
 }
 
@@ -810,6 +818,10 @@ app.on('second-instance', (_event, argv) => {
 app.whenReady().then(() => {
   // Register media:// protocol handler
   protocol.handle("media", createMediaResponse);
+
+  // Start auto-updater immediately — before gate or editor opens.
+  // This means even users stuck on the gate screen get notified of updates.
+  initAutoUpdater();
 
   void launchWithGate();
 });

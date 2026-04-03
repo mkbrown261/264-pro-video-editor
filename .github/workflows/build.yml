@@ -73,7 +73,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
+        # Use --publish always so electron-builder uploads the zip + blockmap.
+        # Do NOT upload latest-mac.yml here — the merge job does that after
+        # both arches are done, so the yml contains BOTH entries.
         run: npx electron-builder --mac --arm64 --publish always
+
+      # Upload the generated yml as an artifact so the merge job can combine both
+      - name: Upload arm64 yml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-mac-arm64-yml
+          path: release/latest-mac.yml
+          if-no-files-found: warn
 
   # ─── Step 2b: macOS x64 ──────────────────────────────────────────────
   build-mac-x64:
@@ -99,6 +110,13 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --x64 --publish always
 
+      - name: Upload x64 yml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-mac-x64-yml
+          path: release/latest-mac.yml
+          if-no-files-found: warn
+
   # ─── Step 2c: Windows x64 ────────────────────────────────────────────
   build-win:
     name: Build Windows (x64)
@@ -121,3 +139,93 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npx electron-builder --win --x64 --publish always
+
+  # ─── Step 3: merge macOS ymls so both arches appear in latest-mac.yml ─
+  # electron-updater on Apple Silicon reads latest-mac.yml and picks the
+  # arm64 entry; on Intel it picks x64.  Both must be in the same file.
+  merge-mac-yml:
+    name: Merge macOS update manifests
+    needs: [version, build-mac-arm64, build-mac-x64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download arm64 yml
+        uses: actions/download-artifact@v4
+        with:
+          name: latest-mac-arm64-yml
+          path: yml-arm64
+
+      - name: Download x64 yml
+        uses: actions/download-artifact@v4
+        with:
+          name: latest-mac-x64-yml
+          path: yml-x64
+
+      - name: Merge into single latest-mac.yml with both arches
+        run: |
+          VERSION="${{ needs.version.outputs.new_version }}"
+
+          # Parse sha512 and size from each yml
+          ARM64_URL=$(grep '^  - url:' yml-arm64/latest-mac.yml | awk '{print $3}')
+          ARM64_SHA=$(grep '    sha512:' yml-arm64/latest-mac.yml | head -1 | awk '{print $2}')
+          ARM64_SIZE=$(grep '    size:' yml-arm64/latest-mac.yml | awk '{print $2}')
+
+          X64_URL=$(grep '^  - url:' yml-x64/latest-mac.yml | awk '{print $3}')
+          X64_SHA=$(grep '    sha512:' yml-x64/latest-mac.yml | head -1 | awk '{print $2}')
+          X64_SIZE=$(grep '    size:' yml-x64/latest-mac.yml | awk '{print $2}')
+
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+          cat > merged-latest-mac.yml <<EOF
+          version: $VERSION
+          files:
+            - url: $ARM64_URL
+              sha512: $ARM64_SHA
+              size: $ARM64_SIZE
+              arch: arm64
+            - url: $X64_URL
+              sha512: $X64_SHA
+              size: $X64_SIZE
+              arch: x64
+          path: $X64_URL
+          sha512: $X64_SHA
+          releaseDate: '$DATE'
+          EOF
+
+          echo "=== Merged latest-mac.yml ==="
+          cat merged-latest-mac.yml
+
+      - name: Upload merged latest-mac.yml to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          TAG="${{ needs.version.outputs.new_tag }}"
+          # Delete existing latest-mac.yml from the release then re-upload
+          ASSET_ID=$(curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/mkbrown261/264-pro-video-editor/releases/tags/$TAG" \
+            | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          for a in d.get('assets',[]):
+            if a['name'] == 'latest-mac.yml':
+              print(a['id'])
+          " 2>/dev/null || echo "")
+
+          if [ -n "$ASSET_ID" ]; then
+            curl -s -X DELETE \
+              -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/mkbrown261/264-pro-video-editor/releases/assets/$ASSET_ID"
+          fi
+
+          RELEASE_ID=$(curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/mkbrown261/264-pro-video-editor/releases/tags/$TAG" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+
+          curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @merged-latest-mac.yml \
+            "https://uploads.github.com/repos/mkbrown261/264-pro-video-editor/releases/$RELEASE_ID/assets?name=latest-mac.yml"
