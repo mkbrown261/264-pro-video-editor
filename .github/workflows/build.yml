@@ -78,6 +78,22 @@ jobs:
         # both arches are done, so the yml contains BOTH entries.
         run: npx electron-builder --mac --arm64 --publish always
 
+      # Upload arm64 zip to R2 (canonical name used by FlowState download route)
+      - name: Upload arm64 zip to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          FILE=$(ls release/264-Pro-*-arm64-mac.zip 2>/dev/null | head -1)
+          if [ -n "$FILE" ]; then
+            curl -s -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/264pro-downloads/objects/264-Pro-mac-arm64.zip" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/zip" \
+              --data-binary @"$FILE"
+            echo "Uploaded $FILE to R2 as 264-Pro-mac-arm64.zip"
+          fi
+
       # Upload the generated yml as an artifact so the merge job can combine both
       - name: Upload arm64 yml artifact
         uses: actions/upload-artifact@v4
@@ -110,6 +126,22 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --x64 --publish always
 
+      # Upload x64 zip to R2 (canonical name used by FlowState download route)
+      - name: Upload x64 zip to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          FILE=$(ls release/264-Pro-*-x64-mac.zip 2>/dev/null | head -1)
+          if [ -n "$FILE" ]; then
+            curl -s -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/264pro-downloads/objects/264-Pro-mac-x64.zip" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/zip" \
+              --data-binary @"$FILE"
+            echo "Uploaded $FILE to R2 as 264-Pro-mac-x64.zip"
+          fi
+
       - name: Upload x64 yml artifact
         uses: actions/upload-artifact@v4
         with:
@@ -139,6 +171,39 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npx electron-builder --win --x64 --publish always
+
+      # Upload Windows exe to R2
+      - name: Upload Windows exe to R2
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          FILE=$(ls release/264-Pro-Setup*.exe 2>/dev/null | head -1)
+          if [ -n "$FILE" ]; then
+            curl -s -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/264pro-downloads/objects/264-Pro-Setup-win-x64.exe" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$FILE"
+            echo "Uploaded $FILE to R2 as 264-Pro-Setup-win-x64.exe"
+          fi
+
+      # Upload latest.yml (Windows updater manifest) to R2
+      - name: Upload latest.yml to R2
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -f "release/latest.yml" ]; then
+            curl -s -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/264pro-downloads/objects/latest.yml" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: text/yaml" \
+              --data-binary @release/latest.yml
+            echo "Uploaded latest.yml to R2"
+          fi
 
   # ─── Step 3: merge macOS ymls so both arches appear in latest-mac.yml ─
   # electron-updater on Apple Silicon reads latest-mac.yml and picks the
@@ -229,3 +294,16 @@ jobs:
             -H "Content-Type: application/octet-stream" \
             --data-binary @merged-latest-mac.yml \
             "https://uploads.github.com/repos/mkbrown261/264-pro-video-editor/releases/$RELEASE_ID/assets?name=latest-mac.yml"
+
+      # Also upload merged latest-mac.yml to R2 (used by auto-updater via FlowState)
+      - name: Upload merged latest-mac.yml to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          curl -s -X PUT \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/264pro-downloads/objects/latest-mac.yml" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: text/yaml" \
+            --data-binary @merged-latest-mac.yml
+          echo "Uploaded merged latest-mac.yml to R2"
