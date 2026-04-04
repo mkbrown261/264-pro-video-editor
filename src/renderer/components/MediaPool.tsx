@@ -8,6 +8,7 @@ import type { ClipTransitionType, MediaAsset } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 import { formatDuration, formatFileSize } from "../lib/format";
 import { TransitionsPanel } from "./TransitionsPanel";
+import { setDraggedAssetId } from "../lib/mediaDragContext";
 
 interface MediaPoolProps {
   assets: MediaAsset[];
@@ -165,7 +166,9 @@ function MediaCard({
       onDragStart={(e) => {
         e.dataTransfer.setData("application/x-asset-id", asset.id);
         e.dataTransfer.effectAllowed = "copy";
+        setDraggedAssetId(asset.id);
       }}
+      onDragEnd={() => setDraggedAssetId(null)}
       type="button"
       title={`${asset.name} — double-click to add`}
     >

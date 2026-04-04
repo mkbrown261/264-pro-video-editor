@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorTool, MediaAsset, TimelineTrack, TimelineTrackKind } from "../../shared/models";
+import { getDraggedAssetId } from "../lib/mediaDragContext";
 import {
   getClipTransitionDurationFrames,
   type TimelineTrackLayout,
@@ -702,21 +703,20 @@ export function TimelinePanel({
     const onDragEnter = (e: DragEvent) => {
       if (!e.dataTransfer?.types.includes("application/x-asset-id")) return;
 
-      // Note: getData may return "" during dragenter on some browsers (security restriction).
-      // We still set up the drag state so the ghost shows up immediately.
-      // The actual assetId will be read at drop time.
-      const assetId = e.dataTransfer.getData("application/x-asset-id") || "__pending__";
+      // getData() is blocked during dragenter/dragover in most browsers (security).
+      // Use the shared mediaDragContext which MediaPool sets on dragstart.
+      const assetId = getDraggedAssetId() ?? "__pending__";
 
       // Look up the asset to get its kind + duration for ghost width
       const asset = propsRef.current.assets.find((a) => a.id === assetId);
-      // Audio-only assets have no video dimensions; video assets have width/height > 0.
-      // Default to "video" when we can't read the asset yet (dragenter security restriction).
+      // Audio-only assets have no video dimensions (width/height = 0 or undefined).
+      // Default to "video" when the asset isn't found yet.
       const trackKind: TimelineTrackKind =
-        asset && asset.width === 0 && asset.height === 0 ? "audio" : "video";
+        asset && !asset.width && asset.hasAudio ? "audio" : "video";
       const fps = propsRef.current.sequenceFps;
       const durationFrames = asset
         ? Math.max(1, Math.round(asset.durationSeconds * fps))
-        : 90; // 3 s placeholder
+        : 90; // ~3 s placeholder
 
       const newDs: DragState = {
         clipId: `__mp_drag__${assetId}`,
@@ -731,11 +731,28 @@ export function TimelinePanel({
     };
 
     const onDragOver = (e: DragEvent) => {
-      const ds = mpDragStateRef.current;
+      let ds = mpDragStateRef.current;
       if (!ds) return;
       if (!e.dataTransfer?.types.includes("application/x-asset-id")) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
+
+      // If we still have a placeholder ID, try to resolve the real asset now
+      if (ds.clipId.endsWith("__pending__")) {
+        const assetId = getDraggedAssetId();
+        if (assetId) {
+          const asset = propsRef.current.assets.find((a) => a.id === assetId);
+          const fps = propsRef.current.sequenceFps;
+          const trackKind: TimelineTrackKind =
+            asset && !asset.width && asset.hasAudio ? "audio" : "video";
+          const durationFrames = asset
+            ? Math.max(1, Math.round(asset.durationSeconds * fps))
+            : 90;
+          ds = { ...ds, clipId: `__mp_drag__${assetId}`, trackKind, durationFrames };
+          mpDragStateRef.current = ds;
+          setMpDragState(ds);
+        }
+      }
 
       const g = resolveGhostAt(e.clientX, e.clientY, ds.trackKind, 0);
       ghostInfoRef.current = g;
@@ -759,7 +776,8 @@ export function TimelinePanel({
       setGhostInfo(null);
 
       if (!ds) return;
-      const assetId = e.dataTransfer?.getData("application/x-asset-id");
+      // getData() IS available in drop events — but fall back to shared context just in case
+      const assetId = e.dataTransfer?.getData("application/x-asset-id") || getDraggedAssetId() || "";
       if (!assetId) return;
 
       const g = resolveGhostAt(e.clientX, e.clientY, ds.trackKind, 0);
