@@ -739,23 +739,33 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [projectDirty]);
 
-  // ── Auto-save every 60 seconds when project is dirty ─────────────────────
-  const AUTO_SAVE_MS = 60 * 1000; // 60 seconds (CapCut parity)
-  const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // ── Auto-save every 3 minutes — ONLY when a real file path exists ────────
+  // Use a stable callback ref so the interval always calls the latest version
+  // of handleSaveProject without needing to restart the interval on every render.
+  const autoSaveRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoSaveFnRef  = useRef<() => Promise<void>>(async () => {});
+  autoSaveFnRef.current = async () => {
+    // Guard: no path = never saved yet, skip silently (no fake "Auto-saved" toast)
+    if (!currentProjectPath || !projectDirty) return;
+    try {
+      await handleSaveProject();
+      showToast("✓ Auto-saved");
+    } catch { /* silent */ }
+  };
+
   useEffect(() => {
     if (autoSaveRef.current) clearInterval(autoSaveRef.current);
-    autoSaveRef.current = setInterval(async () => {
-      if (!projectDirty) return;
-      try {
-        await handleSaveProject();
-        showToast("✓ Auto-saved");
-      } catch {
-        // silent — don't interrupt the user
-      }
-    }, AUTO_SAVE_MS);
+    // Only start the timer once a real file exists on disk. Before first save
+    // there is no path, so we'd just be storing to localStorage with a
+    // misleading toast — don't do that.
+    if (!currentProjectPath) return;
+    autoSaveRef.current = setInterval(
+      () => { void autoSaveFnRef.current(); },
+      3 * 60 * 1000 // 3 minutes
+    );
     return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectDirty, currentProjectPath]);
+  }, [currentProjectPath]);
 
   // ── Updater + bridge ───────────────────────────────────────────────────────
   useEffect(() => {

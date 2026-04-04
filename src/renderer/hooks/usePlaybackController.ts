@@ -246,6 +246,41 @@ export function usePlaybackController({
   });
 
   const lastLoadedVideoUrlRef = useRef<string | null>(null);
+  // Cleanup handle for the trim-boundary timeupdate listener
+  const trimGuardCleanupRef = useRef<(() => void) | null>(null);
+
+  /** Attach a timeupdate listener that hard-stops the video element the instant
+   *  it passes sourceOutSeconds.  This is the authoritative trim-end enforcer —
+   *  the RAF loop does a coarser correction, but timeupdate fires every ~250 ms
+   *  at native resolution and catches the boundary precisely. */
+  function attachTrimGuard(media: HTMLVideoElement, seg: TimelineSegment): void {
+    // Remove any previous guard first
+    trimGuardCleanupRef.current?.();
+    trimGuardCleanupRef.current = null;
+
+    const outTime = seg.sourceOutSeconds;
+    const inTime  = seg.sourceInSeconds;
+
+    const onTimeUpdate = () => {
+      // If the element runs past the out-point, park it exactly there.
+      if (media.currentTime > outTime + 0.016) { // 16 ms ≈ 1 frame at 60fps
+        media.currentTime = outTime;
+        media.pause();
+      }
+      // If something seeks before the in-point, snap back.
+      if (media.currentTime < inTime - 0.016) {
+        media.currentTime = inTime;
+      }
+    };
+
+    media.addEventListener("timeupdate", onTimeUpdate);
+    trimGuardCleanupRef.current = () => media.removeEventListener("timeupdate", onTimeUpdate);
+  }
+
+  function detachTrimGuard(): void {
+    trimGuardCleanupRef.current?.();
+    trimGuardCleanupRef.current = null;
+  }
 
   // ── sync video element ────────────────────────────────────────────────────
   async function syncVideo(
@@ -259,6 +294,7 @@ export function usePlaybackController({
     if (!segment) {
       // No active segment — stop video completely and clear loaded URL so the
       // next segment always triggers a fresh load (prevents stale frame showing).
+      detachTrimGuard();
       media.pause();
       if (media.src) {
         media.removeAttribute("src");
@@ -274,6 +310,7 @@ export function usePlaybackController({
       const targetTime = getTargetCurrentTime(segment, frame, stateRef.current.sequenceFps);
 
       if (urlChanged) {
+        detachTrimGuard();
         await loadMediaSource(media, nextUrl, segment.asset.name);
         lastLoadedVideoUrlRef.current = nextUrl;
       }
@@ -295,8 +332,11 @@ export function usePlaybackController({
         // Video element is muted — audio is handled by useMultiTrackAudio
         media.muted = true;
         media.volume = 1;
+        // Attach trim guard BEFORE play() so the boundary is enforced from frame 1
+        attachTrimGuard(media, segment);
         await media.play();
       } else {
+        detachTrimGuard();
         media.pause();
       }
 
@@ -419,7 +459,8 @@ export function usePlaybackController({
         playbackStartedAt,
         playbackAnchorFrame,
         sequenceFps: fps,
-        totalFrames: total
+        totalFrames: total,
+        activeSegment: seg
       } = stateRef.current;
 
       // If playbackStartedAt is null, media is still loading — skip this
@@ -437,6 +478,21 @@ export function usePlaybackController({
       if (nextFrame !== stateRef.current.playheadFrame) {
         stateRef.current.playheadFrame = nextFrame;
         stateRef.current.setPlayheadFrame(nextFrame);
+      }
+
+      // ── TRIM ENFORCEMENT ──────────────────────────────────────────────────
+      // The HTML <video> element plays the raw source file and has no concept
+      // of trimStartFrames/trimEndFrames.  If the clip has a trim-end, the
+      // element will keep rendering frames past sourceOutSeconds even though
+      // the playhead (driven by wall clock) has already moved on.  Clamp it.
+      const video = videoRef.current;
+      if (video && seg && !video.paused) {
+        const outTime = seg.sourceOutSeconds;
+        if (video.currentTime > outTime + framesToSeconds(1, fps)) {
+          // Overshot the trim end — hard-park the frame at the out-point so
+          // the viewer doesn't flash source frames past the cut.
+          video.currentTime = outTime;
+        }
       }
 
       if (nextFrame >= total - 1) {
@@ -503,7 +559,7 @@ export function usePlaybackController({
     });
     // Audio segment changes are handled by useMultiTrackAudio
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, isPlaying]);
+  }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying]);
 
   // ── Preload on mount / when activeSegment first becomes non-null ──────────
   // Silently loads the video src so the browser decode pipeline is warm
@@ -542,6 +598,7 @@ export function usePlaybackController({
   useEffect(() => {
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      detachTrimGuard();
       videoRef.current?.pause();
       stopAudio();
       // Dispose AudioScheduler — releases AudioContext and cached buffers
