@@ -114,8 +114,9 @@ function findActiveVideoSegmentAtFrame(
       frame < s.endFrame
   );
   if (!covering.length) return null;
-  // Highest trackIndex wins (V3 > V2 > V1 rendering hierarchy)
-  return covering.sort((a, b) => b.trackIndex - a.trackIndex)[0];
+  // Lowest trackIndex wins — trackIndex 0 is the topmost visual row in the
+  // timeline (rendered first in trackLayouts.map()), so it has highest priority.
+  return covering.sort((a, b) => a.trackIndex - b.trackIndex)[0];
 }
 
 async function loadMediaSource(
@@ -270,8 +271,14 @@ export function usePlaybackController({
         lastLoadedVideoUrlRef.current = nextUrl;
       }
 
+      // Always seek when:
+      //   - URL just changed (new clip loaded)
+      //   - Not playing (scrub / trim preview — always snap to exact position)
+      //   - Drift exceeds 2 frames while playing (clock correction)
       const timeDrift = Math.abs(media.currentTime - targetTime);
-      if (urlChanged || !shouldPlay || timeDrift > framesToSeconds(2, stateRef.current.sequenceFps)) {
+      const needsSeek = urlChanged || !shouldPlay ||
+        timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
+      if (needsSeek) {
         await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
       }
 
@@ -424,12 +431,13 @@ export function usePlaybackController({
   }, [isPlaying, totalFrames]);
 
   // ── sync when NOT playing (scrub / seek) ──────────────────────────────────
+  // Dependencies include sourceInSeconds so trim changes re-seek immediately.
   useEffect(() => {
     if (isPlaying) return;
     void syncVideo(activeSegment, playheadFrame, false);
     // Audio scrub is handled by useMultiTrackAudio's own effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.clip.id, isPlaying, playheadFrame]);
+  }, [activeSegment?.clip.id, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying, playheadFrame]);
 
   // ── FIX 4: Immediately apply playback speed change to video element ────────
   // When clip speed changes while playing, update playbackRate in-place
@@ -446,10 +454,8 @@ export function usePlaybackController({
   }, [activeSegment?.clip.speed]);
 
   // ── sync when PLAYING and video segment changes ───────────────────────────
-  // When the active clip changes mid-play we need to reload/seek the video
-  // element.  During that async work we null-out playbackStartedAt so the
-  // RAF loop holds the playhead still; once play() resolves we re-stamp it
-  // so elapsed-time counting starts fresh from the current frame.
+  // When the active clip changes mid-play (different clip.id OR url changed due
+  // to track-switch OR trim point changed) we need to reload/seek the video element.
   useEffect(() => {
     if (!isPlaying) return;
     const frameAtChange = stateRef.current.playheadFrame;
@@ -461,23 +467,40 @@ export function usePlaybackController({
     });
     // Audio segment changes are handled by useMultiTrackAudio
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.clip.id, isPlaying]);
+  }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, isPlaying]);
 
   // ── Preload on mount / when activeSegment first becomes non-null ──────────
   // Silently loads the video src so the browser decode pipeline is warm
   // before the user hits Play, eliminating the first-play freeze.
+  // After load we also seek to the correct trim position so the first frame
+  // shown is the in-point of the clip, not frame 0 of the raw asset.
   useEffect(() => {
     if (isPlaying) return;
     if (!activeSegment) return;
     const video = videoRef.current;
     if (!video) return;
-    if (lastLoadedVideoUrlRef.current === activeSegment.asset.previewUrl) return;
-    // Fire-and-forget: don't block, don't play, just get the src decoded
-    void loadMediaSource(video, activeSegment.asset.previewUrl, activeSegment.asset.name)
-      .then(() => { lastLoadedVideoUrlRef.current = activeSegment.asset.previewUrl; })
+    if (lastLoadedVideoUrlRef.current === activeSegment.asset.previewUrl) {
+      // URL already loaded — but seek to correct trim position in case
+      // trim was adjusted since the last load (handles Bug 3: trim ignored)
+      const seg = activeSegment;
+      const frame = stateRef.current.playheadFrame;
+      const targetTime = getTargetCurrentTime(seg, frame, stateRef.current.sequenceFps);
+      void seekMediaElement(video, targetTime, stateRef.current.sequenceFps);
+      return;
+    }
+    // Fire-and-forget: load the src decoded, then seek to in-point
+    const seg = activeSegment;
+    const frame = stateRef.current.playheadFrame;
+    void loadMediaSource(video, seg.asset.previewUrl, seg.asset.name)
+      .then(async () => {
+        lastLoadedVideoUrlRef.current = seg.asset.previewUrl;
+        // Seek to the correct in-point after load so viewer shows the right frame
+        const targetTime = getTargetCurrentTime(seg, frame, stateRef.current.sequenceFps);
+        await seekMediaElement(video, targetTime, stateRef.current.sequenceFps);
+      })
       .catch(() => { /* ignore silent preload errors */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.asset.previewUrl]);
+  }, [activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, isPlaying]);
 
   // ── cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {

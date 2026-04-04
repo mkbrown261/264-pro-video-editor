@@ -447,15 +447,74 @@ export function useMultiTrackAudio({
     slotsRef.current = nextSlots;
 
     // ── Sync each slot ────────────────────────────────────────────────────
-    const syncTasks = nextSlots.map(async (slot) => {
+    // We split slots into two groups:
+    //   A) "ready" — src already loaded (HAVE_ENOUGH_DATA or HAVE_FUTURE_DATA),
+    //      or pre-playing.  These get full synchronous handling so they play
+    //      in lock-step with video.
+    //   B) "needs-load" — src not yet decoded.  We fire the load in the
+    //      background (fire-and-forget) so we NEVER block video playback start.
+    //      Once loaded they will pick up at the correct position via the next
+    //      reconcile cycle triggered by the audioSegKey effect.
+
+    const readySlots:   Slot[] = [];
+    const pendingSlots: Slot[] = [];
+
+    for (const slot of nextSlots) {
+      const url = slot.segment.asset.previewUrl;
+      const alreadyLoaded =
+        slot.isPrePlaying ||
+        (slot.element.src === url &&
+          slot.element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA);
+      if (alreadyLoaded) {
+        readySlots.push(slot);
+      } else {
+        pendingSlots.push(slot);
+      }
+    }
+
+    // ── handle "needs-load" slots in background (non-blocking) ───────────
+    for (const slot of pendingSlots) {
       const { element, segment } = slot;
       const url = segment.asset.previewUrl;
-
-      // Load if needed
-      if (element.src !== url && url) {
+      void (async () => {
         try { await loadSrc(element, url); }
         catch { return; }
-      }
+        const segOffsetFrames = Math.max(0, stateRef.current.playheadFrame - segment.startFrame);
+        const clipSpeed       = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
+        const targetTime      = segment.sourceInSeconds +
+                                framesToSeconds(segOffsetFrames, fps) * clipSpeed;
+        const clampedTime     = Math.min(
+          Math.max(targetTime, segment.sourceInSeconds),
+          Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, fps))
+        );
+        await seekTo(element, clampedTime, fps);
+        const trackMuted   = segment.track.muted ?? false;
+        const clipVol      = Math.max(0, segment.clip.volume ?? 1);
+        const effectiveVol = trackMuted ? 0 : clipVol;
+        element.playbackRate = clipSpeed;
+        const liveCtx = stateRef.current.isPlaying ? getAudioContext() : null;
+        if (liveCtx) {
+          const route = getOrCreateRoute(liveCtx, element);
+          if (route) {
+            const targetGain = Math.max(0, Math.min(MAX_GAIN, effectiveVol));
+            // Ramp in from 0 when we start playing (avoids click)
+            rampGain(route, liveCtx, 0, targetGain, FADE_IN_S);
+            element.volume = 1;
+          } else {
+            element.volume = Math.min(1, effectiveVol);
+          }
+        } else {
+          element.volume = Math.min(1, effectiveVol);
+        }
+        if (stateRef.current.isPlaying && !trackMuted) {
+          try { await element.play(); } catch { /* autoplay policy */ }
+        }
+      })();
+    }
+
+    // ── handle "ready" slots synchronously ───────────────────────────────
+    const syncTasks = readySlots.map(async (slot) => {
+      const { element, segment } = slot;
 
       // Compute target playback position
       const segOffsetFrames = Math.max(0, frame - segment.startFrame);
@@ -480,7 +539,7 @@ export function useMultiTrackAudio({
         }
         // else: drift is acceptable, skip seek entirely — element is already running
       } else {
-        // Normal path: await seeked event
+        // Already loaded, but not pre-playing — seek normally (fast, no network wait)
         await seekTo(element, clampedTime, fps);
       }
 

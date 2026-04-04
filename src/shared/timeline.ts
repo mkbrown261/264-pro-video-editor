@@ -208,8 +208,9 @@ export function findSegmentAtFrame(
   }
 
   return coveringSegments.sort((left, right) => {
+    // Lowest trackIndex = topmost visual row = highest priority
     if (left.trackIndex !== right.trackIndex) {
-      return right.trackIndex - left.trackIndex;
+      return left.trackIndex - right.trackIndex;
     }
 
     return right.startFrame - left.startFrame;
@@ -286,9 +287,11 @@ export function findAllActiveVideoSegments(
   const covering = playable.filter(
     (s) => playheadFrame >= s.startFrame && playheadFrame < s.endFrame
   );
-  // Sort highest trackIndex first (topmost visual layer first)
+  // Sort LOWEST trackIndex first — track index 0 is the topmost visual row
+  // in the timeline panel (rendered first by trackLayouts.map()), so it has
+  // the highest playback priority.  Higher-numbered tracks are below it visually.
   return covering.sort((a, b) => {
-    if (a.trackIndex !== b.trackIndex) return b.trackIndex - a.trackIndex;
+    if (a.trackIndex !== b.trackIndex) return a.trackIndex - b.trackIndex;
     return b.startFrame - a.startFrame;
   });
 }
