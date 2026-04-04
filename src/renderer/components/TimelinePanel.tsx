@@ -767,6 +767,20 @@ export function TimelinePanel({
           setTrackContextMenu(null);
         }}>⧉ Duplicate Track</div>
         <div className="ctx-menu-sep" />
+        <div className="ctx-menu-sep" />
+        <div className="ctx-menu-item" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          🎨 Set Color{" "}
+          <input
+            type="color"
+            defaultValue="#ffffff"
+            style={{ width: 22, height: 22, padding: 0, border: "none", cursor: "pointer", background: "none" }}
+            onChange={(e) => {
+              onUpdateTrack(trackId, { color: e.target.value });
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+        <div className="ctx-menu-sep" />
         <div className="ctx-menu-item ctx-menu-item-danger" onClick={() => {
           onRemoveTrack?.(trackId);
           setTrackContextMenu(null);
