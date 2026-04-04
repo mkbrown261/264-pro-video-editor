@@ -283,7 +283,24 @@ interface PrefetchEntry {
 const prefetchMap = new Map<string, PrefetchEntry>();
 
 /** Load and pre-play a segment's audio element at gain=0 so it's running by
- *  the time the seam arrives.  No seeked event will be needed at the boundary. */
+ *  the time the seam arrives.  No seeked event will be needed at the boundary.
+ *
+ *  Strategy (two-phase):
+ *  ─────────────────────
+ *  Phase 1 — PARK  (framesUntilStart > PRE_PLAY_FRAMES):
+ *    Load the element and seek it to sourceInSeconds, then PAUSE it there.
+ *    The element is ready to go but not consuming CPU or running ahead.
+ *    On each lookahead tick we re-verify the position is correct.
+ *
+ *  Phase 2 — PRE-PLAY  (framesUntilStart <= PRE_PLAY_FRAMES):
+ *    Start the element playing muted (gain=0).  It runs for ~400 ms before
+ *    the seam, so by the time reconcileSlots claims it, element.currentTime
+ *    is exactly where it needs to be — no seek required.
+ *
+ *  This eliminates the root cause of the stutter: the old code started
+ *  pre-playing 3 s (90 frames) early, so by the seam the element had drifted
+ *  3 s past sourceInSeconds, forcing a synchronous seek that caused silence.
+ */
 async function prefetchAndPrePlay(
   seg: TimelineSegment,
   currentPlayheadFrame: number,
@@ -300,8 +317,11 @@ async function prefetchAndPrePlay(
   }
 
   const { element } = entry;
+  const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+  const framesUntilStart = seg.startFrame - currentPlayheadFrame;
 
-  // Load source if needed
+  // ── Phase 1: PARK — load source, seek to in-point, stay paused ─────────────
+  // Load source if needed (idempotent — loadSrc returns early if already loaded)
   try {
     await loadSrc(element, url);
   } catch {
@@ -310,36 +330,43 @@ async function prefetchAndPrePlay(
     return;
   }
 
-  // Compute where the element needs to be at the seam (startFrame)
-  // minus a small buffer so it's already running when the seam hits.
-  const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
-  const preStartFrame = Math.max(seg.startFrame - PRE_PLAY_FRAMES, currentPlayheadFrame);
-  const framesFromStart = Math.max(0, preStartFrame - seg.startFrame);
-  const targetTime = seg.sourceInSeconds + framesToSeconds(framesFromStart, fps) * clipSpeed;
-
-  // Seek the element to the pre-play position if not already close
   if (!entry.prePlaying) {
-    if (Math.abs(element.currentTime - targetTime) > 0.1) {
-      element.currentTime = targetTime;
-      // Wait briefly for seek (non-blocking — if it doesn't complete, we still proceed)
+    // Keep the element parked at sourceInSeconds while waiting for the pre-play
+    // window.  Re-seek on every lookahead tick to correct any small drift.
+    const parkTime = seg.sourceInSeconds;
+    if (Math.abs(element.currentTime - parkTime) > 0.05) {
+      // Async seek with timeout so we never block indefinitely
+      element.currentTime = parkTime;
       await new Promise<void>((resolve) => {
-        const t = window.setTimeout(resolve, 500);
+        const t = window.setTimeout(resolve, 300);
         element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
       });
     }
-  } else {
-    // Already pre-playing — just update position if drifted
-    // (This is a rolling correction to stay near where we'll need to be)
-    const seamTargetTime = seg.sourceInSeconds; // actual start position
-    const drift = element.currentTime - seamTargetTime;
-    // If drift is MORE than 1s ahead of where we need to be, re-seek
-    if (element.currentTime < seamTargetTime - 0.3 || element.currentTime > seamTargetTime + 2.0) {
-      element.currentTime = targetTime;
-    }
+    // Ensure element stays paused in park phase
+    if (!element.paused) element.pause();
   }
 
-  // Start pre-playing at gain=0 so the element is running — no play() latency at seam
+  // ── Phase 2: PRE-PLAY — start muted playback close to the seam ──────────────
+  // Only enter this phase when we're within PRE_PLAY_FRAMES of the seam.
+  if (framesUntilStart > PRE_PLAY_FRAMES) {
+    // Still in park phase — nothing more to do this tick
+    return;
+  }
+
   if (!entry.prePlaying) {
+    // Compute exact start position: the seam will arrive in (framesUntilStart)
+    // more frames at real-time speed.  Start the element that many frames
+    // behind sourceInSeconds so that when the seam arrives currentTime ≈ sourceInSeconds.
+    const preOffsetSecs = framesToSeconds(Math.max(0, framesUntilStart), fps) * clipSpeed;
+    const preStartTime  = Math.max(0, seg.sourceInSeconds - preOffsetSecs);
+    if (Math.abs(element.currentTime - preStartTime) > 0.05) {
+      element.currentTime = preStartTime;
+      await new Promise<void>((resolve) => {
+        const t = window.setTimeout(resolve, 300);
+        element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
+      });
+    }
+
     entry.prePlaying = true;
     const ctx = getAudioContext();
     if (ctx) {
@@ -354,8 +381,10 @@ async function prefetchAndPrePlay(
       element.volume = 0;
     }
     element.playbackRate = clipSpeed;
-    try { await element.play(); } catch { /* autoplay policy — will try again at seam */ }
+    try { await element.play(); } catch { /* autoplay policy — reconcileSlots will retry */ }
   }
+  // If already pre-playing, no corrective seek needed — the element has been
+  // running for at most PRE_PLAY_FRAMES and is within tolerance of the seam position.
 }
 
 /** Claim a prefetched/pre-playing element for a segment. */
@@ -680,6 +709,12 @@ export function useMultiTrackAudio({
             }
             slot.fadeInDone    = true;
             slot.isPrePlaying  = false; // now officially audible
+          } else if (shouldPlay && slot.fadeInDone && slot.isPrePlaying) {
+            // Hard-cut incoming slot that was pre-playing at gain=0.
+            // Use a short micro-ramp so we don't jump from silence to full
+            // volume instantly (which would cause a click/pop).
+            rampGain(route, ctx, 0, targetGain, HARD_CUT_RAMP_S);
+            slot.isPrePlaying = false;
           } else {
             setGainImmediate(route, ctx, targetGain);
           }
