@@ -69,14 +69,21 @@ interface FadeHandleState {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DRAG-POSITION INTENT
-//   DRAG_ON_TRACK       → drop onto existing track (trackId set)
-//   INSERT_ABOVE_TRACK  → create new track immediately above insertBeforeTrackId
-//   INSERT_ABOVE_TOP    → create new track at very top (index 0)
-//   INSERT_BELOW_BOTTOM → append new track at very bottom
+//   DRAG_ON_TRACK        → drop onto existing track (snap-to-free, trackId set)
+//   INSERT_ABOVE_TRACK   → create new track immediately above insertBeforeTrackId
+//   INSERT_BELOW_TRACK   → create new track immediately below insertAfterTrackId
+//   INSERT_ABOVE_TOP     → create new track at very top (index 0)
+//   INSERT_BELOW_BOTTOM  → append new track at very bottom
+//
+// Zone layout (per track row, 3 equal zones):
+//   top    33% → INSERT_ABOVE_TRACK
+//   middle 34% → DRAG_ON_TRACK  (snap-to-nearest-free position, existing behavior)
+//   bottom 33% → INSERT_BELOW_TRACK
 // ─────────────────────────────────────────────────────────────────────────────
 type DragIntent =
   | "DRAG_ON_TRACK"
   | "INSERT_ABOVE_TRACK"   // insert before a specific existing track
+  | "INSERT_BELOW_TRACK"   // insert after a specific existing track
   | "INSERT_ABOVE_TOP"
   | "INSERT_BELOW_BOTTOM";
 
@@ -90,6 +97,8 @@ interface GhostInfo {
   /**
    * For INSERT_ABOVE_TRACK: the trackId of the existing row the ghost sits
    * immediately above.  The new track will be spliced before this track.
+   * For INSERT_BELOW_TRACK: the trackId of the existing row the ghost sits
+   * immediately below.  The new track will be spliced after this track.
    */
   insertBeforeTrackId: string;
   /**
@@ -521,7 +530,10 @@ export function TimelinePanel({
       };
     }
 
-    // Rule 2-3: Cursor directly over a same-kind lane
+    // Rule 2-4: Cursor directly over a same-kind lane → 3-zone logic
+    //   top 33%    → INSERT_ABOVE_TRACK (new track above)
+    //   middle 34% → DRAG_ON_TRACK      (snap-to-free on existing track)
+    //   bottom 33% → INSERT_BELOW_TRACK (new track below)
     for (let i = 0; i < kindLanes.length; i++) {
       const { r, trackId } = kindLanes[i];
       if (clientY < r.top || clientY > r.bottom) continue;
@@ -529,7 +541,8 @@ export function TimelinePanel({
       const relY = clientY - r.top;
       const h    = r.bottom - r.top;
 
-      if (relY < h * 0.40) {
+      if (relY < h * 0.33) {
+        // ── TOP ZONE: insert new track ABOVE this one ──
         const gIdx = globalIndexOf(trackId);
         return {
           intent: "INSERT_ABOVE_TRACK",
@@ -541,6 +554,21 @@ export function TimelinePanel({
         };
       }
 
+      if (relY > h * 0.67) {
+        // ── BOTTOM ZONE: insert new track BELOW this one ──
+        const gIdx = globalIndexOf(trackId);
+        return {
+          intent: "INSERT_BELOW_TRACK",
+          frame: laneFrame(r),
+          trackId: "",
+          newTrackKind: trackKind,
+          // insertBeforeTrackId stores the CURRENT track (we insert after it)
+          insertBeforeTrackId: trackId,
+          insertIndex: gIdx + 1,
+        };
+      }
+
+      // ── MIDDLE ZONE: drop onto existing track (snap-to-free) ──
       return {
         intent: "DRAG_ON_TRACK",
         frame: laneFrame(r),
@@ -563,7 +591,7 @@ export function TimelinePanel({
       };
     }
 
-    // Rule 5: Cursor in gap between different-kind rows
+    // Rule 5: Cursor in gap between different-kind rows — use nearest same-kind lane
     if (kindLanes.length > 0) {
       let nearest = kindLanes[0];
       let nearestDist = Infinity;
@@ -584,13 +612,15 @@ export function TimelinePanel({
           insertIndex: Math.max(0, gIdx),
         };
       } else {
+        // Below center of nearest lane → insert below it
+        const gIdx = globalIndexOf(nearest.trackId);
         return {
-          intent: "DRAG_ON_TRACK",
+          intent: "INSERT_BELOW_TRACK",
           frame: laneFrame(nearest.r),
-          trackId: nearest.trackId,
+          trackId: "",
           newTrackKind: trackKind,
-          insertBeforeTrackId: "",
-          insertIndex: -1,
+          insertBeforeTrackId: nearest.trackId,
+          insertIndex: gIdx + 1,
         };
       }
     }
@@ -1404,6 +1434,8 @@ export function TimelinePanel({
                 {(() => {
                   const isInsertAboveThis = ghostInfo?.intent === "INSERT_ABOVE_TRACK" &&
                     ghostInfo.insertBeforeTrackId === layout.track.id;
+                  const isInsertBelowThis = ghostInfo?.intent === "INSERT_BELOW_TRACK" &&
+                    ghostInfo.insertBeforeTrackId === layout.track.id;
                   const isDragTarget = ghostInfo?.intent === "DRAG_ON_TRACK" &&
                     ghostInfo.trackId === layout.track.id;
                   const laneClass = [
@@ -1413,6 +1445,7 @@ export function TimelinePanel({
                     dropTargetTrackId === layout.track.id ? "drop-target" : "",
                     isLocked ? "lane-locked" : "",
                     isInsertAboveThis ? "drag-insert-above" : "",
+                    isInsertBelowThis ? "drag-insert-below" : "",
                     isDragTarget ? "drag-on-track-target" : "",
                   ].filter(Boolean).join(" ");
                   return (
@@ -1842,6 +1875,25 @@ export function TimelinePanel({
                   );
                 })()}
               </div>
+
+              {/* Ghost row inserted immediately AFTER this track row (INSERT_BELOW_TRACK) */}
+              {ghostInfo?.intent === "INSERT_BELOW_TRACK" &&
+                activeDragState &&
+                ghostInfo.insertBeforeTrackId === layout.track.id && (
+                <div className="timeline-new-track-ghost" key={`ghost-below-${layout.track.id}`}>
+                  <div className="ghost-new-track-label">+ New {ghostInfo.newTrackKind} track</div>
+                  <div
+                    className={`new-track-ghost-clip ${activeDragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
+                    style={{
+                      position: "absolute",
+                      left: LABEL_W + ghostInfo.frame * pixelsPerFrame,
+                      width: Math.max(activeDragState.durationFrames * pixelsPerFrame, 24),
+                      top: 2,
+                      bottom: 2,
+                    }}
+                  />
+                </div>
+              )}
               </React.Fragment>
             );
           })}

@@ -192,7 +192,7 @@ interface EditorStore {
   getCurrentProjectSnapshot: () => EditorProjectState;
 
   // ── Sequence settings ──
-  updateSequenceSettings: (settings: Partial<{ width: number; height: number; fps: number; aspectRatio: string }>) => void;
+  updateSequenceSettings: (settings: Partial<{ width: number; height: number; fps: number; aspectRatio: string; audioSampleRate: number }>) => void;
 
   // ── Fusion / Compositing ──
   fusionClipId: string | null;
@@ -789,32 +789,102 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       let nextProject = withAssetSequenceDefaults(state.project, asset);
       const track = nextProject.sequence.tracks.find((t) => t.id === trackId);
       if (!track) return state;
-      // BUG 4: Snap to nearest free position if drop would overlap an existing clip
+
+      const fps = nextProject.sequence.settings.fps;
       const dur = getClipDurationFrames(
         { trimStartFrames: 0, trimEndFrames: 0, speed: 1 } as Parameters<typeof getClipDurationFrames>[0],
         asset,
-        nextProject.sequence.settings.fps
+        fps
       );
-      const resolvedStart = findNearestFreePosition(nextProject, trackId, startFrame, dur);
-      startFrame = resolvedStart;
-      const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;
-      const videoClip = createEmptyClip(asset.id, trackId, startFrame, { linkedGroupId });
-      const newClips: TimelineClip[] = [videoClip];
-      if (asset.hasAudio && track.kind === "video") {
-        // Use findOrCreateFreeAudioTrack so the audio never stacks on a busy track
-        const { project: projWithTrack, audioTrackId } = findOrCreateFreeAudioTrack(nextProject, asset, startFrame);
-        nextProject = projWithTrack;
-        newClips.push(createEmptyClip(asset.id, audioTrackId, startFrame, { linkedGroupId }));
+      const dropStart = Math.max(0, startFrame);
+      const dropEnd   = dropStart + dur;
+
+      // ── NLE overwrite: carve the drop zone out of any clips it overlaps ─
+      // Industry-standard behaviour: the dropped clip occupies exactly its
+      // natural duration.  Existing clips are either trimmed or split so they
+      // continue playing BEFORE and AFTER the dropped clip's span.
+      let updatedClips = nextProject.sequence.clips.map((c) => {
+        if (c.trackId !== trackId) return c;
+        const cAsset = nextProject.assets.find((a) => a.id === c.assetId);
+        if (!cAsset) return c;
+        const cDur   = getClipDurationFrames(c, cAsset, fps);
+        const cStart = c.startFrame;
+        const cEnd   = cStart + cDur;
+
+        if (cEnd <= dropStart || cStart >= dropEnd) return c;  // no overlap
+
+        // Clip completely swallowed → remove (return null below)
+        if (cStart >= dropStart && cEnd <= dropEnd) return null as unknown as TimelineClip;
+
+        // Clip straddles the left edge → trim its end
+        if (cStart < dropStart && cEnd > dropStart && cEnd <= dropEnd) {
+          const framesKept = dropStart - cStart;
+          const framesLost = cDur - framesKept;
+          return { ...c, trimEndFrames: c.trimEndFrames + framesLost };
+        }
+
+        // Clip straddles the right edge → trim its start & move startFrame
+        if (cStart >= dropStart && cStart < dropEnd && cEnd > dropEnd) {
+          const framesLost = dropEnd - cStart;
+          return { ...c, startFrame: dropEnd, trimStartFrames: c.trimStartFrames + framesLost };
+        }
+
+        // Drop zone is INSIDE the clip → split into left stub + right stub
+        if (cStart < dropStart && cEnd > dropEnd) {
+          // Left part: keep as-is but trim end
+          const leftFramesKept = dropStart - cStart;
+          const leftFramesLost = cDur - leftFramesKept;
+          const leftClip: TimelineClip = { ...c, trimEndFrames: c.trimEndFrames + leftFramesLost };
+          // Right part: new clip starting after the drop zone
+          const rightFramesLost = dropEnd - cStart;
+          const rightClip: TimelineClip = {
+            ...c,
+            id: createId(),
+            startFrame: dropEnd,
+            trimStartFrames: c.trimStartFrames + rightFramesLost,
+            linkedGroupId: c.linkedGroupId,
+          };
+          // Return left and right as two clips — handled below
+          (c as any).__splitRight = rightClip;
+          return leftClip;
+        }
+
+        return c;
+      }).filter(Boolean);
+
+      // Collect any split-right stubs
+      const rightStubs: TimelineClip[] = [];
+      for (const c of updatedClips) {
+        if ((c as any).__splitRight) {
+          rightStubs.push((c as any).__splitRight as TimelineClip);
+          delete (c as any).__splitRight;
+        }
       }
-      nextProject = {
-        ...nextProject,
-        sequence: { ...nextProject.sequence, clips: [...nextProject.sequence.clips, ...newClips] }
-      };
+      updatedClips = [...updatedClips, ...rightStubs];
+
+      // ── Create the new clip ─────────────────────────────────────────────
+      const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;
+      const videoClip = createEmptyClip(asset.id, trackId, dropStart, { linkedGroupId });
+      updatedClips.push(videoClip);
+
+      nextProject = { ...nextProject, sequence: { ...nextProject.sequence, clips: updatedClips } };
+
+      if (asset.hasAudio && track.kind === "video") {
+        const { project: projWithTrack, audioTrackId } = findOrCreateFreeAudioTrack(nextProject, asset, dropStart);
+        nextProject = projWithTrack;
+        // Also carve audio track the same way (reuse same logic via updatedClips rebuild)
+        const audioClip = createEmptyClip(asset.id, audioTrackId, dropStart, { linkedGroupId });
+        nextProject = {
+          ...nextProject,
+          sequence: { ...nextProject.sequence, clips: [...nextProject.sequence.clips, audioClip] }
+        };
+      }
+
       return {
         project: nextProject,
         selectedAssetId: assetId,
         selectedClipId: videoClip.id,
-        playback: { isPlaying: false, playheadFrame: clampPlayhead(nextProject, startFrame) }
+        playback: { isPlaying: false, playheadFrame: clampPlayhead(nextProject, dropStart) }
       };
     }));
   },

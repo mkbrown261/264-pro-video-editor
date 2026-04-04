@@ -25,6 +25,10 @@ const LS_USER_KEY     = 'fs_user';
 let pendingAuthState: string | null = null;
 let gateWindow: BrowserWindow | null = null;
 
+// ── Close-confirmation state (module-scoped so the IPC handler can set it) ───
+let mainWindow: BrowserWindow | null = null;
+let closeConfirmedGlobal = false;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const VIDEO_FILE_EXTENSIONS = [
@@ -354,11 +358,18 @@ function createMainWindow(splashWindow: BrowserWindow | null): BrowserWindow {
   });
 
   // ── Close guard: ask renderer if there are unsaved changes ───────────────
-  let closeConfirmed = false;
+  // closeConfirmedGlobal is module-scoped so the IPC handler can set it.
+  closeConfirmedGlobal = false;
+  mainWindow = window;
   window.on("close", (e) => {
-    if (closeConfirmed) return;
+    if (closeConfirmedGlobal) return;
     e.preventDefault();
     window.webContents.send("app:before-close");
+  });
+
+  window.on("closed", () => {
+    mainWindow = null;
+    closeConfirmedGlobal = false;
   });
 
   return window;
@@ -661,14 +672,14 @@ ipcMain.handle("project:save-as", async (event, json: string, filePath: string) 
 
 // ── App lifecycle IPC ─────────────────────────────────────────────────────────
 
-// renderer calls this when user says "yes close"
-// Uses ipcMain.handle so it works every time (not just once)
+// renderer calls this when user says "yes close" (Save or Don't Save)
+// Uses the module-scoped closeConfirmedGlobal flag so the close guard
+// in createMainWindow() sees it and lets the close through.
 ipcMain.handle("app:confirm-close", () => {
-  const wins = BrowserWindow.getAllWindows();
-  if (wins[0]) {
-    // Remove the close guard listeners then close
-    wins[0].removeAllListeners("close");
-    wins[0].close();
+  closeConfirmedGlobal = true;
+  const win = mainWindow ?? BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+  if (win && !win.isDestroyed()) {
+    win.close();
   }
 });
 

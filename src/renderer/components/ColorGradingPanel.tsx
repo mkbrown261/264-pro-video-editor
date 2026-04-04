@@ -70,9 +70,10 @@ interface ColorWheelProps {
   label: string;
   value: RGBValue;
   onChange: (v: RGBValue) => void;
+  onReset?: () => void;
 }
 
-function ColorWheel({ label, value, onChange }: ColorWheelProps) {
+function ColorWheel({ label, value, onChange, onReset }: ColorWheelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragging  = useRef(false);
   const valueRef  = useRef(value);
@@ -191,6 +192,14 @@ function ColorWheel({ label, value, onChange }: ColorWheelProps) {
     onChangeRef.current(posToRGB(e.clientX, e.clientY));
   }
 
+  function handleDoubleClick(e: RMouseEvent<HTMLCanvasElement>) {
+    e.preventDefault();
+    // Double-click on the wheel resets to neutral
+    const resetVal: RGBValue = { r: 0, g: 0, b: 0 };
+    onChangeRef.current(resetVal);
+    onReset?.();
+  }
+
   const magnitude = Math.sqrt(value.r * value.r + value.g * value.g);
   const hasOffset = magnitude > 0.005 || Math.abs(value.b) > 0.005;
 
@@ -204,6 +213,8 @@ function ColorWheel({ label, value, onChange }: ColorWheelProps) {
         height={SIZE}
         className="cw-canvas"
         onMouseDown={handleMouseDown}
+        onDoubleClick={handleDoubleClick}
+        title="Drag to adjust color. Double-click to reset."
       />
 
       {/* Master luminance slider — independent of wheel drag */}
@@ -228,10 +239,11 @@ function ColorWheel({ label, value, onChange }: ColorWheelProps) {
       </div>
 
       <button
-        className={`cw-reset-btn${hasOffset ? " visible" : ""}`}
-        onClick={() => onChange({ r: 0, g: 0, b: 0 })}
+        className={`cw-reset-btn${hasOffset ? " has-offset" : ""}`}
+        onClick={() => { onChange({ r: 0, g: 0, b: 0 }); onReset?.(); }}
         type="button"
-        title={`Reset ${label}`}
+        title={`Reset ${label} to neutral (or double-click the wheel)`}
+        aria-label={`Reset ${label}`}
       >
         ↺
       </button>

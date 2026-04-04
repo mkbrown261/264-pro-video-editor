@@ -257,7 +257,14 @@ export function usePlaybackController({
     if (!media) return false;
 
     if (!segment) {
+      // No active segment — stop video completely and clear loaded URL so the
+      // next segment always triggers a fresh load (prevents stale frame showing).
       media.pause();
+      if (media.src) {
+        media.removeAttribute("src");
+        media.load();
+        lastLoadedVideoUrlRef.current = null;
+      }
       return false;
     }
 
@@ -376,6 +383,27 @@ export function usePlaybackController({
     await startPlaybackAtFrame(targetFrame);
   }
 
+  // ── Immediate video/audio stop when isPlaying changes to false externally ─
+  // (e.g. dropping a new clip while playing, or clip removal from the store).
+  // This fires synchronously on the React render cycle, ensuring both the
+  // video element and all audio slots are silenced before the next effects run.
+  useEffect(() => {
+    if (!isPlaying) {
+      // Pause the video element right away — don't wait for syncVideo effect
+      const video = videoRef.current;
+      if (video && !video.paused) {
+        video.pause();
+      }
+      // Pause all audio slots immediately (same as pausePlayback, but driven
+      // by external store change rather than user action)
+      pauseAudio();
+      // Reset RAF anchor so next play starts from the correct position
+      stateRef.current.playbackStartedAt = null;
+      stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
   // ── RAF loop ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isPlaying || totalFrames <= 0) {
@@ -456,10 +484,18 @@ export function usePlaybackController({
   // ── sync when PLAYING and video segment changes ───────────────────────────
   // When the active clip changes mid-play (different clip.id OR url changed due
   // to track-switch OR trim point changed) we need to reload/seek the video element.
+  // Also handles the case where the active segment disappears (clip removed from timeline):
+  // in that case activeSegment is null and syncVideo will clear the video element.
   useEffect(() => {
     if (!isPlaying) return;
     const frameAtChange = stateRef.current.playheadFrame;
     stateRef.current.playbackStartedAt = null;  // freeze RAF during load
+    if (!activeSegment) {
+      // Clip was removed from timeline while playing — stop everything cleanly
+      void syncVideo(null, frameAtChange, false);
+      pausePlayback();
+      return;
+    }
     void syncVideo(activeSegment, frameAtChange, true).then(() => {
       // Re-anchor from the frame we were at when the segment changed
       stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
