@@ -64,6 +64,7 @@ button { cursor: pointer; }
   height: 100vh;
   overflow: hidden;
   background: var(--bg-app);
+  position: relative; /* needed so fixed children like FlowStatePanel anchor to viewport correctly */
 }
 
 /* ── Toast notification ── */
@@ -181,6 +182,21 @@ button { cursor: pointer; }
 .media-pool     { grid-area: media; }
 .viewer-panel   { grid-area: viewer; }
 .inspector-panel{ grid-area: inspector; }
+/* timeline-area-wrapper contains ai-quick-bar + storyboard + timeline panel */
+.timeline-area-wrapper {
+  grid-area: timeline;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: #161616;
+}
+/* when timeline-panel is inside the wrapper it fills remaining space */
+.timeline-area-wrapper > .timeline-panel {
+  flex: 1;
+  min-height: 0;
+  grid-area: unset; /* override grid-area since parent is now a flex container */
+}
 .timeline-panel { grid-area: timeline; }
 .timeline-vertical-resizer {
   grid-area: tl-resize;

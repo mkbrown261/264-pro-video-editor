@@ -852,6 +852,7 @@ export default function App() {
       const bounds = shell.getBoundingClientRect();
       const newH = Math.max(140, Math.min(560, bounds.bottom - e.clientY));
       setTimelineHeight(newH);
+      try { localStorage.setItem("264pro_timeline_height", String(newH)); } catch {}
     };
     const onUp = () => setIsResizingTimeline(false);
     window.addEventListener("mousemove", onMove);
@@ -1848,8 +1849,19 @@ export default function App() {
               />
             </div>{/* /inspector-collapse */}
 
+            {/* Timeline resize handle — stays in grid-area: tl-resize */}
+            <div
+              className={`timeline-vertical-resizer${isResizingTimeline ? " dragging" : ""}`}
+              onMouseDown={(e) => { e.preventDefault(); setIsResizingTimeline(true); }}
+              title="Drag to resize timeline"
+              role="separator"
+            />
+
+            {/* ── Timeline area wrapper — all timeline content in one grid cell ── */}
+            <div className="timeline-area-wrapper">
+
             {/* AI Quick Action Bar — shown when a clip is selected */}
-            {selectedClipId && activePage === "edit" && (
+            {selectedClipId && (
               <div className="ai-quick-bar">
                 <span className="ai-quick-label">CLIP</span>
                 <button className="ai-quick-btn" type="button" title="Split at playhead (Ctrl+B)"
@@ -1879,14 +1891,6 @@ export default function App() {
                 </button>
               </div>
             )}
-
-            {/* Timeline resize handle */}
-            <div
-              className={`timeline-vertical-resizer${isResizingTimeline ? " dragging" : ""}`}
-              onMouseDown={(e) => { e.preventDefault(); setIsResizingTimeline(true); }}
-              title="Drag to resize timeline"
-              role="separator"
-            />
 
             {/* Storyboard view (toggle with G key) */}
             {storyboardOpen && (
@@ -1964,6 +1968,7 @@ export default function App() {
               onRemoveMarker={(id) => removeMarker(id)}
               onUpdateMarker={(id, updates) => updateMarker(id, updates)}
             />
+            </div>{/* /timeline-area-wrapper */}
           </>
         )}
 

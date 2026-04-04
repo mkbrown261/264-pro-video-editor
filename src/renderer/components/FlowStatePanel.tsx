@@ -188,17 +188,18 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
   return (
     <div
       style={{
-        position: "absolute",
+        position: "fixed",
         top: 0,
         right: 0,
-        width: 320,
-        height: "100%",
+        width: 340,
+        height: "100vh",
         background: "#0f1117",
-        borderLeft: "1px solid rgba(255,255,255,0.07)",
+        borderLeft: "1px solid rgba(255,255,255,0.10)",
         display: "flex",
         flexDirection: "column",
-        zIndex: 200,
+        zIndex: 9999,
         fontFamily: "'Inter', 'SF Pro Text', system-ui, sans-serif",
+        boxShadow: "-8px 0 32px rgba(0,0,0,0.6)",
       }}
     >
       {/* ── Header ── */}
