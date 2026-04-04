@@ -250,6 +250,10 @@ export function usePlaybackController({
   // Only one sync is allowed at a time; if a new one starts, the old one's
   // results are discarded (via the generation counter below).
   const syncGenerationRef = useRef(0);
+  // True while startPlaybackAtFrame is in progress — prevents the scrub effect
+  // (which fires when playheadFrame changes) from racing the play-start syncVideo
+  // and winning the generation counter, leaving the video paused at the wrong frame.
+  const startingPlaybackRef = useRef(false);
 
   // ── Auto-invalidate lastLoadedVideoUrlRef on external video reset ─────────
   // ViewerPanel may call video.src = x; video.load() to show a media-pool
@@ -369,6 +373,17 @@ export function usePlaybackController({
       const urlChanged = lastLoadedVideoUrlRef.current !== nextUrl;
       const targetTime = getTargetCurrentTime(segment, frame, stateRef.current.sequenceFps);
 
+      // ── Hide video element during load+seek to prevent frame-0 flash ──────
+      // When the URL changes (new clip), element.load() resets currentTime to 0
+      // and the browser may paint frame 0 before the seek to targetTime completes.
+      // Also hide when seeking from a wrong position (e.g., outOfBounds recovery).
+      // We restore visibility immediately before play()/pause() so the first
+      // correctly-positioned frame is the first thing the user sees.
+      const needsHide = urlChanged;
+      if (needsHide) {
+        media.style.visibility = "hidden";
+      }
+
       if (urlChanged) {
         detachTrimGuard();
         // ── Fast path when the lookahead pre-loaded this URL ─────────────
@@ -390,7 +405,7 @@ export function usePlaybackController({
           syncVideoLoadingRef.current = false;
         }
         lastLoadedVideoUrlRef.current = nextUrl;
-        if (isStale()) return false; // a newer sync started while we awaited
+        if (isStale()) { media.style.visibility = "visible"; return false; }
       }
 
       // Always seek when:
@@ -404,9 +419,16 @@ export function usePlaybackController({
       const needsSeek = urlChanged || !shouldPlay || outOfBounds ||
         timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
       if (needsSeek) {
+        // Also hide during an out-of-bounds seek so we don't flash the wrong frame
+        if (!needsHide && outOfBounds) media.style.visibility = "hidden";
         await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
-        if (isStale()) return false; // a newer sync started while we awaited
+        if (isStale()) { media.style.visibility = "visible"; return false; }
       }
+
+      // Seek (and load) are complete — the correct frame is now decoded and
+      // ready in the element's frame buffer.  Restore visibility so the user
+      // sees the correct first frame, never frame 0.
+      media.style.visibility = "visible";
 
       if (shouldPlay) {
         const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
@@ -425,6 +447,8 @@ export function usePlaybackController({
       stateRef.current.onPlaybackMessage?.(null);
       return true;
     } catch (error) {
+      // Always restore visibility on error to avoid leaving the viewer blank
+      if (videoRef.current) videoRef.current.style.visibility = "visible";
       stateRef.current.onPlaybackMessage?.(getPlaybackErrorMessage(error));
       return false;
     }
@@ -454,29 +478,40 @@ export function usePlaybackController({
     const { segments: segs } = stateRef.current;
     const targetVideo = findActiveVideoSegmentAtFrame(segs, frame);
 
+    // Block the scrub effect from racing us: while startingPlaybackRef is true,
+    // the scrub effect's syncVideo call is skipped.  This prevents the scrub
+    // effect (triggered by setPlayheadFrame below) from winning the generation
+    // counter and leaving the video paused instead of playing.
+    startingPlaybackRef.current = true;
+
     // Reset anchor; null out timestamp so RAF doesn't run ahead during load/seek
     stateRef.current.playbackAnchorFrame = frame;
     stateRef.current.playbackStartedAt = null;   // ← set AFTER load completes
     stateRef.current.playheadFrame = frame;
     stateRef.current.setPlayheadFrame(frame);
 
-    // Load, seek and play video + audio.  This may take a moment
-    // (canplay + seeked events).  We MUST NOT start the RAF clock until
-    // both are ready, otherwise elapsed time accumulates during load and
-    // the playhead jumps forward the moment playback actually begins.
-    await Promise.all([
-      syncVideo(targetVideo, frame, true),
-      startAudio(frame)
-    ]);
+    try {
+      // Load, seek and play video + audio.  This may take a moment
+      // (canplay + seeked events).  We MUST NOT start the RAF clock until
+      // both are ready, otherwise elapsed time accumulates during load and
+      // the playhead jumps forward the moment playback actually begins.
+      await Promise.all([
+        syncVideo(targetVideo, frame, true),
+        startAudio(frame)
+      ]);
 
-    // ↓ Stamp the clock AFTER media is loaded & playing — this is the
-    //   authoritative zero-point for the RAF loop.
-    stateRef.current.playbackStartedAt = performance.now();
-    stateRef.current.playbackAnchorFrame = frame;  // anchor stays at start frame
+      // ↓ Stamp the clock AFTER media is loaded & playing — this is the
+      //   authoritative zero-point for the RAF loop.
+      stateRef.current.playbackStartedAt = performance.now();
+      stateRef.current.playbackAnchorFrame = frame;  // anchor stays at start frame
 
-    if (!stateRef.current.isPlaying) {
-      stateRef.current.isPlaying = true;
-      stateRef.current.setPlaybackPlaying(true);
+      if (!stateRef.current.isPlaying) {
+        stateRef.current.isPlaying = true;
+        stateRef.current.setPlaybackPlaying(true);
+      }
+    } finally {
+      // Always release the guard so the scrub effect resumes for future scrubs
+      startingPlaybackRef.current = false;
     }
   }
 
@@ -645,6 +680,10 @@ export function usePlaybackController({
   // rapid scrubbing don't produce stale seeks that overwrite the latest frame.
   useEffect(() => {
     if (isPlaying) return;
+    // Skip if startPlaybackAtFrame is in progress — the play-start syncVideo
+    // owns the generation counter during startup and must not be interrupted
+    // by this effect firing when playheadFrame is updated by setPlayheadFrame.
+    if (startingPlaybackRef.current) return;
     void syncVideo(activeSegment, playheadFrame, false);
     // Audio scrub is handled by useMultiTrackAudio's own effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
