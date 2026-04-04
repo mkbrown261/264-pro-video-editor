@@ -1017,7 +1017,13 @@ export default function App() {
     pendingActionRef.current = null;
     if (action === "new") _doNewProject();
     else if (action === "open") await handleOpenProject(true);
-    else if (action === "close") { void window.editorApi?.confirmClose(); }
+    else if (action === "close") {
+      // Mark project as clean FIRST so the browser beforeunload handler doesn't
+      // block Electron from closing the window after confirmClose() fires.
+      setProjectDirty(false);
+      // Small tick to let React flush the state update before the window closes
+      setTimeout(() => { void window.editorApi?.confirmClose(); }, 50);
+    }
   }
 
   function renderSaveConfirmModal() {
@@ -1429,7 +1435,9 @@ export default function App() {
 
   const shellStyle = {
     "--left-panel-width": mediaPoolOpen ? `${leftPanelWidth}px` : "0px",
+    "--left-resizer-width": mediaPoolOpen ? "3px" : "0px",
     "--right-panel-width": inspectorOpen ? `${rightPanelWidth}px` : "0px",
+    "--right-resizer-width": inspectorOpen ? "3px" : "0px",
     "--timeline-height": `${timelineHeight}px`
   } as CSSProperties;
 

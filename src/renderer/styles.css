@@ -146,7 +146,8 @@ button { cursor: pointer; }
 .app-shell {
   display: grid;
   position: relative;
-  grid-template-columns: var(--left-panel-width, 280px) 3px minmax(460px, 1fr) 3px var(--right-panel-width, 280px);
+  transition: grid-template-columns 0.18s ease, grid-template-rows 0.18s ease;
+  grid-template-columns: var(--left-panel-width, 280px) var(--left-resizer-width, 3px) minmax(240px, 1fr) var(--right-resizer-width, 3px) var(--right-panel-width, 280px);
   grid-template-rows: minmax(240px, 1fr) 5px var(--timeline-height, 220px);
   grid-template-areas:
     "media      left-resizer  viewer        right-resizer inspector"
@@ -5438,16 +5439,15 @@ kbd {
 .panel-collapse-wrap {
   display: contents; /* pass-through by default */
 }
-.panel-collapse-wrap.media-collapse { grid-area: media; display: flex; flex-direction: column; min-height: 0; overflow: hidden; transition: opacity 0.15s; }
-.panel-collapse-wrap.inspector-collapse { grid-area: inspector; display: flex; flex-direction: column; min-height: 0; overflow: hidden; transition: opacity 0.15s; }
-.panel-collapse-wrap.closed { opacity: 0; pointer-events: none; }
-.panel-resizer-hidden { opacity: 0; pointer-events: none; }
+.panel-collapse-wrap.media-collapse { grid-area: media; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel-collapse-wrap.inspector-collapse { grid-area: inspector; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+/* Fully remove the wrapper from the grid when closed so the column collapses to 0 */
+.panel-collapse-wrap.closed { display: none !important; }
+.panel-resizer-hidden { display: none !important; }
 
-/* Override grid to collapse left/right columns when panels are hidden */
-.app-shell[style*="--left-panel-width: 0px"] .left-resizer,
-.app-shell[style*="--left-panel-width: 0px"] .media-pool { display: none; }
-.app-shell[style*="--right-panel-width: 0px"] .right-resizer,
-.app-shell[style*="--right-panel-width: 0px"] .inspector-panel { display: none; }
+/* Also hide resizers when their corresponding panel column is 0 */
+.app-shell[style*="--left-panel-width: 0px"] .left-resizer { display: none !important; }
+.app-shell[style*="--right-panel-width: 0px"] .right-resizer { display: none !important; }
 
 /* ══════════════════════════════════════════════════════════════════════════════
    IMP 7: VERTICAL TOOL TOOLBAR — lives inside .viewer-with-toolbar
