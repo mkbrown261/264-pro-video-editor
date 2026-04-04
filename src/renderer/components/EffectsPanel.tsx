@@ -1107,6 +1107,66 @@ const EFFECT_LIBRARY: EffectDef[] = [
       { key: "intensity", label: "Intensity", type: "range", min: 0, max: 1, step: 0.01 },
       { key: "frequency", label: "Frequency", type: "range", min: 1, max: 30, step: 1 }
     ]
+  },
+  // ── AI Processing ─────────────────────────────────────────────────────────
+  {
+    type: "ai_upscale",
+    label: "AI Upscale 2x",
+    category: "AI",
+    icon: "⬆",
+    description: "AI-powered 2x resolution upscaling using Real-ESRGAN",
+    defaultParams: { scale: 2, model: "realesrgan" },
+    paramDefs: [
+      { key: "scale", label: "Scale", type: "range", min: 2, max: 4, step: 2 },
+      { key: "model", label: "Model", type: "select", options: ["realesrgan", "esrgan"] }
+    ]
+  },
+  {
+    type: "ai_denoise",
+    label: "AI Denoise",
+    category: "AI",
+    icon: "✦",
+    description: "Temporal AI noise reduction for clean footage",
+    defaultParams: { strength: 0.7, temporal: true },
+    paramDefs: [
+      { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "temporal", label: "Temporal", type: "toggle" }
+    ]
+  },
+  {
+    type: "ai_stabilize",
+    label: "AI Stabilize",
+    category: "AI",
+    icon: "⊕",
+    description: "AI camera shake stabilization with crop compensation",
+    defaultParams: { strength: 0.8, cropRatio: 0.05 },
+    paramDefs: [
+      { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "cropRatio", label: "Crop", type: "range", min: 0, max: 0.2, step: 0.01 }
+    ]
+  },
+  {
+    type: "ai_face_enhance",
+    label: "AI Face Enhance",
+    category: "AI",
+    icon: "◉",
+    description: "Restore and enhance facial detail using CodeFormer",
+    defaultParams: { strength: 0.85, model: "codeformer" },
+    paramDefs: [
+      { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "model", label: "Model", type: "select", options: ["codeformer", "gfpgan"] }
+    ]
+  },
+  {
+    type: "ai_color_match",
+    label: "AI Color Match",
+    category: "AI",
+    icon: "◈",
+    description: "Match color grade to a reference image or LUT style",
+    defaultParams: { strength: 1.0, reference: "" },
+    paramDefs: [
+      { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 }
+    ]
   }
 ];
 

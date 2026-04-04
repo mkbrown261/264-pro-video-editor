@@ -1992,6 +1992,42 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_upscale", enabled: true, params: { scale: 2, model: "realesrgan" } });
+                          showToast("AI Upscale 2x — applies on export");
+                        }
+                      }}>Upscale 2x (AI)</button>
+
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_denoise", enabled: true, params: { strength: 0.7, temporal: true } });
+                          showToast("AI Denoise — reduces noise on export");
+                        }
+                      }}>Denoise (AI)</button>
+
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_stabilize", enabled: true, params: { strength: 0.8, cropRatio: 0.05 } });
+                          showToast("AI Stabilize — smooths camera shake on export");
+                        }
+                      }}>Stabilize (AI)</button>
+
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_face_enhance", enabled: true, params: { strength: 0.85, model: "codeformer" } });
+                          showToast("AI Face Enhance — restores facial detail on export");
+                        }
+                      }}>Face Enhance (AI)</button>
+
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
                           addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "filmnoise", enabled: true, params: { intensity: 0.4, grainSize: 1.2 } });
                           showToast("Film noise effect added");
                         }

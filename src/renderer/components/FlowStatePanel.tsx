@@ -62,13 +62,120 @@ const TIER_COLOR: Record<string, string> = {
   enterprise: "#f59e0b",
 };
 
+// ── Learning Intelligence Engine ──────────────────────────────────────────────
+interface LearningObservation {
+  message: string;
+  ts: number;
+  wasError: boolean;
+}
+
+interface GeneratedResource {
+  id: string;
+  type: "video_script" | "explanation" | "cheat_sheet";
+  topic: string;
+  level: "beginner" | "intermediate" | "advanced";
+  content: string;
+  ts: number;
+}
+
+interface LearningState {
+  observations: LearningObservation[];
+  detectedLevel: "beginner" | "intermediate" | "advanced" | null;
+  confusionTopic: string | null;
+  suggestionPending: boolean;
+  lastSuggestionTs: number;
+  generatedResources: GeneratedResource[];
+}
+
+class LearningEngine {
+  state: LearningState = {
+    observations: [],
+    detectedLevel: null,
+    confusionTopic: null,
+    suggestionPending: false,
+    lastSuggestionTs: 0,
+    generatedResources: [],
+  };
+
+  observe(message: string): void {
+    const isError = /error|why|not working|broken|how do i|doesn.t work|confused|stuck|help|wrong|fail/i.test(message);
+    this.state.observations = [
+      ...this.state.observations.slice(-9),
+      { message, ts: Date.now(), wasError: isError },
+    ];
+  }
+
+  detectConfusion(): { confused: boolean; topic: string | null } {
+    const recent = this.state.observations.slice(-5);
+    if (recent.length < 2) return { confused: false, topic: null };
+    const errorCount = recent.filter(o => o.wasError).length;
+    if (errorCount >= 2) {
+      const topic = this.extractTopic(recent.filter(o => o.wasError).map(o => o.message).join(" "));
+      return { confused: true, topic };
+    }
+    const words = recent.map(o => new Set(o.message.toLowerCase().split(/\s+/).filter((w: string) => w.length > 4)));
+    let overlapCount = 0;
+    for (let i = 0; i < words.length - 1; i++) {
+      const overlap = [...words[i]].filter(w => words[i+1].has(w));
+      if (overlap.length >= 2) overlapCount++;
+    }
+    if (overlapCount >= 2) {
+      return { confused: true, topic: this.extractTopic(recent.map(o => o.message).join(" ")) };
+    }
+    return { confused: false, topic: null };
+  }
+
+  detectLevel(): "beginner" | "intermediate" | "advanced" {
+    const msgs = this.state.observations.map(o => o.message.toLowerCase()).join(" ");
+    if (/architect|optimize|scale|performance|typescript|async|concurrent|race condition|memory leak|refactor|design system/.test(msgs)) return "advanced";
+    if (/function|component|state|props|hook|useeffect|async|promise|fetch|loop|array|object|class/.test(msgs)) return "intermediate";
+    if (/how do i|what is|where is|getting started|install|first time|don.t understand|explain|what does/.test(msgs)) return "beginner";
+    return "intermediate";
+  }
+
+  private extractTopic(text: string): string {
+    const stopWords = new Set(["the","is","a","an","to","for","in","on","at","of","and","or","but","not","this","that","with","from","how","what","why","when","where"]);
+    const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !stopWords.has(w));
+    const freq: Record<string, number> = {};
+    for (const w of words) freq[w] = (freq[w] || 0) + 1;
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0] ?? "this topic";
+  }
+
+  shouldSuggest(): boolean {
+    if (this.state.suggestionPending) return false;
+    if (Date.now() - this.state.lastSuggestionTs < 60000) return false;
+    return this.detectConfusion().confused;
+  }
+
+  markSuggested(): void {
+    this.state.suggestionPending = true;
+    this.state.lastSuggestionTs = Date.now();
+    this.state.confusionTopic = this.detectConfusion().topic;
+  }
+
+  markDismissed(): void { this.state.suggestionPending = false; }
+
+  addResource(resource: GeneratedResource): void {
+    this.state.generatedResources = [resource, ...this.state.generatedResources].slice(0, 20);
+    this.state.suggestionPending = false;
+  }
+
+  get resources(): GeneratedResource[] { return this.state.generatedResources; }
+  get topic(): string | null { return this.state.confusionTopic; }
+  get level(): "beginner" | "intermediate" | "advanced" { return this.state.detectedLevel ?? this.detectLevel(); }
+  get pendingSuggestion(): boolean { return this.state.suggestionPending; }
+}
+
+const learningEngine = new LearningEngine();
+
 // ── Main component ────────────────────────────────────────────────────────────
 interface FlowStatePanelProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type Tab = "assistant" | "projects" | "session";
+type Tab = "assistant" | "projects" | "session" | "learn";
 
 export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
   const [user, setUser] = useState<FSUser | null>(null);
@@ -87,6 +194,12 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
 
   // Session state
   const [sessionMsg, setSessionMsg] = useState<string | null>(null);
+
+  // Learning state
+  const [suggestionBanner, setSuggestionBanner] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [activeResource, setActiveResource] = useState<GeneratedResource | null>(null);
+  const [, forceUpdate] = React.useReducer(x => x + 1, 0);
 
   const project = useEditorStore((s) => s.project);
 
@@ -145,6 +258,7 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
     const text = chatInput.trim();
     if (!text || chatBusy) return;
     setChatInput("");
+    learningEngine.observe(text);
     const userMsg: ChatMessage = { role: "user", content: text, ts: Date.now() };
     setMessages((m) => [...m, userMsg]);
     setChatBusy(true);
@@ -161,6 +275,10 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
       })) as any;
       const reply = res?.reply ?? res?.message ?? "Sorry, I couldn't get a response.";
       setMessages((m) => [...m, { role: "assistant", content: reply, ts: Date.now() }]);
+      if (learningEngine.shouldSuggest()) {
+        learningEngine.markSuggested();
+        setSuggestionBanner(learningEngine.topic ?? "this topic");
+      }
     } catch {
       setMessages((m) => [
         ...m,
@@ -186,6 +304,67 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
       ...payload,
     });
   }, [project]);
+
+  // ── Generate learning resource ─────────────────────────────────────────────
+  async function handleGenerateResource(topicOverride?: string) {
+    const topic = topicOverride ?? learningEngine.topic ?? "this concept";
+    const level = learningEngine.level;
+    const durationDesc = level === "beginner" ? "5-6 minute" : level === "intermediate" ? "5-7 minute" : "6-8 minute";
+    const styleDesc = level === "beginner" ? "getting-started overview" : level === "intermediate" ? "practical walkthrough" : "architecture and system-level explanation";
+
+    const prompt = `You are generating a learning resource for a ${level} developer confused about: "${topic}".
+
+Generate a ${durationDesc} ${styleDesc}. Use this structure:
+
+## ${topic} — ${styleDesc}
+
+**Duration:** ${durationDesc}
+**Level:** ${level}
+
+### The Core Idea
+[2-3 sentences that cut through the confusion]
+
+### What You Need First
+[3-5 bullet prerequisite points]
+
+### Step by Step
+[5-8 numbered clear steps]
+
+### Common Mistakes
+[3 concrete mistakes with fixes]
+
+### Quick Reference
+[Code snippet if relevant]
+
+### The Takeaway
+[One sentence that locks in the learning]
+
+Be specific, not generic. Surprising insights only.`;
+
+    setIsGenerating(true);
+    try {
+      const result = await fsApi.apiCall("/api/chat/stream", "POST", {
+        messages: [{ role: "user", content: prompt }],
+        model: "gpt-4o",
+      }) as { content?: string; choices?: Array<{ message: { content: string } }> };
+      const content = (result as any)?.content ?? (result as any)?.choices?.[0]?.message?.content ?? "Unable to generate resource.";
+      const resource: GeneratedResource = {
+        id: `res_${Date.now()}`,
+        type: level === "advanced" ? "explanation" : level === "intermediate" ? "explanation" : "video_script",
+        topic,
+        level,
+        content,
+        ts: Date.now(),
+      };
+      learningEngine.addResource(resource);
+      setActiveResource(resource);
+      setTab("learn");
+    } catch {
+      // silent fail
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (!isOpen) return null;
@@ -382,7 +561,7 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
               flexShrink: 0,
             }}
           >
-            {(["assistant", "projects", "session"] as Tab[]).map((t) => (
+            {(["assistant", "projects", "session", "learn"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -400,7 +579,7 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
                   textTransform: "capitalize",
                 }}
               >
-                {t === "assistant" ? "🤖 AI" : t === "projects" ? "📁 Projects" : "⚡ Session"}
+                {t === "assistant" ? "🤖 AI" : t === "projects" ? "📁 Projects" : t === "session" ? "⚡ Session" : "📚 Learn"}
               </button>
             ))}
           </div>
@@ -475,6 +654,19 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
                 )}
                 <div ref={chatEndRef} />
               </div>
+
+              {/* Suggestion banner */}
+              {suggestionBanner && (
+                <div className="fs-learn-banner">
+                  <span>Want me to break down <strong>{suggestionBanner}</strong>?</span>
+                  <button onClick={() => { void handleGenerateResource(); setSuggestionBanner(null); }}>
+                    Generate
+                  </button>
+                  <button className="fs-learn-dismiss" onClick={() => { setSuggestionBanner(null); learningEngine.markDismissed(); }}>
+                    x
+                  </button>
+                </div>
+              )}
 
               {/* Input */}
               <div
@@ -658,6 +850,80 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
                   }}
                 >
                   {sessionMsg}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tab: Learn ── */}
+          {tab === "learn" && (
+            <div className="fs-learn-tab">
+              <div className="fs-learn-header">
+                <span>Learning Resources</span>
+                <button
+                  className="fs-learn-gen-btn"
+                  onClick={() => {
+                    const topic = window.prompt("What do you want to learn about?");
+                    if (topic) void handleGenerateResource(topic);
+                  }}
+                  disabled={isGenerating}
+                >
+                  {isGenerating ? "Generating..." : "+ Generate"}
+                </button>
+              </div>
+              <div className="fs-learn-level-row">
+                <span className="fs-learn-level-label">Level:</span>
+                {(["beginner", "intermediate", "advanced"] as const).map(lvl => (
+                  <button
+                    key={lvl}
+                    className={"fs-learn-level-btn" + (learningEngine.level === lvl ? " active" : "")}
+                    onClick={() => { learningEngine.state.detectedLevel = lvl; forceUpdate(); }}
+                  >
+                    {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                  </button>
+                ))}
+              </div>
+              {activeResource ? (
+                <div className="fs-learn-resource">
+                  <div className="fs-resource-meta">
+                    <span className="fs-resource-type">{activeResource.type.replace("_", " ")}</span>
+                    <span className="fs-resource-level">{activeResource.level}</span>
+                    <span className="fs-resource-topic">{activeResource.topic}</span>
+                    <button className="fs-resource-back" onClick={() => setActiveResource(null)}>Back</button>
+                  </div>
+                  <div className="fs-resource-content">
+                    {activeResource.content.split(/\n(?=#{1,3} )/).map((section, i) => {
+                      const lines = section.split("\n");
+                      const heading = lines[0].replace(/^#{1,3}\s*/, "");
+                      const body = lines.slice(1).join("\n");
+                      const isH1 = lines[0].startsWith("# ");
+                      const isH2 = lines[0].startsWith("## ");
+                      return (
+                        <div key={i} className={"fs-section " + (isH1 ? "h1" : isH2 ? "h2" : "h3")}>
+                          <div className="fs-section-heading">{heading}</div>
+                          <div className="fs-section-body">{body}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="fs-learn-list">
+                  {learningEngine.resources.length === 0 ? (
+                    <div className="fs-learn-empty">
+                      <p>No resources yet.</p>
+                      <p>Chat with the AI assistant and it will automatically detect when you need help and offer to generate a breakdown.</p>
+                      <p>Or click Generate above to create one on any topic.</p>
+                    </div>
+                  ) : (
+                    learningEngine.resources.map(r => (
+                      <button key={r.id} className="fs-resource-card" onClick={() => setActiveResource(r)}>
+                        <div className="fs-rc-type">{r.type.replace("_", " ")}</div>
+                        <div className="fs-rc-topic">{r.topic}</div>
+                        <div className="fs-rc-meta">{r.level} - {new Date(r.ts).toLocaleDateString()}</div>
+                      </button>
+                    ))
+                  )}
                 </div>
               )}
             </div>
