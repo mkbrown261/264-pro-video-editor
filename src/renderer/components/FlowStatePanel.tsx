@@ -103,16 +103,21 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
   // ── Sync project context when panel opens ──────────────────────────────────
   useEffect(() => {
     if (!isOpen || !user) return;
-    const clips = project.tracks.flatMap((t) => t.clips);
+    const tracks = project.sequence?.tracks ?? [];
+    const clips = project.sequence?.clips ?? [];
+    const settings = project.sequence?.settings ?? {};
+    const fps = settings.fps || 30;
+    const width = settings.width || 1920;
+    const height = settings.height || 1080;
     const ctx = {
       projectId: `local_${Date.now()}`,
       projectName: project.name ?? "Untitled Project",
-      totalDurationSec: project.durationFrames / (project.fps || 30),
-      trackCount: project.tracks.length,
+      totalDurationSec: clips.length > 0 ? (Math.max(...clips.map((c: any) => (c.startFrame ?? 0) + (c.durationFrames ?? 0))) / fps) : 0,
+      trackCount: tracks.length,
       clipCount: clips.length,
-      assetTypes: [...new Set(clips.map((c) => (c as any).assetType ?? "video"))],
-      fps: project.fps,
-      resolution: `${project.width}×${project.height}`,
+      assetTypes: [...new Set(clips.map((c: any) => c.assetType ?? "video"))],
+      fps,
+      resolution: `${width}×${height}`,
       lastModified: new Date().toISOString(),
     };
     void fsApi.apiCall("/api/264pro/context-sync", "POST", ctx);
@@ -149,9 +154,9 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
         messages: history,
         projectContext: {
           projectName: project.name ?? "Untitled",
-          trackCount: project.tracks.length,
-          fps: project.fps,
-          resolution: `${project.width}×${project.height}`,
+          trackCount: project.sequence?.tracks?.length ?? 0,
+          fps: project.sequence?.settings?.fps ?? 30,
+          resolution: `${project.sequence?.settings?.width ?? 1920}×${project.sequence?.settings?.height ?? 1080}`,
         },
       })) as any;
       const reply = res?.reply ?? res?.message ?? "Sorry, I couldn't get a response.";
@@ -414,8 +419,8 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
                   flexShrink: 0,
                 }}
               >
-                📎 Context: {project.name ?? "Untitled"} · {project.tracks.length} tracks ·{" "}
-                {project.fps}fps · {project.width}×{project.height}
+                📎 Context: {project.name ?? "Untitled"} · {project.sequence?.tracks?.length ?? 0} tracks ·{" "}
+                {project.sequence?.settings?.fps ?? 30}fps · {project.sequence?.settings?.width ?? 1920}×{project.sequence?.settings?.height ?? 1080}
               </div>
 
               {/* Messages */}
@@ -600,7 +605,7 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
                   {project.name ?? "Untitled Project"}
                 </div>
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", lineHeight: 1.7 }}>
-                  {project.tracks.length} tracks · {project.fps}fps · {project.width}×{project.height}
+                  {project.sequence?.tracks?.length ?? 0} tracks · {project.sequence?.settings?.fps ?? 30}fps · {project.sequence?.settings?.width ?? 1920}×{project.sequence?.settings?.height ?? 1080}
                 </div>
               </div>
 

@@ -50,14 +50,23 @@ const FusionViewer: React.FC<{
   // Load the clip's video into our local video element
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !asset) return;
-    const src = asset.originalPath || asset.proxyPath || (asset as any).src || "";
+    if (!video) return;
+    if (!asset) {
+      video.src = "";
+      setVideoReady(false);
+      return;
+    }
+    // Use the same field the main ViewerPanel uses — previewUrl is the Electron-accessible path
+    const src = asset.previewUrl || (asset as any).sourcePath || (asset as any).src || "";
     if (!src) return;
-    if (video.src !== src) {
+    // Only reload when src actually changes
+    if (video.getAttribute("data-loaded-src") !== src) {
+      video.setAttribute("data-loaded-src", src);
+      setVideoReady(false);
       video.src = src;
       video.load();
     }
-  }, [asset?.id]);
+  }, [asset?.id, asset?.previewUrl]);
 
   // Seek to the correct frame when frame or clip changes
   useEffect(() => {

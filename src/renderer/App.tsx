@@ -238,7 +238,9 @@ export default function App() {
 
   // ── AI Quick Bar dropdown ──────────────────────────────────────────────────
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
+  const [aiMenuPos, setAiMenuPos] = useState({ bottom: 0, right: 0 });
   const aiMenuRef = useRef<HTMLDivElement | null>(null);
+  const aiBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // Close AI menu on outside click
   useEffect(() => {
@@ -1963,15 +1965,22 @@ export default function App() {
                 <div className="ai-quick-sep" />
                 <div style={{ position: "relative" }} ref={aiMenuRef}>
                   <button
+                    ref={aiBtnRef}
                     className={`ai-quick-btn ai${aiMenuOpen ? " active" : ""}`}
                     type="button"
                     title="AI operations"
-                    onClick={() => setAiMenuOpen(o => !o)}
+                    onClick={() => {
+                      if (aiBtnRef.current) {
+                        const r = aiBtnRef.current.getBoundingClientRect();
+                        setAiMenuPos({ bottom: window.innerHeight - r.top + 4, right: window.innerWidth - r.right });
+                      }
+                      setAiMenuOpen(o => !o);
+                    }}
                   >
                     🤖 AI ▾
                   </button>
                   {aiMenuOpen && (
-                    <div className="ai-quick-dropdown">
+                    <div className="ai-quick-dropdown" style={{ bottom: aiMenuPos.bottom, right: aiMenuPos.right }}>
                       <div className="ai-qdrop-header">AI Tools</div>
                       <button className="ai-qdrop-item" onClick={() => {
                         setAiMenuOpen(false);
