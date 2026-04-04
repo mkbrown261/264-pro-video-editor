@@ -355,6 +355,18 @@ function clampPlayhead(project: EditorProjectState, frame: number): number {
   return Math.max(0, Math.min(Math.round(frame), totalFrames - 1));
 }
 
+/**
+ * resolveTrackLayout — NON-magnetic layout resolver.
+ *
+ * Clips keep their requested startFrame positions. We only nudge a clip
+ * forward if it actually overlaps the clip that ends immediately before it.
+ * Clips that have a gap between them are left in place (no back-filling).
+ *
+ * This preserves:
+ *   - Split clip halves staying at their split positions
+ *   - Gaps between clips (intentional black holes)
+ *   - Only the moved/dropped clip's neighbours are adjusted
+ */
 function resolveTrackLayout(project: EditorProjectState, trackId: string): EditorProjectState {
   const assetsById = new Map(project.assets.map((a) => [a.id, a]));
   const fps = project.sequence.settings.fps;
@@ -366,15 +378,18 @@ function resolveTrackLayout(project: EditorProjectState, trackId: string): Edito
              project.sequence.clips.findIndex((c) => c.id === b.id);
     });
 
-  let cursor = 0;
   const resolved = new Map<string, TimelineClip>();
+  let prevEnd = 0; // end frame of the previously placed clip
+
   for (const clip of ordered) {
     const asset = assetsById.get(clip.assetId);
-    if (!asset) { resolved.set(clip.id, clip); continue; }
+    if (!asset) { resolved.set(clip.id, clip); prevEnd = Math.max(prevEnd, clip.startFrame); continue; }
     const dur = getClipDurationFrames(clip, asset, fps);
-    const start = Math.max(cursor, Math.max(0, clip.startFrame));
+    // Only push forward if this clip would overlap the previous one.
+    // If there's a gap (clip.startFrame >= prevEnd) we keep it as-is.
+    const start = Math.max(0, clip.startFrame >= prevEnd ? clip.startFrame : prevEnd);
     resolved.set(clip.id, { ...clip, startFrame: start });
-    cursor = start + dur;
+    prevEnd = start + dur;
   }
 
   return {
@@ -915,35 +930,108 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Move Clip", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip) return state;
-      // BUG 4: Resolve overlaps by snapping to nearest free position on target track
       const asset = state.project.assets.find((a) => a.id === clip.assetId);
-      if (asset) {
-        const dur = getClipDurationFrames(clip, asset, state.project.sequence.settings.fps);
-        startFrame = findNearestFreePosition(state.project, trackId, Math.max(0, startFrame), dur, clipId);
-      }
+      if (!asset) return state;
+
+      const fps = state.project.sequence.settings.fps;
+      const dur = getClipDurationFrames(clip, asset, fps);
+      const dropStart = Math.max(0, startFrame);
+      const dropEnd = dropStart + dur;
+
+      // ── Remove the dragged clip (and its linked partners) from current position ──
       const linked = getLinkedClips(state.project, clipId);
-      const delta = Math.max(0, startFrame) - clip.startFrame;
       const linkedIds = new Set(linked.map((c) => c.id));
+
+      // Clips remaining on the target track after removing the dragged clip
+      const otherTrackClips = state.project.sequence.clips.filter(
+        (c) => c.trackId === trackId && !linkedIds.has(c.id)
+      );
+
+      // ── Check if drop site overlaps any other clip on the target track ──
+      const hasOverlap = otherTrackClips.some((c) => {
+        const cAsset = state.project.assets.find((a) => a.id === c.assetId);
+        if (!cAsset) return false;
+        const cDur = getClipDurationFrames(c, cAsset, fps);
+        return !(c.startFrame >= dropEnd || c.startFrame + cDur <= dropStart);
+      });
+
+      let newClips: TimelineClip[];
+
+      if (hasOverlap) {
+        // ── RIPPLE INSERT: split overlapped clips and insert the moved clip ──
+        // Step 1: carve the drop zone out of any clips on the target track
+        const rightStubs: TimelineClip[] = [];
+        const carved = state.project.sequence.clips
+          .filter((c) => !linkedIds.has(c.id)) // remove dragged clip first
+          .map((c) => {
+            if (c.trackId !== trackId) return c;
+            const cAsset = state.project.assets.find((a) => a.id === c.assetId);
+            if (!cAsset) return c;
+            const cDur = getClipDurationFrames(c, cAsset, fps);
+            const cStart = c.startFrame;
+            const cEnd = cStart + cDur;
+
+            if (cEnd <= dropStart || cStart >= dropEnd) return c; // no overlap
+
+            // Completely swallowed
+            if (cStart >= dropStart && cEnd <= dropEnd) return null as unknown as TimelineClip;
+
+            // Left edge overlap — trim end
+            if (cStart < dropStart && cEnd > dropStart && cEnd <= dropEnd) {
+              const kept = dropStart - cStart;
+              return { ...c, trimEndFrames: c.trimEndFrames + (cDur - kept) };
+            }
+
+            // Right edge overlap — trim start, shift right
+            if (cStart >= dropStart && cStart < dropEnd && cEnd > dropEnd) {
+              const lost = dropEnd - cStart;
+              return { ...c, startFrame: dropEnd, trimStartFrames: c.trimStartFrames + lost };
+            }
+
+            // Drop zone inside clip — split into left + right stubs
+            if (cStart < dropStart && cEnd > dropEnd) {
+              const leftKept = dropStart - cStart;
+              const leftClip: TimelineClip = { ...c, trimEndFrames: c.trimEndFrames + (cDur - leftKept) };
+              const rightLost = dropEnd - cStart;
+              const rightClip: TimelineClip = {
+                ...c,
+                id: createId(),
+                startFrame: dropEnd,
+                trimStartFrames: c.trimStartFrames + rightLost,
+              };
+              rightStubs.push(rightClip);
+              return leftClip;
+            }
+
+            return c;
+          })
+          .filter(Boolean);
+
+        // Add the moved clip at dropStart
+        const movedClip = { ...clip, trackId, startFrame: dropStart };
+        newClips = [...carved, ...rightStubs, movedClip];
+      } else {
+        // ── FREE MOVE: no overlap — place exactly at dropStart ──
+        newClips = state.project.sequence.clips.map((c) => {
+          if (!linkedIds.has(c.id)) return c;
+          if (c.id === clipId) return { ...c, trackId, startFrame: dropStart };
+          // Linked clips (e.g. audio) keep their relative offset
+          const delta = dropStart - clip.startFrame;
+          return { ...c, startFrame: Math.max(0, c.startFrame + delta) };
+        });
+      }
+
       const trackIds = [...linked.map((c) => c.trackId), trackId];
-      const next = resolveTracks(
-        {
-          ...state.project,
-          sequence: {
-            ...state.project.sequence,
-            clips: state.project.sequence.clips.map((c) => {
-              if (!linkedIds.has(c.id)) return c;
-              if (c.id === clipId) return { ...c, trackId, startFrame: Math.max(0, startFrame) };
-              return { ...c, startFrame: Math.max(0, c.startFrame + delta) };
-            })
-          }
-        },
+      const nextProject = resolveTracks(
+        { ...state.project, sequence: { ...state.project.sequence, clips: newClips } },
         trackIds
       );
+
       return {
-        project: next,
+        project: nextProject,
         selectedClipId: clipId,
         selectedAssetId: clip.assetId,
-        playback: { ...state.playback, playheadFrame: clampPlayhead(next, state.playback.playheadFrame) }
+        playback: { ...state.playback, playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame) }
       };
     }));
   },

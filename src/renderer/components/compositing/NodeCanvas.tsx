@@ -221,15 +221,35 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     const rect = containerRef.current!.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    setZoom(z => {
-      const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
-      setPan(p => ({
-        x: mx - (mx - p.x) * (nz / z),
-        y: my - (my - p.y) * (nz / z),
-      }));
-      return nz;
-    });
+
+    // Shift+wheel = horizontal pan
+    if (e.shiftKey) {
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      setPan(p => ({ x: p.x - delta, y: p.y }));
+      return;
+    }
+
+    // Ctrl/Meta+wheel OR plain vertical = zoom around cursor
+    if (e.ctrlKey || e.metaKey || e.deltaX === 0) {
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      setZoom(z => {
+        const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
+        setPan(p => ({
+          x: mx - (mx - p.x) * (nz / z),
+          y: my - (my - p.y) * (nz / z),
+        }));
+        return nz;
+      });
+      return;
+    }
+
+    // Two-finger trackpad horizontal scroll (deltaX) = horizontal pan
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+    } else {
+      // Vertical scroll = pan vertically
+      setPan(p => ({ x: p.x, y: p.y - e.deltaY }));
+    }
   }, []);
 
   // ── Mouse events ──────────────────────────────────────────────────────────
@@ -916,24 +936,51 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       {ctxMenu && (
         <div
           className="nc-context-menu"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          style={{
+            left: Math.min(ctxMenu.x, (containerRef.current?.clientWidth ?? 800) - 180),
+            top: Math.min(ctxMenu.y, (containerRef.current?.clientHeight ?? 600) - 240),
+          }}
           onMouseDown={e => e.stopPropagation()}
         >
-          {ctxMenu.nodeId && (
+          {ctxMenu.nodeId && (() => {
+            const node = graph.nodes.find(n => n.id === ctxMenu.nodeId);
+            return (
+              <>
+                <div className="nc-ctx-header">
+                  <span className="nc-ctx-node-type">{node?.type ?? "Node"}</span>
+                  <span className="nc-ctx-node-label">{node?.label}</span>
+                </div>
+                <hr />
+                <button title="Enable/disable this node without removing it" onClick={() => toggleBypass(ctxMenu.nodeId!)}>
+                  {node?.bypassed ? "✓ Enable Node" : "⊘ Bypass Node"}
+                </button>
+                <button title="Remove all wires connected to this node" onClick={() => disconnectWires(ctxMenu.nodeId!)}>
+                  ✂ Disconnect Wires
+                </button>
+                <hr />
+                <button title="Duplicate selected nodes (Ctrl+D)" onClick={duplicateSelected}>⧉ Duplicate</button>
+                <button title="Copy selected nodes (Ctrl+C)" onClick={copySelected}>⎘ Copy</button>
+                <button className="danger" title="Delete selected nodes (Del)" onClick={deleteSelected}>🗑 Delete</button>
+                <hr />
+              </>
+            );
+          })()}
+          {!ctxMenu.nodeId && (
             <>
-              <button onClick={() => toggleBypass(ctxMenu.nodeId!)}>Toggle Bypass</button>
-              <button onClick={() => disconnectWires(ctxMenu.nodeId!)}>Disconnect Wires</button>
-              <button onClick={duplicateSelected}>Duplicate</button>
-              <button onClick={copySelected}>Copy</button>
-              <button className="danger" onClick={deleteSelected}>Delete</button>
+              <div className="nc-ctx-header"><span className="nc-ctx-node-type">Canvas</span></div>
               <hr />
             </>
           )}
-          <button onClick={openAddMenu}>Add Node…</button>
+          <button title="Open the add-node menu at this position (right-click or +)" onClick={openAddMenu}>＋ Add Node…</button>
           {clipboard.current.length > 0 && (
-            <button onClick={pasteClipboard}>Paste ({clipboard.current.length})</button>
+            <button title={`Paste ${clipboard.current.length} copied node(s) (Ctrl+V)`} onClick={pasteClipboard}>
+              ⎘ Paste ({clipboard.current.length})
+            </button>
           )}
-          <button onClick={fitToView}>Fit to View</button>
+          <button title="Zoom and pan to fit all nodes (F)" onClick={fitToView}>⊞ Fit to View</button>
+          <button title="Select all nodes (Ctrl+A)" onClick={() => { onSelectNodes(graph.nodes.map(n => n.id)); setCtxMenu(null); }}>
+            ◻ Select All
+          </button>
         </div>
       )}
 

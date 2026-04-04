@@ -1853,7 +1853,12 @@ export default function App() {
             <div
               className={`timeline-vertical-resizer${isResizingTimeline ? " dragging" : ""}`}
               onMouseDown={(e) => { e.preventDefault(); setIsResizingTimeline(true); }}
-              title="Drag to resize timeline"
+              onDoubleClick={() => {
+                const defaultH = 220;
+                setTimelineHeight(defaultH);
+                try { localStorage.setItem("264pro_timeline_height", String(defaultH)); } catch {}
+              }}
+              title="Drag to resize timeline · Double-click to reset"
               role="separator"
             />
 
@@ -2126,7 +2131,7 @@ export default function App() {
               allClips={project.sequence.clips}
               sequenceSettings={project.sequence.settings}
               playheadFrame={playback.playheadFrame}
-              videoRef={viewerPanelRef as unknown as React.RefObject<HTMLVideoElement | null>}
+              videoRef={viewerVideoRef}
               onUpdateGraph={(clipId, graph) => setCompGraph(clipId, graph)}
               onBack={() => setActivePage("edit")}
             />

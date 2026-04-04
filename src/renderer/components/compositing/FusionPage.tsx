@@ -41,6 +41,7 @@ const FusionViewer: React.FC<{
 }> = ({ graph, videoRef, frame }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CompRenderer | null>(null);
+  const [hasWebGL, setHasWebGL] = useState(false);
 
   // Initialize / re-initialize renderer
   useLayoutEffect(() => {
@@ -49,9 +50,11 @@ const FusionViewer: React.FC<{
     try {
       rendererRef.current?.dispose();
       rendererRef.current = new CompRenderer(canvas);
+      setHasWebGL(true);
     } catch {
       // WebGL not available in this context; graceful fallback
       rendererRef.current = null;
+      setHasWebGL(false);
     }
     return () => {
       rendererRef.current?.dispose();
@@ -75,27 +78,55 @@ const FusionViewer: React.FC<{
 
     try {
       renderer.render(graph);
-    } catch (err) {
+    } catch {
       // Silently skip render errors during composition
     }
   }, [graph, frame, videoRef]);
 
   return (
     <div className="fusion-viewer">
-      {graph ? (
-        <canvas
-          ref={canvasRef}
-          className="fusion-viewer-canvas"
-          width={1920}
-          height={1080}
-        />
-      ) : (
+      {/* Always show the video as the base layer */}
+      <video
+        ref={videoRef}
+        className="fusion-viewer-video"
+        muted
+        playsInline
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          background: "#000",
+          // Hide only when WebGL canvas is doing a full override
+          opacity: hasWebGL && graph ? 0 : 1,
+          pointerEvents: "none",
+        }}
+      />
+      {/* WebGL comp output overlaid on top */}
+      <canvas
+        ref={canvasRef}
+        className="fusion-viewer-canvas"
+        width={1920}
+        height={1080}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          opacity: hasWebGL && graph ? 1 : 0,
+          pointerEvents: "none",
+        }}
+      />
+      {!graph && (
         <div className="fusion-viewer-empty">
-          <span>No comp graph — select a clip and open Fusion</span>
+          <span>No comp graph — open a clip in Fusion</span>
         </div>
       )}
       <div className="fusion-viewer-info">
-        {graph && <span>Frame {frame}</span>}
+        <span>Frame {frame}</span>
+        {graph && <span style={{ marginLeft: 8, opacity: 0.5 }}>{graph.nodes.length} nodes</span>}
       </div>
     </div>
   );

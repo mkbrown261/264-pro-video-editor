@@ -7231,26 +7231,48 @@ kbd {
   position: relative;
   overflow: hidden;
   background: #050508;
+  min-height: 0;
+}
+.fusion-viewer-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  pointer-events: none;
 }
 .fusion-viewer-canvas {
-  max-width: 100%;
-  max-height: 100%;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
+  pointer-events: none;
 }
 .fusion-viewer-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #444;
   font-size: 0.75rem;
   text-align: center;
   padding: 20px;
+  pointer-events: none;
 }
 .fusion-viewer-info {
   position: absolute;
   bottom: 6px;
   left: 8px;
   font-size: 0.6rem;
-  color: rgba(245,197,66,0.5);
+  color: rgba(245,197,66,0.6);
   pointer-events: none;
+  background: rgba(0,0,0,0.4);
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 
 /* ── Inspector pane ───────────────────────────────────────────────── */
@@ -7409,13 +7431,36 @@ kbd {
 /* ── Context menu ─────────────────────────────────────────────────── */
 .nc-context-menu {
   position: absolute;
-  z-index: 100;
+  z-index: 200;
   background: #1a1a26;
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 7px;
   padding: 4px;
-  min-width: 160px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+  min-width: 180px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.8);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+.nc-ctx-header {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px 4px;
+  gap: 1px;
+}
+.nc-ctx-node-type {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #f5c542;
+  opacity: 0.8;
+}
+.nc-ctx-node-label {
+  font-size: 0.72rem;
+  color: #e0e0e0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .nc-context-menu button {
   display: block;
@@ -7423,15 +7468,16 @@ kbd {
   text-align: left;
   background: none;
   border: none;
-  color: #ddd;
+  color: #ccc;
   padding: 6px 10px;
   cursor: pointer;
-  font-size: 0.68rem;
-  border-radius: 3px;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s;
 }
-.nc-context-menu button:hover { background: rgba(255,215,0,0.08); color: #f5c542; }
+.nc-context-menu button:hover { background: rgba(255,215,0,0.1); color: #f5c542; }
 .nc-context-menu button.danger { color: #ff7070; }
-.nc-context-menu button.danger:hover { background: rgba(220,50,50,0.15); }
+.nc-context-menu button.danger:hover { background: rgba(220,50,50,0.15); color: #ff9090; }
 .nc-context-menu hr { border: none; border-top: 1px solid rgba(255,255,255,0.07); margin: 3px 0; }
 
 /* ── Add node menu ────────────────────────────────────────────────── */
