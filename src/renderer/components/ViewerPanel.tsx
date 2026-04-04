@@ -99,90 +99,121 @@ function getActiveTransitionState(activeSegment: TimelineSegment | null, frame: 
   return              { type: activeSegment.clip.transitionOut?.type ?? "fade", edge: "out", amount: outAmt, progress: 1 - outAmt };
 }
 
-// Note: videoStyle may contain a `transitionFilter` string property (not a real CSS property).
-// The ViewerPanel merges it into the final CSS `filter` alongside grade/effects filters.
+// getTransitionPreviewStyles returns three style objects:
+//   overlayStyle  — applied to the transition-overlay <div> (color overlays, flashes)
+//   videoStyle    — applied to the <video> element (opacity, clipPath, CSS filters)
+//   wrapperStyle  — applied to the video wrapper <div> (transform: translate/rotate/scale)
+//                   The wrapper has overflow:hidden so transforms that move video
+//                   off-screen don't bleed outside the stage.
+//
+// IMPORTANT: `transform` must never go on the <video> element itself because:
+//   1. It can physically rotate/move the element in the DOM layout, breaking masking.
+//   2. `overflow:hidden` on the wrapper clips translations at the stage boundary.
+type TransitionStyles = {
+  overlayStyle: CSSProperties;
+  videoStyle: CSSProperties & { transitionFilter?: string };
+  wrapperStyle: CSSProperties; // transform applied to wrapper, not video
+};
+const NO_TRANSITION: TransitionStyles = { overlayStyle: { opacity: 0 }, videoStyle: {}, wrapperStyle: {} };
+function w(transform: string): TransitionStyles { return { overlayStyle: { opacity: 0 }, videoStyle: {}, wrapperStyle: { transform } }; }
+function wOpacity(transform: string, opacity: number): TransitionStyles { return { overlayStyle: { opacity: 0 }, videoStyle: { opacity }, wrapperStyle: { transform } }; }
+
 function getTransitionPreviewStyles(
   ts: ActiveTransitionState | null,
   frame: number
-): { overlayStyle: CSSProperties; videoStyle: CSSProperties & { transitionFilter?: string } } {
-  if (!ts) return { overlayStyle: { opacity: 0 }, videoStyle: {} };
+): TransitionStyles {
+  if (!ts) return NO_TRANSITION;
   const { amount, edge, type } = ts;
+  // amount: 1 = fully in transition (clip change just happened), 0 = transition done
+  // For "in" edge: amount goes 1 → 0 as the incoming clip appears
+  // For "out" edge: amount goes 1 → 0 as the outgoing clip disappears
   const jx = Math.sin(frame * 1.37) * amount * 22;
   const jy = Math.cos(frame * 1.11) * amount * 12;
   switch (type) {
+    // ── Dissolves / Opacity transitions ─────────────────────────────────
     case "fade":
-    case "crossDissolve": return { overlayStyle: { background: "#000", opacity: amount * 0.86 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
-    case "dipBlack":      return { overlayStyle: { background: "#000", opacity: Math.min(1, amount * 1.1) }, videoStyle: {} };
-    case "dipWhite":      return { overlayStyle: { background: "#fff", opacity: Math.min(1, amount * 1.1) }, videoStyle: {} };
+    case "crossDissolve":    return { overlayStyle: { background: "#000", opacity: amount * 0.86 }, videoStyle: { opacity: Math.max(0, 1 - amount) }, wrapperStyle: {} };
+    case "dipBlack":         return { overlayStyle: { background: "#000", opacity: Math.min(1, amount * 1.1) }, videoStyle: {}, wrapperStyle: {} };
+    case "dipWhite":         return { overlayStyle: { background: "#fff", opacity: Math.min(1, amount * 1.1) }, videoStyle: {}, wrapperStyle: {} };
+    case "dipColor":         return { overlayStyle: { background: "#800080", opacity: Math.min(1, amount * 1.1) }, videoStyle: {}, wrapperStyle: {} };
+    case "luminanceDissolve":return { overlayStyle: { background: "#fff", opacity: amount * 0.5 }, videoStyle: { opacity: Math.max(0, 1 - amount) }, wrapperStyle: {} };
+    case "filmDissolve":     return { overlayStyle: { background: `linear-gradient(135deg,rgba(${Math.floor(200+frame%55)},${Math.floor(100+frame%80)},50,0.5),rgba(0,0,0,0.7))`, opacity: amount * 0.7 }, videoStyle: { opacity: Math.max(0, 1 - amount) }, wrapperStyle: {} };
+    case "additiveDissolve": return { overlayStyle: { background: "#fff", opacity: amount * amount * 0.6 }, videoStyle: { opacity: Math.max(0, 1 - amount * 0.8) }, wrapperStyle: {} };
+    // ── Wipes (clipPath on video, no transform) ──────────────────────
     case "wipe":
-    case "wipeLeft":   return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 ${amount*100}% 0 0)` : `inset(0 0 0 ${amount*100}%)` } };
-    case "wipeRight":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 0 0 ${amount*100}%)` : `inset(0 ${amount*100}% 0 0)` } };
-    case "wipeUp":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(${amount*100}% 0 0 0)` : `inset(0 0 ${amount*100}% 0)` } };
-    case "wipeDown":   return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 0 ${amount*100}% 0)` : `inset(${amount*100}% 0 0 0)` } };
+    case "wipeLeft":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(0 ${amount*100}% 0 0)` : `inset(0 0 0 ${amount*100}%)` }, wrapperStyle: {} };
+    case "wipeRight":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(0 0 0 ${amount*100}%)` : `inset(0 ${amount*100}% 0 0)` }, wrapperStyle: {} };
+    case "wipeUp":       return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(${amount*100}% 0 0 0)` : `inset(0 0 ${amount*100}% 0)` }, wrapperStyle: {} };
+    case "wipeDown":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(0 0 ${amount*100}% 0)` : `inset(${amount*100}% 0 0 0)` }, wrapperStyle: {} };
+    case "wipeDiagTL":   return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `polygon(0 0,${(1-amount)*100}% 0,0 ${(1-amount)*100}%)` : `polygon(0 0,100% 0,100% 100%,0 100%,0 ${amount*100}%,${amount*100}% 0)` }, wrapperStyle: {} };
+    case "wipeDiagTR":   return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `polygon(100% 0,100% ${(1-amount)*100}%,${100-(1-amount)*100}% 0)` : `polygon(0 0,100% 0,100% 100%,0 100%,${(1-amount)*100}% 0,100% ${(1-amount)*100}%)` }, wrapperStyle: {} };
+    case "wipeRadial":   return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `circle(${(1-amount)*100}% at 50% 50%)` : `circle(${amount*100}% at 50% 50%)` }, wrapperStyle: {} };
+    case "wipeClock":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `circle(${(1-amount)*80}%)` : `circle(${amount*80}%)` }, wrapperStyle: {} };
+    // wipeStar: rotating clipPath — rotation goes on wrapper (no physical video rotation)
+    case "wipeStar":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)` }, wrapperStyle: { transform: `rotate(${amount*45}deg)`, transformOrigin: "center" } };
+    case "wipeBlinds":   return { overlayStyle: { background: "repeating-linear-gradient(0deg,#000 0px,#000 4px,transparent 4px,transparent 20px)", opacity: amount * 0.9 }, videoStyle: { opacity: Math.max(0, 1 - amount) }, wrapperStyle: {} };
+    case "wipeSplit":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(0 ${amount*50}%)` : `inset(0 ${(1-amount)*50}%)` }, wrapperStyle: {} };
+    // ── Push / Slide (transform on wrapper so overflow:hidden clips the video) ───
     case "pushLeft":
-    case "push":       return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${edge === "in" ? amount*100 : -amount*100}%)` } };
-    case "pushRight":  return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${edge === "in" ? -amount*100 : amount*100}%)` } };
+    case "push":         return w(`translateX(${edge==="in" ? amount*100 : -amount*100}%)`);
+    case "pushRight":    return w(`translateX(${edge==="in" ? -amount*100 : amount*100}%)`);
+    case "pushUp":       return w(`translateY(${edge==="in" ? amount*100 : -amount*100}%)`);
+    case "pushDown":     return w(`translateY(${edge==="in" ? -amount*100 : amount*100}%)`);
+    case "slideLeft":    return wOpacity(`translateX(${edge==="in" ? amount*100 : -amount*100}%)`, Math.max(0, 1 - amount*0.4));
+    case "slideRight":   return wOpacity(`translateX(${edge==="in" ? -amount*100 : amount*100}%)`, Math.max(0, 1 - amount*0.4));
+    case "cover":        return w(`translateX(${edge==="in" ? `${(1-amount)*100}%` : "0"})`);
+    case "uncover":      return w(`translateX(${edge==="out" ? `${amount*-100}%` : "0"})`);
+    // ── Zoom (scale on wrapper — no DOM reflow, stays clipped) ──────────────
     case "zoomIn":
-    case "zoom":       return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${1 + amount*0.25})`, opacity: Math.max(0, 1 - amount*0.6) } };
-    case "zoomOut":    return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { transform: `scale(${Math.max(0.6, 1 - amount*0.25)})`, opacity: Math.max(0, 1 - amount*0.6) } };
-    case "blur":
-    case "blurDissolve":  return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { transitionFilter: `blur(${amount*8}px)`, opacity: Math.max(0.1, 1 - amount*0.5) } };
-    case "shake":         return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translate(${jx}px,${jy}px) scale(${1+amount*0.02}) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)` } };
-    case "rumble":        return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})` } };
+    case "zoom":         return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { opacity: Math.max(0, 1 - amount*0.6) }, wrapperStyle: { transform: `scale(${1 + amount*0.25})`, transformOrigin: "center" } };
+    case "zoomOut":      return { overlayStyle: { background: "#000", opacity: amount * 0.3 }, videoStyle: { opacity: Math.max(0, 1 - amount*0.6) }, wrapperStyle: { transform: `scale(${Math.max(0.6, 1 - amount*0.25)})`, transformOrigin: "center" } };
+    // ── Spin: full 360° rotation (amount=1 → fully rotated, amount=0 → normal) ───
+    // For incoming (edge="in"): start at 180° (amount=1), end at 0° (amount=0) — video spins INTO place
+    // For outgoing (edge="out"): start at 0° (amount=1 means transition just started), end at 180° — video spins OUT
+    case "spinCW":  {
+      const deg = edge==="in" ? amount*180 : (1-amount)*180;
+      return { overlayStyle: { background: "#000", opacity: amount * 0.5 }, videoStyle: { opacity: Math.max(0, 1 - amount * 0.7) }, wrapperStyle: { transform: `rotate(${deg}deg) scale(${Math.max(0.3, 1 - amount*0.5)})`, transformOrigin: "center" } };
+    }
+    case "spinCCW": {
+      const deg = edge==="in" ? -amount*180 : -(1-amount)*180;
+      return { overlayStyle: { background: "#000", opacity: amount * 0.5 }, videoStyle: { opacity: Math.max(0, 1 - amount * 0.7) }, wrapperStyle: { transform: `rotate(${deg}deg) scale(${Math.max(0.3, 1 - amount*0.5)})`, transformOrigin: "center" } };
+    }
+    // ── Motion / Shake (small translations on wrapper, stays inside stage) ───
+    case "shake":    return { overlayStyle: { opacity: 0 }, videoStyle: {}, wrapperStyle: { transform: `translate(${jx}px,${jy}px) rotate(${Math.sin(frame*0.8)*amount*1.8}deg)`, transformOrigin: "center" } };
+    case "rumble":   return { overlayStyle: { background: "radial-gradient(circle,rgba(255,143,61,0.18),rgba(0,0,0,0.45))", opacity: amount*0.7 }, videoStyle: {}, wrapperStyle: { transform: `translate(${Math.sin(frame*0.42)*amount*32}px,${Math.cos(frame*0.57)*amount*18}px) scale(${1+amount*0.04})`, transformOrigin: "center" } };
+    case "whipPan":  { const tx = edge==="in" ? `${(1-amount)*30}%` : `-${amount*30}%`; return { overlayStyle: { opacity: 0 }, videoStyle: { transitionFilter: `blur(${amount*20}px)`, opacity: Math.max(0, 1 - amount*0.4) } as CSSProperties & { transitionFilter?: string }, wrapperStyle: { transform: `translateX(${tx})` } }; }
     case "glitch":
-    case "glitchRgb":     return { overlayStyle: { background: "repeating-linear-gradient(180deg,rgba(95,196,255,0.22) 0px,rgba(95,196,255,0.22) 2px,transparent 2px,transparent 6px)", opacity: amount*0.9, mixBlendMode: "screen" }, videoStyle: { transform: `translate(${Math.sin(frame*3.7)*amount*18}px,${Math.cos(frame*4.4)*amount*8}px) skew(${Math.sin(frame*2.6)*amount*2.5}deg)` } };
+    case "glitchRgb": return { overlayStyle: { background: "repeating-linear-gradient(180deg,rgba(95,196,255,0.22) 0px,rgba(95,196,255,0.22) 2px,transparent 2px,transparent 6px)", opacity: amount*0.9, mixBlendMode: "screen" }, videoStyle: {}, wrapperStyle: { transform: `translate(${Math.sin(frame*3.7)*amount*18}px,${Math.cos(frame*4.4)*amount*8}px) skew(${Math.sin(frame*2.6)*amount*2.5}deg)`, transformOrigin: "center" } };
+    case "vhsRewind":return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.15) 0px,rgba(0,0,0,0.15) 1px,transparent 1px,transparent 4px)", opacity: amount*0.8 }, videoStyle: {}, wrapperStyle: { transform: `translateY(${Math.sin(frame*5)*amount*6}px)` } };
+    // ── Filter-based (no transform) ──────────────────────────────────────
+    case "blur":
+    case "blurDissolve":  return { overlayStyle: { background: "#000", opacity: amount * 0.2 }, videoStyle: { transitionFilter: `blur(${amount*8}px)`, opacity: Math.max(0.1, 1 - amount*0.5) } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
     case "filmBurn":
-    case "lightLeak":     return { overlayStyle: { background: `radial-gradient(circle at ${50+Math.sin(frame)*30}% ${50+Math.cos(frame)*20}%, rgba(255,160,30,0.7) 0%, rgba(0,0,0,0.95) 70%)`, opacity: amount*0.85 }, videoStyle: {} };
-    case "lensFlare":     return { overlayStyle: { background: `radial-gradient(circle at 80% 20%, rgba(255,255,255,0.9) 0%, rgba(100,150,255,0.4) 20%, transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: {} };
-    case "staticNoise":   return { overlayStyle: { background: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`, opacity: amount*0.7 }, videoStyle: {} };
-    case "vhsRewind":     return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.15) 0px,rgba(0,0,0,0.15) 1px,transparent 1px,transparent 4px)", opacity: amount*0.8 }, videoStyle: { transform: `translateY(${Math.sin(frame*5)*amount*6}px)` } };
-    case "oldFilm":       return { overlayStyle: { background: `radial-gradient(ellipse, transparent 70%, rgba(0,0,0,0.7) 100%)`, opacity: amount * 0.6, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `sepia(${amount*0.5}) contrast(${1+amount*0.1})` } };
-    case "whiteFlash":    return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
-    case "blackFlash":    return { overlayStyle: { background: "#000", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
-    case "irisCircle":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)` } };
-    case "irisStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, transitionFilter: "drop-shadow(0 0 2px #fff)" } as CSSProperties & { transitionFilter?: string } };
-    case "irisHeart":     return { overlayStyle: { background: "#000", opacity: amount * 0.9 }, videoStyle: {} };
-    case "diamond":       return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(50% ${amount*100}%, ${100-amount*100}% 50%, 50% ${100-amount*100}%, ${amount*100}% 50%)` : `polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)`, opacity: Math.max(0, 1 - amount*0.3) } };
-    case "wipeRadial":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*100}% at 50% 50%)` : `circle(${amount*100}% at 50% 50%)` } };
-    case "wipeClock":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*80}%)` : `circle(${amount*80}%)` } };
-    case "wipeSplit":     return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 ${amount*50}%)` : `inset(0 ${(1-amount)*50}%)` } };
-    case "pushUp":        return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateY(${edge === "in" ? amount*100 : -amount*100}%)` } };
-    case "pushDown":      return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateY(${edge === "in" ? -amount*100 : amount*100}%)` } };
-    case "slideLeft":     return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${edge === "in" ? amount*100 : -amount*100}%)`, opacity: Math.max(0, 1 - amount*0.4) } };
-    case "slideRight":    return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${edge === "in" ? -amount*100 : amount*100}%)`, opacity: Math.max(0, 1 - amount*0.4) } };
-    case "luminanceDissolve": return { overlayStyle: { background: "#fff", opacity: amount * 0.5 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
-    case "filmDissolve":  return { overlayStyle: { background: `linear-gradient(135deg, rgba(${Math.floor(200+frame%55)},${Math.floor(100+frame%80)},50,0.5), rgba(0,0,0,0.7))`, opacity: amount * 0.7 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
-    case "additiveDissolve": return { overlayStyle: { background: "#fff", opacity: amount * amount * 0.6 }, videoStyle: { opacity: Math.max(0, 1 - amount * 0.8) } };
-    // New basic types
-    case "dipColor":      return { overlayStyle: { background: "#800080", opacity: Math.min(1, amount * 1.1) }, videoStyle: {} };
-    // New wipe types
-    case "wipeDiagTL":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(0 0, ${(1-amount)*100}% 0, 0 ${(1-amount)*100}%)` : `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 ${amount*100}%, ${amount*100}% 0)` } };
-    case "wipeDiagTR":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `polygon(100% 0, 100% ${(1-amount)*100}%, ${100-(1-amount)*100}% 0)` : `polygon(0 0, 100% 0, 100% 100%, 0 100%, ${(1-amount)*100}% 0, 100% ${(1-amount)*100}%)` } };
-    case "wipeStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, transform: `rotate(${amount*45}deg)` } };
-    case "wipeBlinds":    return { overlayStyle: { background: "repeating-linear-gradient(0deg,#000 0px,#000 4px,transparent 4px,transparent 20px)", opacity: amount * 0.9 }, videoStyle: { opacity: Math.max(0, 1 - amount) } };
-    // New push/cover types
-    case "cover":         { const tx = edge === "in" ? `${(1-amount)*100}%` : "0"; return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${tx})` } }; }
-    case "uncover":       { const tx = edge === "out" ? `${amount*-100}%` : "0"; return { overlayStyle: { opacity: 0 }, videoStyle: { transform: `translateX(${tx})` } }; }
-    // New zoom/rotation types
-    case "whipPan":       { const tx = edge === "in" ? `${(1-amount)*30}%` : `-${amount*30}%`; return { overlayStyle: { opacity: 0 }, videoStyle: { transitionFilter: `blur(${amount*20}px)`, transform: `translateX(${tx})`, opacity: Math.max(0, 1 - amount*0.4) } as CSSProperties & { transitionFilter?: string } }; }
-    case "spinCW":        { const deg = edge === "in" ? (1-amount)*180 : amount*180; return { overlayStyle: { background: "#000", opacity: amount * 0.5 }, videoStyle: { transform: `rotate(${deg}deg) scale(${Math.max(0.3, 1 - amount*0.5)})`, opacity: Math.max(0, 1 - amount * 0.7) } }; }
-    case "spinCCW":       { const deg = edge === "in" ? -(1-amount)*180 : -amount*180; return { overlayStyle: { background: "#000", opacity: amount * 0.5 }, videoStyle: { transform: `rotate(${deg}deg) scale(${Math.max(0.3, 1 - amount*0.5)})`, opacity: Math.max(0, 1 - amount * 0.7) } }; }
-    // New stylized types
-    case "prism":         return { overlayStyle: { background: "linear-gradient(135deg,rgba(255,0,0,0.25),rgba(0,255,0,0.25),rgba(0,0,255,0.25))", opacity: amount * 0.8, mixBlendMode: "screen" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `hue-rotate(${amount*180}deg)`, opacity: Math.max(0.1, 1 - amount*0.6) } as CSSProperties & { transitionFilter?: string } };
-    case "vhsStatic":     return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.25) 0px,rgba(0,0,0,0.25) 2px,transparent 2px,transparent 5px)", opacity: amount*0.9, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `saturate(${1-amount*0.8}) contrast(${1+amount*0.3})`, opacity: Math.max(0.1, 1 - amount*0.4) } as CSSProperties & { transitionFilter?: string } };
-    case "chromaShift":   return { overlayStyle: { background: "transparent", opacity: 0 }, videoStyle: { transitionFilter: `hue-rotate(${Math.sin(frame*0.5)*amount*120}deg) saturate(${1+amount*1.5})`, opacity: Math.max(0.2, 1 - amount*0.5) } as CSSProperties & { transitionFilter?: string } };
-    // New shape reveals
-    case "revealSplitH":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(${amount*50}% 0)` : `inset(0 0 ${amount*50}% 0)` } };
-    case "revealSplitV":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge === "in" ? `inset(0 ${amount*50}%)` : `inset(0 ${(1-amount)*50}%)` } };
-    // New cinematic types
-    case "filmFlash":     return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {} };
-    case "exposure":      return { overlayStyle: { background: "#fff", opacity: Math.pow(amount, 2) * 0.95 }, videoStyle: { transitionFilter: `brightness(${1 + amount * 3})` } as CSSProperties & { transitionFilter?: string } };
-    // WebGL transitions — canvas overlays video; CSS provides a subtle fallback
-    case "pixelate":      return { overlayStyle: { opacity: 0 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) } };
-    case "ripple":        return { overlayStyle: { opacity: 0 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) } };
-    case "zoomCross":     return { overlayStyle: { background: "#000", opacity: amount * 0.15 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) } };
-    case "cut":           return { overlayStyle: { opacity: 0 }, videoStyle: {} };
-    default:              return { overlayStyle: { opacity: 0 }, videoStyle: {} };
+    case "lightLeak":     return { overlayStyle: { background: `radial-gradient(circle at ${50+Math.sin(frame)*30}% ${50+Math.cos(frame)*20}%, rgba(255,160,30,0.7) 0%,rgba(0,0,0,0.95) 70%)`, opacity: amount*0.85 }, videoStyle: {}, wrapperStyle: {} };
+    case "lensFlare":     return { overlayStyle: { background: `radial-gradient(circle at 80% 20%,rgba(255,255,255,0.9) 0%,rgba(100,150,255,0.4) 20%,transparent 50%)`, opacity: amount*0.7, mixBlendMode: "screen" }, videoStyle: {}, wrapperStyle: {} };
+    case "staticNoise":   return { overlayStyle: { background: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`, opacity: amount*0.7 }, videoStyle: {}, wrapperStyle: {} };
+    case "oldFilm":       return { overlayStyle: { background: `radial-gradient(ellipse,transparent 70%,rgba(0,0,0,0.7) 100%)`, opacity: amount * 0.6, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `sepia(${amount*0.5}) contrast(${1+amount*0.1})` } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
+    case "prism":         return { overlayStyle: { background: "linear-gradient(135deg,rgba(255,0,0,0.25),rgba(0,255,0,0.25),rgba(0,0,255,0.25))", opacity: amount * 0.8, mixBlendMode: "screen" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `hue-rotate(${amount*180}deg)`, opacity: Math.max(0.1, 1 - amount*0.6) } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
+    case "vhsStatic":     return { overlayStyle: { background: "repeating-linear-gradient(0deg,rgba(0,0,0,0.25) 0px,rgba(0,0,0,0.25) 2px,transparent 2px,transparent 5px)", opacity: amount*0.9, mixBlendMode: "multiply" as CSSProperties["mixBlendMode"] }, videoStyle: { transitionFilter: `saturate(${1-amount*0.8}) contrast(${1+amount*0.3})`, opacity: Math.max(0.1, 1 - amount*0.4) } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
+    case "chromaShift":   return { overlayStyle: { background: "transparent", opacity: 0 }, videoStyle: { transitionFilter: `hue-rotate(${Math.sin(frame*0.5)*amount*120}deg) saturate(${1+amount*1.5})`, opacity: Math.max(0.2, 1 - amount*0.5) } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
+    case "exposure":      return { overlayStyle: { background: "#fff", opacity: Math.pow(amount, 2) * 0.95 }, videoStyle: { transitionFilter: `brightness(${1 + amount * 3})` } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
+    // ── Shape reveals (clipPath) ─────────────────────────────────────
+    case "irisCircle":    return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)` }, wrapperStyle: {} };
+    case "irisStar":      return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `circle(${(1-amount)*70}%)` : `circle(${amount*70}%)`, transitionFilter: "drop-shadow(0 0 2px #fff)" } as CSSProperties & { transitionFilter?: string }, wrapperStyle: {} };
+    case "irisHeart":     return { overlayStyle: { background: "#000", opacity: amount * 0.9 }, videoStyle: {}, wrapperStyle: {} };
+    case "diamond":       return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `polygon(50% ${amount*100}%,${100-amount*100}% 50%,50% ${100-amount*100}%,${amount*100}% 50%)` : `polygon(50% 0%,100% 50%,50% 100%,0% 50%)`, opacity: Math.max(0, 1 - amount*0.3) }, wrapperStyle: {} };
+    case "revealSplitH":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(${amount*50}% 0)` : `inset(0 0 ${amount*50}% 0)` }, wrapperStyle: {} };
+    case "revealSplitV":  return { overlayStyle: { opacity: 0 }, videoStyle: { clipPath: edge==="in" ? `inset(0 ${amount*50}%)` : `inset(0 ${(1-amount)*50}%)` }, wrapperStyle: {} };
+    // ── Flash / cinematic ─────────────────────────────────────────
+    case "whiteFlash":    return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {}, wrapperStyle: {} };
+    case "blackFlash":    return { overlayStyle: { background: "#000", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {}, wrapperStyle: {} };
+    case "filmFlash":     return { overlayStyle: { background: "#fff", opacity: Math.sin(amount * Math.PI) * 0.95 }, videoStyle: {}, wrapperStyle: {} };
+    // ── WebGL — canvas handles rendering; CSS provides a subtle fallback ────
+    case "pixelate":      return { overlayStyle: { opacity: 0 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) }, wrapperStyle: {} };
+    case "ripple":        return { overlayStyle: { opacity: 0 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) }, wrapperStyle: {} };
+    case "zoomCross":     return { overlayStyle: { background: "#000", opacity: amount * 0.15 }, videoStyle: { opacity: Math.max(0.1, 1 - amount * 0.15) }, wrapperStyle: {} };
+    case "cut":           return NO_TRANSITION;
+    default:              return NO_TRANSITION;
   }
 }
 
@@ -444,7 +475,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const timelineReady   = totalFrames > 0;
     const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
     const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
-    const { overlayStyle, videoStyle: rawVideoStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    const { overlayStyle, videoStyle: rawVideoStyle, wrapperStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
     // Extract transitionFilter (blur/sepia from blur & oldFilm transitions) before spreading videoStyle onto <video>
     const { transitionFilter, ...videoStyle } = rawVideoStyle as CSSProperties & { transitionFilter?: string };
     const currentMasks    = activeSegment?.clip.masks ?? [];
@@ -570,34 +601,45 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           {previewAsset ? (
             <>
               {/*
-                * Single <video> element with CSS filter applied for color grading.
-                * No canvas or WebGL — the browser compositor applies the filter on
-                * the GPU. Adjusting any wheel/slider updates `gradeFilter` instantly
-                * on the next React render without any RAF loop or texture uploads.
+                * The video is wrapped in a clipping container so that transitions
+                * using transform (push, slide, spin, shake, etc.) don't visually
+                * bleed outside the stage boundary.  All transform-based styles are
+                * applied to the wrapper; filter + opacity + clipPath stay on the
+                * <video> element itself.
                 *
-                * Transition effects that previously set videoStyle.filter (blur,
-                * shake, dipBlack, etc.) are now handled separately via overlayStyle
-                * only, so they don't conflict with the grade filter.
+                * overflow:hidden on the wrapper clips translateX/Y translations.
+                * transform-origin:center ensures spin/zoom pivot around the centre.
                 */}
-              <video
-                ref={videoRef}
-                className="viewer-video"
-                controls={false}
+              <div
+                className="viewer-video-wrapper"
                 style={{
-                  opacity: previewOpacity,
-                  // merge grade filter + effects filter + transition filter into single CSS filter string
-                  // (transitionFilter is extracted separately and NOT spread via videoStyle to avoid overwrites)
-                  filter: [
-                    gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : "",
-                    effectsFilter,
-                    transitionFilter ?? "",
-                  ].filter(Boolean).join(" ") || undefined,
-                  ...videoStyle,
+                  position: "absolute",
+                  inset: 0,
+                  overflow: "hidden",
+                  transformOrigin: "center",
+                  ...wrapperStyle,
                 }}
-                muted={true}
-                playsInline
-                preload="auto"
-              />
+              >
+                <video
+                  ref={videoRef}
+                  className="viewer-video"
+                  controls={false}
+                  style={{
+                    opacity: previewOpacity,
+                    // merge grade filter + effects filter + transition filter into single CSS filter string
+                    // (transitionFilter is extracted separately and NOT spread via videoStyle to avoid overwrites)
+                    filter: [
+                      gradeStyle.cssFilter !== "none" ? gradeStyle.cssFilter : "",
+                      effectsFilter,
+                      transitionFilter ?? "",
+                    ].filter(Boolean).join(" ") || undefined,
+                    ...videoStyle,
+                  }}
+                  muted={true}
+                  playsInline
+                  preload="auto"
+                />
+              </div>
             </>
           ) : (
             <div className="viewer-empty">

@@ -74,10 +74,14 @@ const SEEK_TIMEOUT_MS       = 2000;
 /** Frames ahead of a segment start to begin prefetching + pre-playing. */
 const LOOKAHEAD_FRAMES      = 90;     // ~3 s at 30 fps
 /** How many frames before the seam we start the incoming element (muted). */
-const PRE_PLAY_FRAMES       = 8;      // ~267 ms at 30 fps — enough to clear play() latency
-/** Gain ramp durations for seam crossfade (seconds). */
-const FADE_OUT_S            = 0.04;   // 40 ms — tight, no smearing
-const FADE_IN_S             = 0.03;   // 30 ms — fast attack, no click
+const PRE_PLAY_FRAMES       = 12;     // ~400 ms at 30 fps — longer runway clears play() + seek latency
+/** Gain ramp durations for seam crossfade (seconds).
+ *  Equal-power crossfade: both ramps have the same duration so they overlap
+ *  and sum to constant perceived loudness across the seam. */
+const FADE_OUT_S            = 0.060;  // 60 ms outgoing ramp — tight but pop-free
+const FADE_IN_S             = 0.060;  // 60 ms incoming ramp — matches outgoing for equal-power
+/** Hard-cut micro-ramp: prevents DC-offset click on instant cuts (5 ms). */
+const HARD_CUT_RAMP_S       = 0.005;  // 5 ms — inaudible ramp, zero-crossing protection
 
 // ── shared AudioContext singleton (created lazily after a user gesture) ───────
 let sharedCtx: AudioContext | null = null;
@@ -124,7 +128,8 @@ function getOrCreateRoute(
 }
 
 /**
- * Schedule a sample-accurate gain ramp using the AudioContext clock.
+ * Schedule a sample-accurate LINEAR gain ramp using the AudioContext clock.
+ * Use for fade-out (linear taper sounds natural on attenuation).
  */
 function rampGain(
   route: AudioRoute,
@@ -140,6 +145,35 @@ function rampGain(
     route.gainNode.gain.linearRampToValueAtTime(toVal, now + durationSecs);
   } catch {
     route.gainNode.gain.value = toVal;
+  }
+}
+
+/**
+ * Equal-power (constant-power) fade-in ramp.
+ * Uses an exponential curve so that as the outgoing clip fades linearly,
+ * the combined perceived loudness stays constant across the seam:
+ *   out_gain(t) = cos(t * π/2),  in_gain(t) = sin(t * π/2)
+ * where t goes 0→1.  We approximate this with setValueCurveAtTime
+ * using a 32-point sine curve.
+ */
+function rampGainEqualPower(
+  route: AudioRoute,
+  ctx: AudioContext,
+  durationSecs: number
+): void {
+  try {
+    const now    = ctx.currentTime;
+    const STEPS  = 32;
+    const curve  = new Float32Array(STEPS);
+    for (let i = 0; i < STEPS; i++) {
+      curve[i] = Math.sin((i / (STEPS - 1)) * (Math.PI / 2));
+    }
+    route.gainNode.gain.cancelScheduledValues(now);
+    route.gainNode.gain.setValueAtTime(0, now);
+    route.gainNode.gain.setValueCurveAtTime(curve, now, Math.max(0.001, durationSecs));
+  } catch {
+    // Fallback to linear if curve method unavailable
+    rampGain(route, ctx, 0, 1, durationSecs);
   }
 }
 
@@ -384,30 +418,31 @@ export function useMultiTrackAudio({
             slot.segment.endFrame === incoming.startFrame
         );
 
-        if (shouldPlay && ctx && !isAdjacentHardCut) {
+        if (shouldPlay && ctx) {
           const route = getOrCreateRoute(ctx, slot.element);
           if (route) {
-            rampGain(route, ctx, route.gainNode.gain.value, 0, FADE_OUT_S);
+            // Always ramp gain to 0 — even on hard cuts use a 5ms micro-ramp
+            // to prevent the DC-offset click from a waveform that isn't at
+            // zero at the cut point.  5 ms is completely inaudible.
+            const rampDur = isAdjacentHardCut ? HARD_CUT_RAMP_S : FADE_OUT_S;
+            rampGain(route, ctx, route.gainNode.gain.value, 0, rampDur);
             const el = slot.element;
             outgoingReleases.push(new Promise<void>((resolve) => {
               window.setTimeout(() => {
                 el.pause();
                 releaseElement(el);
                 resolve();
-              }, Math.ceil(FADE_OUT_S * 1000) + 5);
+              }, Math.ceil(rampDur * 1000) + 5);
             }));
           } else {
             slot.element.pause();
             releaseElement(slot.element);
           }
         } else {
-          // Hard cut: stop immediately with no fade-out bleed
+          // Not playing — stop immediately (no audible issue when paused)
           if (ctx) {
             const route = getOrCreateRoute(ctx, slot.element);
-            if (route) {
-              // Kill gain immediately to avoid any residual audio
-              setGainImmediate(route, ctx, 0);
-            }
+            if (route) setGainImmediate(route, ctx, 0);
           }
           slot.element.pause();
           releaseElement(slot.element);
@@ -555,8 +590,28 @@ export function useMultiTrackAudio({
         const route = getOrCreateRoute(ctx, element);
         if (route) {
           if (shouldPlay && !slot.fadeInDone) {
-            // Ramp in from 0 → target (whether the element was pre-playing or not)
-            rampGain(route, ctx, 0, targetGain, FADE_IN_S);
+            // Equal-power fade-in: use sine curve for incoming clip so that
+            // outgoing (linear fade-out) + incoming (sine fade-in) ≈ constant
+            // perceived loudness across the seam.  Scale the unit curve to
+            // targetGain so volume-adjusted clips ramp to the correct level.
+            if (targetGain > 0) {
+              // Build a scaled equal-power curve: sin(0..π/2) * targetGain
+              const STEPS = 32;
+              const curve = new Float32Array(STEPS);
+              for (let i = 0; i < STEPS; i++) {
+                curve[i] = Math.sin((i / (STEPS - 1)) * (Math.PI / 2)) * targetGain;
+              }
+              try {
+                const now = ctx.currentTime;
+                route.gainNode.gain.cancelScheduledValues(now);
+                route.gainNode.gain.setValueAtTime(0, now);
+                route.gainNode.gain.setValueCurveAtTime(curve, now, Math.max(0.001, FADE_IN_S));
+              } catch {
+                rampGain(route, ctx, 0, targetGain, FADE_IN_S);
+              }
+            } else {
+              setGainImmediate(route, ctx, 0);
+            }
             slot.fadeInDone    = true;
             slot.isPrePlaying  = false; // now officially audible
           } else {

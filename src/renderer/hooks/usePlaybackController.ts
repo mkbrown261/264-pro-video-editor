@@ -319,8 +319,11 @@ export function usePlaybackController({
       //   - URL just changed (new clip loaded)
       //   - Not playing (scrub / trim preview — always snap to exact position)
       //   - Drift exceeds 2 frames while playing (clock correction)
+      //   - currentTime has overshot the trim end (covers trim-drag while playing)
       const timeDrift = Math.abs(media.currentTime - targetTime);
-      const needsSeek = urlChanged || !shouldPlay ||
+      const outOfBounds = media.currentTime > segment.sourceOutSeconds ||
+        media.currentTime < segment.sourceInSeconds - framesToSeconds(1, stateRef.current.sequenceFps);
+      const needsSeek = urlChanged || !shouldPlay || outOfBounds ||
         timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
       if (needsSeek) {
         await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
