@@ -52,6 +52,8 @@ export interface EditorShortcutOptions {
   onOpenCommandPalette?: () => void;
   // Storyboard
   onToggleStoryboard?: () => void;
+  // Viewer maximize
+  onToggleViewerMaximize?: () => void;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -113,6 +115,7 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onToggleClipEnabled,
         onOpenCommandPalette,
         onToggleStoryboard,
+        onToggleViewerMaximize,
       } = optionsRef.current;
 
       const key = event.key.toLowerCase();
@@ -378,6 +381,12 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         case "g":
           event.preventDefault();
           onToggleStoryboard?.();
+          break;
+
+        // \ (backslash) → maximize/restore viewer (hide panels, shrink timeline)
+        case "\\":
+          event.preventDefault();
+          onToggleViewerMaximize?.();
           break;
 
         // Escape → exit fullscreen or switch to select tool

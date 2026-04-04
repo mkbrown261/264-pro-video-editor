@@ -197,8 +197,60 @@ export default function App() {
   // ── Storyboard ────────────────────────────────────────────────────────────
   const [storyboardOpen, setStoryboardOpen] = useState(false);
 
+  // ── Viewer maximize ────────────────────────────────────────────────────────
+  // When true: both side panels collapse and timeline shrinks to minimum
+  const [viewerMaximized, setViewerMaximized] = useState(false);
+  const preMaximizeState = useRef<{ left: boolean; right: boolean; tlH: number } | null>(null);
+
+  const toggleViewerMaximize = useCallback(() => {
+    setViewerMaximized(v => {
+      if (!v) {
+        // Save current state before maximizing
+        preMaximizeState.current = {
+          left: mediaPoolOpen,
+          right: inspectorOpen,
+          tlH: timelineHeight,
+        };
+        setMediaPoolOpen(false);
+        setInspectorOpen(false);
+        setTimelineHeight(140);
+        try { localStorage.setItem("264pro_inspector_open", "false"); } catch {}
+        try { localStorage.setItem("264pro_media_pool_open", "false"); } catch {}
+        try { localStorage.setItem("264pro_timeline_height", "140"); } catch {}
+      } else {
+        // Restore saved state
+        const prev = preMaximizeState.current;
+        if (prev) {
+          setMediaPoolOpen(prev.left);
+          setInspectorOpen(prev.right);
+          setTimelineHeight(prev.tlH);
+          try { localStorage.setItem("264pro_inspector_open", String(prev.right)); } catch {}
+          try { localStorage.setItem("264pro_media_pool_open", String(prev.left)); } catch {}
+          try { localStorage.setItem("264pro_timeline_height", String(prev.tlH)); } catch {}
+        }
+      }
+      return !v;
+    });
+  }, [mediaPoolOpen, inspectorOpen, timelineHeight]);
+
   // ── FlowState Panel ────────────────────────────────────────────────────────
   const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
+
+  // ── AI Quick Bar dropdown ──────────────────────────────────────────────────
+  const [aiMenuOpen, setAiMenuOpen] = useState(false);
+  const aiMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close AI menu on outside click
+  useEffect(() => {
+    if (!aiMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (aiMenuRef.current && !aiMenuRef.current.contains(e.target as Node)) {
+        setAiMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [aiMenuOpen]);
 
   // ── FlowState Tier ────────────────────────────────────────────────────────
   // Loaded once on mount; governs AI panel access and feature visibility
@@ -710,6 +762,7 @@ export default function App() {
     },
     onOpenCommandPalette: () => setCommandPaletteOpen(v => !v),
     onToggleStoryboard: () => setStoryboardOpen(v => !v),
+    onToggleViewerMaximize: toggleViewerMaximize,
   });
 
   // ── Waveform peak extraction (background, per-asset) ─────────────────────
@@ -1584,6 +1637,15 @@ export default function App() {
         {/* Panel toggle buttons (Imp 1) */}
         <div className="menubar-panel-toggles">
           <button
+            className={`panel-toggle-btn${viewerMaximized ? " on" : ""}`}
+            onClick={toggleViewerMaximize}
+            title="Maximize Viewer (\) — hides panels and shrinks timeline for a full view"
+            type="button"
+            style={viewerMaximized ? { color: "#f5c542", borderColor: "rgba(245,197,66,0.4)", background: "rgba(245,197,66,0.1)" } : {}}
+          >
+            {viewerMaximized ? "⊡ Restore" : "⊞ Maximize"}
+          </button>
+          <button
             className={`panel-toggle-btn${mediaPoolOpen ? " on" : ""}`}
             onClick={() => {
               setMediaPoolOpen((v) => {
@@ -1891,9 +1953,77 @@ export default function App() {
                   🎨 Color
                 </button>
                 <div className="ai-quick-sep" />
-                <button className="ai-quick-btn ai" type="button" title="AI operations (coming soon)">
-                  🤖 AI ▾
-                </button>
+                <div style={{ position: "relative" }} ref={aiMenuRef}>
+                  <button
+                    className={`ai-quick-btn ai${aiMenuOpen ? " active" : ""}`}
+                    type="button"
+                    title="AI operations"
+                    onClick={() => setAiMenuOpen(o => !o)}
+                  >
+                    🤖 AI ▾
+                  </button>
+                  {aiMenuOpen && (
+                    <div className="ai-quick-dropdown">
+                      <div className="ai-qdrop-header">AI Tools</div>
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) { pauseViewerPlayback(); toggleBackgroundRemoval(selectedClipId); showToast("Background removal toggled"); }
+                      }}>
+                        ✂ Remove Background
+                      </button>
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "filmnoise", enabled: true, params: { intensity: 0.4, grainSize: 1.2 } });
+                          showToast("Film noise effect added");
+                        }
+                      }}>
+                        🎞 Add Film Grain
+                      </button>
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "vignette", enabled: true, params: { intensity: 0.5, radius: 0.7, feather: 0.4 } });
+                          showToast("Vignette added");
+                        }
+                      }}>
+                        🔵 Add Vignette
+                      </button>
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) {
+                          pauseViewerPlayback();
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "chromatic_aberration", enabled: true, params: { amount: 3 } });
+                          showToast("Chromatic aberration added");
+                        }
+                      }}>
+                        🌈 Chromatic Aberration
+                      </button>
+                      <div className="ai-qdrop-sep" />
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        if (selectedClipId) { openFusion(selectedClipId); setActivePage("fusion"); }
+                      }}>
+                        ⬡ Open in Fusion
+                      </button>
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        setActivePage("color");
+                      }}>
+                        🎨 Open in Color
+                      </button>
+                      <div className="ai-qdrop-sep" />
+                      <button className="ai-qdrop-item" onClick={() => {
+                        setAiMenuOpen(false);
+                        setFlowstatePanelOpen(true);
+                      }}>
+                        ✨ FlowState AI
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

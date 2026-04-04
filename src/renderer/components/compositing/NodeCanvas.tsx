@@ -102,6 +102,83 @@ function wirePath(
   return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
 }
 
+// ── Node descriptions for right-click tooltip ─────────────────────────────────
+const NODE_DESCRIPTIONS: Partial<Record<string, string>> = {
+  "MediaIn":          "Reads the source video/image clip from the timeline into the node graph.",
+  "MediaOut":         "Outputs the composited result back to the timeline clip.",
+  "Background":       "Generates a solid colour or gradient background layer.",
+  "Text+":            "Advanced text and title generator with animatable parameters.",
+  "Shape":            "Procedural geometric shape generator (rectangle, ellipse, polygon).",
+  "Noise":            "Generates animated noise patterns for textures and mattes.",
+  "ColorCorrector":   "Primary colour correction: lift/gamma/gain, sat, hue, contrast.",
+  "ColorGrade":       "Secondary colour grading with curves and qualifier isolation.",
+  "Hue":              "Shifts, rotates or saturates specific hue ranges.",
+  "Brightness":       "Adjusts overall brightness and contrast.",
+  "Curves":           "Per-channel tone curve adjustment (RGB and master).",
+  "LUT":              "Applies a Look-Up Table colour transform (.cube / .3dl).",
+  "WhiteBalance":     "Corrects colour temperature and tint.",
+  "Exposure":         "Adjusts exposure in stops (linear light).",
+  "Invert":           "Inverts colour channels.",
+  "Threshold":        "Converts image to black & white based on luminance threshold.",
+  "Transform":        "Position, rotation, scale and shear with sub-pixel accuracy.",
+  "Crop":             "Crops the image to a rectangular region.",
+  "Resize":           "Resamples the image to a different resolution.",
+  "Letterbox":        "Adds letterbox/pillarbox bars to change aspect ratio.",
+  "DVE":              "3D-style digital video effect (perspective, rotation, shear).",
+  "Corner Pin":       "Maps the image to four corner control points.",
+  "Merge":            "Alpha-composite two images using standard blend modes.",
+  "MultiMerge":       "Composites multiple layers onto a single output.",
+  "Dissolve":         "Cross-dissolves between two images using a mix value.",
+  "ChannelMerge":     "Combines individual R/G/B/A channels from separate inputs.",
+  "EllipseMask":      "Draws an elliptical matte/mask.",
+  "RectangleMask":    "Draws a rectangular matte/mask.",
+  "BezierMask":       "Draw a freehand bezier spline mask/roto.",
+  "WandMask":         "Smart selection mask based on colour similarity.",
+  "PlanarTracker":    "2D planar motion tracker for corner-pin and roto assistance.",
+  "RotoPaint":        "Frame-by-frame paint and roto with a built-in brush.",
+  "MatteControl":     "Expands, contracts, blurs and combines matte channels.",
+  "Blur":             "Gaussian blur with independent H/V control.",
+  "DirectionalBlur":  "Motion/directional blur at any angle.",
+  "Sharpen":          "Unsharp mask or high-frequency sharpen.",
+  "Defocus":          "Camera lens defocus simulation with bokeh shapes.",
+  "GlowBlur":         "Bloom/glow effect built from a layered blur.",
+  "FilmGrain":        "Adds photographic film grain noise.",
+  "ChromaticAberration": "Splits RGB channels to simulate lens chromatic aberration.",
+  "Vignette":         "Darkens edges to simulate a lens vignette.",
+  "Lens Flare":       "Procedural or image-based lens flare.",
+  "Glow":             "Soft additive glow around bright areas.",
+  "Emboss":           "Surface emboss / relief effect.",
+  "EdgeDetect":       "Extracts edges as a luminance matte.",
+  "ChromaKeyer":      "Green-screen / blue-screen chroma key with spill suppression.",
+  "LumaKeyer":        "Keys based on luminance (light or dark areas).",
+  "DeltaKeyer":       "Advanced difference matte keyer for studio setups.",
+  "Primatte":         "Industry-standard multi-spill chroma key algorithm.",
+  "SpillSuppressor":  "Removes green/blue spill from a keyed subject.",
+  "pEmitter":         "Particle system emitter — birth rate, velocity, spread.",
+  "pKill":            "Kills particles that enter a defined region.",
+  "pBounce":          "Particle deflector/bounce plane.",
+  "pGravity":         "Applies gravitational acceleration to particles.",
+  "pTurbulence":      "Adds turbulent wind noise to particle motion.",
+  "pRender":          "Renders the particle system to an image output.",
+  "Camera3D":         "3D perspective camera for 3D scenes.",
+  "Light":            "Directional, point or spot light for 3D rendering.",
+  "ImagePlane":       "Maps a 2D image onto a 3D plane or surface.",
+  "Shape3D":          "Procedural 3D primitive (cube, sphere, cylinder…).",
+  "Renderer3D":       "Renders 3D geometry and lights to a 2D output.",
+  "ShadowCaster":     "Casts shadows from 3D objects onto other surfaces.",
+  "Pipe Router":      "Invisible routing node — organises wires without processing.",
+  "Note":             "Non-processing annotation/comment node.",
+  "Switch":           "Routes one of two inputs based on a boolean value.",
+  "Switcher":         "Routes one of N inputs based on an integer index.",
+  "Saver":            "Saves the image stream to disk as an image sequence.",
+  "TimeSpeed":        "Retime / speed-change the image stream.",
+  "TimeStretcher":    "Smooth optical-flow retiming for speed ramping.",
+  "Delay":            "Delays the image stream by N frames.",
+  "Custom":           "Custom shader / expression node.",
+  "Expression":       "Evaluates a mathematical expression on channel values.",
+  "ChannelBooleans":  "Boolean operations on individual RGBA channels.",
+};
+
 // ── Category header color ─────────────────────────────────────────────────────
 function catColor(node: CompNode): string {
   // Use NODE_CATEGORY_COLORS if available
@@ -215,23 +292,16 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     });
   }, [graph.nodes]);
 
-  // ── Wheel zoom ────────────────────────────────────────────────────────────
+  // ── Wheel / scroll handling ───────────────────────────────────────────────
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
     const rect = containerRef.current!.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    // Shift+wheel = horizontal pan
-    if (e.shiftKey) {
-      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      setPan(p => ({ x: p.x - delta, y: p.y }));
-      return;
-    }
-
-    // Ctrl/Meta+wheel OR plain vertical = zoom around cursor
-    if (e.ctrlKey || e.metaKey || e.deltaX === 0) {
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    // Ctrl/Meta+wheel = zoom around cursor (most important gesture)
+    if (e.ctrlKey || e.metaKey) {
+      const factor = e.deltaY < 0 ? 1.12 : 0.9;
       setZoom(z => {
         const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
         setPan(p => ({
@@ -243,11 +313,36 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       return;
     }
 
-    // Two-finger trackpad horizontal scroll (deltaX) = horizontal pan
-    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    // Shift+wheel = force horizontal pan
+    if (e.shiftKey) {
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      setPan(p => ({ x: p.x - delta * 1.2, y: p.y }));
+      return;
+    }
+
+    // Trackpad two-finger pan (deltaX present) — pan in both axes
+    if (Math.abs(e.deltaX) > 2) {
       setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+      return;
+    }
+
+    // Plain vertical scroll:
+    // - If it looks like a mouse wheel (large discrete steps) → zoom
+    // - If it looks like a trackpad (small steps) → pan vertically
+    const isMouseWheel = Math.abs(e.deltaY) >= 100 || e.deltaMode === 1;
+    if (isMouseWheel) {
+      // Mouse wheel = zoom (DaVinci style)
+      const factor = e.deltaY < 0 ? 1.12 : 0.9;
+      setZoom(z => {
+        const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
+        setPan(p => ({
+          x: mx - (mx - p.x) * (nz / z),
+          y: my - (my - p.y) * (nz / z),
+        }));
+        return nz;
+      });
     } else {
-      // Vertical scroll = pan vertically
+      // Trackpad single-finger scroll = pan vertically
       setPan(p => ({ x: p.x, y: p.y - e.deltaY }));
     }
   }, []);
@@ -944,12 +1039,16 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
         >
           {ctxMenu.nodeId && (() => {
             const node = graph.nodes.find(n => n.id === ctxMenu.nodeId);
+            const desc = node ? NODE_DESCRIPTIONS[node.type] : undefined;
             return (
               <>
                 <div className="nc-ctx-header">
                   <span className="nc-ctx-node-type">{node?.type ?? "Node"}</span>
                   <span className="nc-ctx-node-label">{node?.label}</span>
                 </div>
+                {desc && (
+                  <div className="nc-ctx-desc">{desc}</div>
+                )}
                 <hr />
                 <button title="Enable/disable this node without removing it" onClick={() => toggleBypass(ctxMenu.nodeId!)}>
                   {node?.bypassed ? "✓ Enable Node" : "⊘ Bypass Node"}

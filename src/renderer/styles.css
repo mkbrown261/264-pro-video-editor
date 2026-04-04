@@ -6575,23 +6575,27 @@ kbd {
 }
 .fusion-top-row {
   display: flex;
-  flex: 0 0 45%;
+  /* flex is set inline via style prop for dynamic resizing */
   min-height: 0;
-  border-bottom: 2px solid rgba(255,255,255,0.07);
+  overflow: hidden;
 }
 .fusion-viewer-pane {
-  flex: 1 1 55%;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   border-right: 1px solid rgba(255,255,255,0.07);
+  overflow: hidden;
 }
 .fusion-inspector-pane {
-  flex: 0 0 38%;
+  /* flex is set inline via style prop for dynamic resizing */
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 200px;
+  max-width: 60%;
   overflow: hidden;
+  border-left: 1px solid rgba(255,255,255,0.06);
 }
 .fusion-inspector-header {
   display: flex;
@@ -6608,6 +6612,34 @@ kbd {
   flex-shrink: 0;
 }
 .fusion-insp-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: #666; }
+
+/* ── Row resizer between top and bottom panels ── */
+.fusion-row-resizer {
+  flex-shrink: 0;
+  height: 5px;
+  background: rgba(255,255,255,0.06);
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  transition: background 0.12s;
+}
+.fusion-row-resizer:hover { background: rgba(79,142,247,0.4); }
+.fusion-row-resizer::before {
+  content: "";
+  width: 40px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(79,142,247,0.5);
+}
+
+.fusion-tb-hint {
+  font-size: 0.62rem;
+  color: #555;
+  white-space: nowrap;
+}
+
 .fusion-canvas-pane {
   flex: 1;
   display: flex;
@@ -7208,15 +7240,16 @@ kbd {
 }
 .fusion-top-row {
   display: flex;
-  flex: 0 0 48%;
+  /* flex is set inline via style prop for dynamic resizing */
   min-height: 0;
-  border-bottom: 2px solid rgba(255,255,255,0.06);
+  overflow: hidden;
 }
 
 /* ── Viewer pane ──────────────────────────────────────────────────── */
 .fusion-viewer-pane {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #0a0a0f;
@@ -7277,12 +7310,14 @@ kbd {
 
 /* ── Inspector pane ───────────────────────────────────────────────── */
 .fusion-inspector-pane {
-  flex: 0 0 38%;
-  min-width: 220px;
+  /* flex set inline via style prop */
+  min-width: 200px;
+  max-width: 60%;
   display: flex;
   flex-direction: column;
   background: #111116;
   overflow: hidden;
+  border-left: 1px solid rgba(255,255,255,0.06);
 }
 .fusion-inspector-header {
   display: flex;
@@ -7324,6 +7359,7 @@ kbd {
   flex-shrink: 0;
 }
 .fusion-graph-stats { color: #555; font-size: 0.6rem; font-weight: 400; letter-spacing: 0; }
+.fusion-graph-hint { color: #333; font-size: 0.58rem; font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: auto; }
 .fusion-no-clip {
   display: flex;
   align-items: center;
@@ -7461,6 +7497,14 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.nc-ctx-desc {
+  padding: 4px 10px 6px;
+  font-size: 0.64rem;
+  color: rgba(255,255,255,0.45);
+  line-height: 1.45;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  max-width: 220px;
 }
 .nc-context-menu button {
   display: block;
@@ -8201,3 +8245,92 @@ kbd {
 .ai-quick-btn.ai { background: rgba(245,197,66,0.12); color: #f5c542; border: 1px solid rgba(245,197,66,0.2); }
 .ai-quick-btn.ai:hover { background: rgba(245,197,66,0.2); }
 .ai-quick-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.1); margin: 0 2px; }
+.ai-quick-btn.active { background: rgba(245,197,66,0.25); color: #f5c542; }
+
+/* ── AI Quick Dropdown ── */
+.ai-quick-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  background: #1a1a24;
+  border: 1px solid rgba(245,197,66,0.25);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 1px rgba(245,197,66,0.08);
+  z-index: 9000;
+  overflow: hidden;
+  padding: 4px 0;
+}
+.ai-qdrop-header {
+  padding: 6px 12px 4px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #f5c542;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  margin-bottom: 2px;
+}
+.ai-qdrop-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 14px;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.8);
+  font-size: 0.73rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+.ai-qdrop-item:hover {
+  background: rgba(245,197,66,0.1);
+  color: #f5c542;
+}
+.ai-qdrop-sep {
+  height: 1px;
+  background: rgba(255,255,255,0.07);
+  margin: 3px 0;
+}
+
+/* ── Fusion viewer video (local element inside FusionViewer) ── */
+.fusion-viewer-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  pointer-events: none;
+}
+
+/* ── Fusion row resizer (between top and canvas pane) ── */
+.fusion-row-resizer {
+  flex-shrink: 0;
+  height: 5px;
+  background: rgba(255,255,255,0.05);
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  transition: background 0.12s;
+  z-index: 5;
+}
+.fusion-row-resizer:hover { background: rgba(79,142,247,0.35); }
+.fusion-row-resizer::before {
+  content: "";
+  width: 40px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(79,142,247,0.4);
+  pointer-events: none;
+}
+.fusion-tb-hint {
+  font-size: 0.6rem;
+  color: #444;
+  white-space: nowrap;
+  margin-left: 2px;
+}

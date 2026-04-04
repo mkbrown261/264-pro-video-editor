@@ -36,12 +36,41 @@ export interface FusionPageProps {
 // ── Viewer panel ──────────────────────────────────────────────────────────────
 const FusionViewer: React.FC<{
   graph: CompGraph | null;
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  asset: MediaAsset | null;
+  clip: TimelineClip | null;
   frame: number;
-}> = ({ graph, videoRef, frame }) => {
+  sequenceFps: number;
+}> = ({ graph, asset, clip, frame, sequenceFps }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const rendererRef = useRef<CompRenderer | null>(null);
   const [hasWebGL, setHasWebGL] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+
+  // Load the clip's video into our local video element
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !asset) return;
+    const src = asset.originalPath || asset.proxyPath || (asset as any).src || "";
+    if (!src) return;
+    if (video.src !== src) {
+      video.src = src;
+      video.load();
+    }
+  }, [asset?.id]);
+
+  // Seek to the correct frame when frame or clip changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !clip || sequenceFps <= 0) return;
+    // Calculate the time within the clip source (accounting for trim)
+    const trimStart = clip.trimStartFrames ?? 0;
+    const sourceFrame = frame - clip.startFrame + trimStart;
+    const targetTime = sourceFrame / sequenceFps;
+    if (Math.abs(video.currentTime - targetTime) > 0.1) {
+      video.currentTime = Math.max(0, targetTime);
+    }
+  }, [frame, clip?.startFrame, clip?.trimStartFrames, sequenceFps]);
 
   // Initialize / re-initialize renderer
   useLayoutEffect(() => {
@@ -66,31 +95,28 @@ const FusionViewer: React.FC<{
   useEffect(() => {
     const renderer = rendererRef.current;
     if (!renderer || !graph) return;
-
     renderer.setFrameTime(frame);
-
-    // Register video for MediaIn nodes
     const video = videoRef.current;
-    if (video) {
+    if (video && videoReady) {
       const mediaIn = graph.nodes.find(n => n.type === "MediaIn");
       if (mediaIn) renderer.registerVideo(mediaIn.id, video);
     }
-
     try {
       renderer.render(graph);
     } catch {
       // Silently skip render errors during composition
     }
-  }, [graph, frame, videoRef]);
+  }, [graph, frame, videoReady]);
 
   return (
     <div className="fusion-viewer">
-      {/* Always show the video as the base layer */}
+      {/* Actual video element — always loaded with the clip's source */}
       <video
         ref={videoRef}
-        className="fusion-viewer-video"
         muted
         playsInline
+        preload="auto"
+        onLoadedData={() => setVideoReady(true)}
         style={{
           position: "absolute",
           inset: 0,
@@ -98,9 +124,10 @@ const FusionViewer: React.FC<{
           height: "100%",
           objectFit: "contain",
           background: "#000",
-          // Hide only when WebGL canvas is doing a full override
+          // Show video when no WebGL comp, or when comp is not covering
           opacity: hasWebGL && graph ? 0 : 1,
           pointerEvents: "none",
+          transition: "opacity 0.2s",
         }}
       />
       {/* WebGL comp output overlaid on top */}
@@ -117,16 +144,23 @@ const FusionViewer: React.FC<{
           objectFit: "contain",
           opacity: hasWebGL && graph ? 1 : 0,
           pointerEvents: "none",
+          transition: "opacity 0.2s",
         }}
       />
-      {!graph && (
+      {!graph && !asset && (
         <div className="fusion-viewer-empty">
-          <span>No comp graph — open a clip in Fusion</span>
+          <span>No clip selected — open a clip in Fusion</span>
+        </div>
+      )}
+      {graph && !videoReady && asset && (
+        <div className="fusion-viewer-empty" style={{ color: "#666", fontSize: "0.7rem" }}>
+          Loading video…
         </div>
       )}
       <div className="fusion-viewer-info">
         <span>Frame {frame}</span>
-        {graph && <span style={{ marginLeft: 8, opacity: 0.5 }}>{graph.nodes.length} nodes</span>}
+        {graph && <span style={{ marginLeft: 8, opacity: 0.5 }}>{graph.nodes.length} nodes · {graph.wires.length} wires</span>}
+        {asset && <span style={{ marginLeft: 8, opacity: 0.4 }}>{asset.name}</span>}
       </div>
     </div>
   );
@@ -160,7 +194,7 @@ const FusionPage: React.FC<FusionPageProps> = ({
   allClips,
   sequenceSettings,
   playheadFrame,
-  videoRef,
+  videoRef: _videoRef, // kept for API compat but FusionViewer now uses its own video
   onUpdateGraph,
   onBack,
 }) => {
@@ -178,6 +212,8 @@ const FusionPage: React.FC<FusionPageProps> = ({
         sequenceSettings.height,
         sequenceSettings.fps,
       ));
+    } else {
+      setGraph(null);
     }
   }, [clip?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -221,8 +257,38 @@ const FusionPage: React.FC<FusionPageProps> = ({
   }, [graph, handleUpdateGraph]);
 
   // ── Panel split state ─────────────────────────────────────────────────────
-  const [splitH, setSplitH] = useState(45); // % top panels (viewer+inspector)
-  const [inspW, setInspW] = useState(38);   // % of right column (inspector)
+  // topRowH: percentage of main area used by the viewer+inspector row
+  const [topRowH, setTopRowH] = useState(50); // % of main area for top row
+  const [inspW, setInspW] = useState(38);     // % of top row for inspector
+
+  // Drag to resize top/bottom split
+  const splitterRef = useRef<HTMLDivElement>(null);
+  const draggingSplit = useRef(false);
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  const onSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingSplit.current = true;
+    const startY = e.clientY;
+    const startH = topRowH;
+    const main = mainRef.current;
+    if (!main) return;
+    const totalH = main.getBoundingClientRect().height;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!draggingSplit.current) return;
+      const dy = ev.clientY - startY;
+      const newH = Math.min(80, Math.max(20, startH + (dy / totalH) * 100));
+      setTopRowH(newH);
+    };
+    const onMouseUp = () => {
+      draggingSplit.current = false;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }, [topRowH]);
 
   return (
     <div className="fusion-page">
@@ -258,6 +324,11 @@ const FusionPage: React.FC<FusionPageProps> = ({
           <button className="fusion-tb-btn fusion-tb-node" onClick={() => addNodeQuick("ChromaKeyer")} title="Add ChromaKeyer">Key</button>
           <button className="fusion-tb-btn fusion-tb-node" onClick={() => addNodeQuick("Text+")} title="Add Text+">Text+</button>
           <button className="fusion-tb-btn fusion-tb-node" onClick={() => addNodeQuick("Background")} title="Add Background">BG</button>
+          <div className="fusion-tb-sep" />
+          {/* Inspector width control */}
+          <span className="fusion-tb-hint">Insp: </span>
+          <button className="fusion-tb-btn" onClick={() => setInspW(w => Math.max(20, w - 5))} title="Narrow inspector">◂</button>
+          <button className="fusion-tb-btn" onClick={() => setInspW(w => Math.min(60, w + 5))} title="Widen inspector">▸</button>
         </div>
       </div>
 
@@ -267,20 +338,26 @@ const FusionPage: React.FC<FusionPageProps> = ({
       )}
 
       {/* Main area */}
-      <div className="fusion-main" style={{ "--split-h": `${splitH}%`, "--insp-w": `${inspW}%` } as React.CSSProperties}>
+      <div
+        className="fusion-main"
+        ref={mainRef}
+        style={{ "--split-h": `${topRowH}%`, "--insp-w": `${inspW}%` } as React.CSSProperties}
+      >
         {/* Top row: Viewer + Inspector */}
-        <div className="fusion-top-row">
+        <div className="fusion-top-row" style={{ flex: `0 0 ${topRowH}%` }}>
           {/* Viewer */}
           <div className="fusion-viewer-pane">
             <FusionViewer
               graph={graph}
-              videoRef={videoRef}
+              asset={asset}
+              clip={clip}
               frame={playheadFrame}
+              sequenceFps={sequenceSettings.fps}
             />
           </div>
 
           {/* Inspector */}
-          <div className="fusion-inspector-pane">
+          <div className="fusion-inspector-pane" style={{ flex: `0 0 ${inspW}%` }}>
             <div className="fusion-inspector-header">
               <span>Inspector</span>
               <span className="fusion-insp-hint">{selectedNodeIds.length > 0 ? `${selectedNodeIds.length} node${selectedNodeIds.length > 1 ? "s" : ""} selected` : "No selection"}</span>
@@ -292,14 +369,30 @@ const FusionPage: React.FC<FusionPageProps> = ({
                 onUpdateGraph={handleUpdateGraph}
               />
             )}
+            {!graph && (
+              <div className="fusion-no-clip" style={{ fontSize: "0.72rem", color: "#555", padding: "20px" }}>
+                Select a node to inspect its properties.
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Resizer between top and bottom */}
+        <div
+          ref={splitterRef}
+          className="fusion-row-resizer"
+          onMouseDown={onSplitterMouseDown}
+          title="Drag to resize viewer / node graph"
+        />
 
         {/* Bottom: Node Canvas */}
         <div className="fusion-canvas-pane">
           <div className="fusion-canvas-header">
             <span>Node Graph</span>
             {graph && <span className="fusion-graph-stats">{graph.nodes.length} nodes · {graph.wires.length} wires</span>}
+            <span className="fusion-graph-hint">
+              Scroll: pan · Shift+Scroll: horizontal · Ctrl+Scroll / Pinch: zoom · Middle-click or Alt+drag: pan · Right-click: menu
+            </span>
           </div>
           {clip && graph ? (
             <NodeCanvas
