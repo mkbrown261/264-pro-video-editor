@@ -267,6 +267,9 @@ interface Slot {
   fadeInDone: boolean;
   /** True if this element is already playing muted (pre-play mode) */
   isPrePlaying: boolean;
+  /** True when this slot was adopted from the previous clip via seamless-continue.
+   *  The element is already running at the correct position — NEVER seek it. */
+  isSeamlessContinue?: boolean;
 }
 
 // ── prefetch / pre-play cache ─────────────────────────────────────────────────
@@ -411,11 +414,17 @@ export function useMultiTrackAudio({
     // Then we can transfer A's running element directly to B — zero gap,
     // zero seek, zero fade. This is exactly what happens after a split.
     // Map: incoming clip.id → outgoing slot whose element we'll reuse
+    //
+    // NOTE: We compare against currentIds (slots currently playing), NOT
+    // wantedIds.  Every entry in targetSegments is in wantedIds by definition,
+    // so the old guard `wantedIds.has(incoming.clip.id)` always fired and the
+    // loop body never executed — the seamless detection was completely dead.
+    const currentIds = new Set(slotsRef.current.map((s) => s.segment.clip.id));
     const seamlessContinueMap = new Map<string, Slot>();
     for (const incoming of targetSegments) {
-      if (wantedIds.has(incoming.clip.id)) continue; // already active — skip
+      if (currentIds.has(incoming.clip.id)) continue; // already playing — no seam to cross
       for (const slot of slotsRef.current) {
-        if (wantedIds.has(slot.segment.clip.id)) continue; // still wanted — skip
+        if (wantedIds.has(slot.segment.clip.id)) continue; // still wanted — not outgoing
         const sameTrack   = slot.segment.track.id === incoming.track.id;
         const adjacent    = slot.segment.endFrame === incoming.startFrame;
         const sameUrl     = slot.segment.asset.previewUrl === incoming.asset.previewUrl;
@@ -509,11 +518,13 @@ export function useMultiTrackAudio({
         // The element is already playing at exactly the right position.
         // Just update the segment reference so volume/trim checks use the
         // new clip's parameters, and mark fadeInDone=true (no ramp needed).
+        // isSeamlessContinue=true prevents any seek in the ready-slot handler.
         nextSlots.push({
-          segment:      seg,
-          element:      donorSlot.element,
-          fadeInDone:   true,   // already at correct gain — skip ramp
-          isPrePlaying: false,
+          segment:           seg,
+          element:           donorSlot.element,
+          fadeInDone:        true,   // already at correct gain — skip ramp
+          isPrePlaying:      false,
+          isSeamlessContinue: true,  // element is running — do NOT seek
         });
         continue;
       }
@@ -546,6 +557,7 @@ export function useMultiTrackAudio({
       const url = slot.segment.asset.previewUrl;
       const alreadyLoaded =
         slot.isPrePlaying ||
+        slot.isSeamlessContinue ||   // element is actively playing — never "needs load"
         (slot.element.src === url &&
           slot.element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA);
       if (alreadyLoaded) {
@@ -610,10 +622,16 @@ export function useMultiTrackAudio({
       );
 
       // ── SEEK DECISION ──────────────────────────────────────────────────
-      // If this element is already pre-playing (running at gain=0), we use a
-      // much wider tolerance so we NEVER await a seeked event at the seam.
-      // A small drift of a few frames is completely inaudible.
-      if (slot.isPrePlaying && shouldPlay) {
+      // Seamless-continue slots: the element is already running at the exact
+      // right position (the outgoing clip handed it off mid-stream).  Any seek
+      // would cause a hiccup — skip entirely, just update gain/playbackRate.
+      if (slot.isSeamlessContinue) {
+        // No seek — element is already playing. Just clear the flag so future
+        // reconcile cycles treat this slot normally.
+        slot.isSeamlessContinue = false;
+      } else if (slot.isPrePlaying && shouldPlay) {
+        // Pre-playing (muted) element: use wide tolerance so we never await a
+        // seeked event at the seam.  A small drift is completely inaudible.
         const drift = Math.abs(element.currentTime - clampedTime);
         if (drift > PRE_PLAY_SEEK_TOLERANCE_S) {
           // Drifted too far — synchronous seek only (no await); accept brief glitch
