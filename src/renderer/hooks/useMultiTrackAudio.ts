@@ -278,113 +278,148 @@ interface PrefetchEntry {
   segment: TimelineSegment;
   /** True once element.play() has been called in muted/pre-play mode */
   prePlaying: boolean;
+  /** True while an async operation (load/seek/play) is in progress — blocks
+   *  concurrent calls from stepping on each other. */
+  busy: boolean;
 }
 
 const prefetchMap = new Map<string, PrefetchEntry>();
 
-/** Load and pre-play a segment's audio element at gain=0 so it's running by
- *  the time the seam arrives.  No seeked event will be needed at the boundary.
+/**
+ * Manage the prefetch/pre-play lifecycle for a segment.
+ * Called on every RAF tick while isPlaying — must be concurrency-safe.
  *
- *  Strategy (two-phase):
- *  ─────────────────────
- *  Phase 1 — PARK  (framesUntilStart > PRE_PLAY_FRAMES):
- *    Load the element and seek it to sourceInSeconds, then PAUSE it there.
- *    The element is ready to go but not consuming CPU or running ahead.
- *    On each lookahead tick we re-verify the position is correct.
+ *  Two-phase strategy
+ *  ──────────────────
+ *  Phase 1 — LOAD+PARK  (framesUntilStart > PRE_PLAY_FRAMES):
+ *    Load the source once (async, guarded by `busy` flag so concurrent calls
+ *    are no-ops).  Once loaded, park the element PAUSED at sourceInSeconds.
+ *    No CPU overhead, no position drift.
  *
  *  Phase 2 — PRE-PLAY  (framesUntilStart <= PRE_PLAY_FRAMES):
- *    Start the element playing muted (gain=0).  It runs for ~400 ms before
- *    the seam, so by the time reconcileSlots claims it, element.currentTime
- *    is exactly where it needs to be — no seek required.
- *
- *  This eliminates the root cause of the stutter: the old code started
- *  pre-playing 3 s (90 frames) early, so by the seam the element had drifted
- *  3 s past sourceInSeconds, forcing a synchronous seek that caused silence.
+ *    Seek the element to the exact pre-start position (sourceInSeconds minus
+ *    the remaining frames expressed in seconds) and start playing at gain=0.
+ *    The element runs for ≤ PRE_PLAY_FRAMES before the seam, so when
+ *    reconcileSlots claims it the drift is negligible — no seek needed.
  */
-async function prefetchAndPrePlay(
+function tickPrefetch(
   seg: TimelineSegment,
   currentPlayheadFrame: number,
   fps: number
-): Promise<void> {
+): void {
   const url = seg.asset.previewUrl;
   if (!url) return;
 
   let entry = prefetchMap.get(seg.clip.id);
   if (!entry) {
     const el = acquireElement();
-    entry = { element: el, segment: seg, prePlaying: false };
+    entry = { element: el, segment: seg, prePlaying: false, busy: false };
     prefetchMap.set(seg.clip.id, entry);
   }
 
-  const { element } = entry;
-  const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+  // If an async op is running, skip this tick — don't start another
+  if (entry.busy) return;
+
   const framesUntilStart = seg.startFrame - currentPlayheadFrame;
+  const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+  const { element } = entry;
 
-  // ── Phase 1: PARK — load source, seek to in-point, stay paused ─────────────
-  // Load source if needed (idempotent — loadSrc returns early if already loaded)
-  try {
-    await loadSrc(element, url);
-  } catch {
-    prefetchMap.delete(seg.clip.id);
-    releaseElement(element);
-    return;
-  }
-
+  // ── Phase 1: LOAD + PARK ──────────────────────────────────────────────────
   if (!entry.prePlaying) {
-    // Keep the element parked at sourceInSeconds while waiting for the pre-play
-    // window.  Re-seek on every lookahead tick to correct any small drift.
-    const parkTime = seg.sourceInSeconds;
-    if (Math.abs(element.currentTime - parkTime) > 0.05) {
-      // Async seek with timeout so we never block indefinitely
-      element.currentTime = parkTime;
-      await new Promise<void>((resolve) => {
-        const t = window.setTimeout(resolve, 300);
-        element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
-      });
+    const isLoaded = element.src === url && element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+
+    if (!isLoaded) {
+      // Kick off async load — guarded so we only start once
+      entry.busy = true;
+      void (async () => {
+        try {
+          await loadSrc(element, url);
+          // Park at in-point once loaded
+          if (entry && prefetchMap.has(seg.clip.id)) {
+            const parkTime = seg.sourceInSeconds;
+            if (Math.abs(element.currentTime - parkTime) > 0.05) {
+              element.currentTime = parkTime;
+              await new Promise<void>((resolve) => {
+                const t = window.setTimeout(resolve, 500);
+                element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
+              });
+            }
+            if (!element.paused) element.pause();
+          }
+        } catch {
+          if (entry) {
+            prefetchMap.delete(seg.clip.id);
+            releaseElement(element);
+          }
+        } finally {
+          if (entry) entry.busy = false;
+        }
+      })();
+      return; // don't proceed to phase 2 until loaded
     }
-    // Ensure element stays paused in park phase
+
+    // Already loaded but not yet pre-playing.
+    // Ensure element is parked at the correct position while we wait.
+    const parkTime = seg.sourceInSeconds;
+    if (Math.abs(element.currentTime - parkTime) > 0.05 && framesUntilStart > PRE_PLAY_FRAMES) {
+      // Only re-seek during park phase; in pre-play window let phase 2 handle it.
+      entry.busy = true;
+      void (async () => {
+        element.currentTime = parkTime;
+        await new Promise<void>((resolve) => {
+          const t = window.setTimeout(resolve, 300);
+          element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
+        });
+        if (!element.paused) element.pause();
+        if (entry) entry.busy = false;
+      })();
+      return;
+    }
     if (!element.paused) element.pause();
   }
 
-  // ── Phase 2: PRE-PLAY — start muted playback close to the seam ──────────────
-  // Only enter this phase when we're within PRE_PLAY_FRAMES of the seam.
-  if (framesUntilStart > PRE_PLAY_FRAMES) {
-    // Still in park phase — nothing more to do this tick
-    return;
-  }
+  // ── Phase 2: PRE-PLAY — only when within PRE_PLAY_FRAMES of the seam ─────
+  if (framesUntilStart > PRE_PLAY_FRAMES) return; // still in park phase
 
   if (!entry.prePlaying) {
-    // Compute exact start position: the seam will arrive in (framesUntilStart)
-    // more frames at real-time speed.  Start the element that many frames
-    // behind sourceInSeconds so that when the seam arrives currentTime ≈ sourceInSeconds.
+    // Compute the exact position so the element arrives at sourceInSeconds
+    // at the moment the seam hits.
     const preOffsetSecs = framesToSeconds(Math.max(0, framesUntilStart), fps) * clipSpeed;
     const preStartTime  = Math.max(0, seg.sourceInSeconds - preOffsetSecs);
-    if (Math.abs(element.currentTime - preStartTime) > 0.05) {
-      element.currentTime = preStartTime;
-      await new Promise<void>((resolve) => {
-        const t = window.setTimeout(resolve, 300);
-        element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
-      });
-    }
 
-    entry.prePlaying = true;
-    const ctx = getAudioContext();
-    if (ctx) {
-      const route = getOrCreateRoute(ctx, element);
-      if (route) {
-        setGainImmediate(route, ctx, 0); // completely silent
-        element.volume = 1;
-      } else {
-        element.volume = 0;
+    entry.busy = true;
+    entry.prePlaying = true; // set BEFORE async so subsequent ticks skip this block
+    void (async () => {
+      try {
+        if (Math.abs(element.currentTime - preStartTime) > 0.02) {
+          element.currentTime = preStartTime;
+          await new Promise<void>((resolve) => {
+            const t = window.setTimeout(resolve, 300);
+            element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
+          });
+        }
+
+        const ctx = getAudioContext();
+        if (ctx) {
+          const route = getOrCreateRoute(ctx, element);
+          if (route) {
+            setGainImmediate(route, ctx, 0);
+            element.volume = 1;
+          } else {
+            element.volume = 0;
+          }
+        } else {
+          element.volume = 0;
+        }
+        element.playbackRate = clipSpeed;
+        try { await element.play(); } catch { /* autoplay policy — reconcileSlots will retry */ }
+      } finally {
+        if (entry) entry.busy = false;
       }
-    } else {
-      element.volume = 0;
-    }
-    element.playbackRate = clipSpeed;
-    try { await element.play(); } catch { /* autoplay policy — reconcileSlots will retry */ }
+    })();
   }
-  // If already pre-playing, no corrective seek needed — the element has been
-  // running for at most PRE_PLAY_FRAMES and is within tolerance of the seam position.
+  // Already pre-playing — nothing to do. The element has been running for at
+  // most PRE_PLAY_FRAMES (~400 ms) so drift at the seam is within tolerance.
 }
 
 /** Claim a prefetched/pre-playing element for a segment. */
@@ -786,8 +821,8 @@ export function useMultiTrackAudio({
       const framesUntilStart = seg.startFrame - playheadFrame;
 
       if (framesUntilStart > 0 && framesUntilStart <= LOOKAHEAD_FRAMES) {
-        // Within lookahead window — start prefetch + pre-play async
-        void prefetchAndPrePlay(seg, playheadFrame, fps);
+        // Within lookahead window — manage prefetch + pre-play lifecycle
+        tickPrefetch(seg, playheadFrame, fps);
       }
     }
 
