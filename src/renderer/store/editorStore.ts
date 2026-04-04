@@ -170,6 +170,7 @@ interface EditorStore {
   // ── Markers ──
   addMarker: (marker: Omit<TimelineMarker, "id">) => void;
   removeMarker: (markerId: string) => void;
+  updateMarker: (markerId: string, updates: Partial<TimelineMarker>) => void;
 
   // ── Playhead & Playback ──
   setPlayheadFrame: (playheadFrame: number) => void;
@@ -1882,6 +1883,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         }
       }
     })));
+  },
+
+  updateMarker: (markerId, updates) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          markers: state.project.sequence.markers.map((m) =>
+            m.id === markerId ? { ...m, ...updates } : m
+          )
+        }
+      }
+    }));
   },
 
   // ── Playhead ─────────────────────────────────────────────────────────────

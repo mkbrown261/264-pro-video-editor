@@ -10,6 +10,9 @@ import {
 import { ColorGradingPanel } from "./components/ColorGradingPanel";
 import FusionPage from "./components/compositing/FusionPage";
 import { ToastContainer } from "./components/ToastContainer";
+import { CommandPalette, buildCommandList } from "./components/CommandPalette";
+import { StoryboardView } from "./components/StoryboardView";
+import { ColorHistogram } from "./components/ColorHistogram";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
 import { useAsyncImport } from "./hooks/useAsyncImport";
@@ -106,6 +109,8 @@ export default function App() {
   const addTracksAndDropAsset = useEditorStore((s) => s.addTracksAndDropAsset);
   const reorderTrack = useEditorStore((s) => s.reorderTrack);
   const addMarker = useEditorStore((s) => s.addMarker);
+  const removeMarker = useEditorStore((s) => s.removeMarker);
+  const updateMarker = useEditorStore((s) => s.updateMarker);
   const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
   const setAssetFilmstrip = useEditorStore((s) => s.setAssetFilmstrip);
 
@@ -185,6 +190,12 @@ export default function App() {
   // Timecode editing (Imp 4)
   const [timecodeEditing, setTimecodeEditing] = useState(false);
   const [timecodeInput, setTimecodeInput] = useState("");
+
+  // ── Command Palette ────────────────────────────────────────────────────────
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // ── Storyboard ────────────────────────────────────────────────────────────
+  const [storyboardOpen, setStoryboardOpen] = useState(false);
 
   // ── FlowState Panel ────────────────────────────────────────────────────────
   const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
@@ -656,6 +667,49 @@ export default function App() {
     },
     onMarkIn: () => setVoiceMarkInFrame(playback.playheadFrame),
     onMarkOut: () => setVoiceMarkOutFrame(playback.playheadFrame),
+    onSlowShuttle: (direction) => {
+      // Shift+J/L = slow shuttle — for now just toggle at 0.5× speed
+      handleTogglePlayback();
+    },
+    onJumpToClipBoundary: (direction) => {
+      // Jump to nearest clip start/end in the timeline
+      const fps = project.sequence.settings.fps;
+      const cur = playback.playheadFrame;
+      const boundaries: number[] = [];
+      for (const seg of segments) {
+        boundaries.push(seg.startFrame, seg.startFrame + seg.durationFrames);
+      }
+      const sorted = [...new Set(boundaries)].sort((a, b) => a - b);
+      if (direction === 1) {
+        const next = sorted.find(f => f > cur);
+        if (next !== undefined) handleSeek(next);
+      } else {
+        const prev = [...sorted].reverse().find(f => f < cur);
+        if (prev !== undefined) handleSeek(prev);
+      }
+    },
+    onJumpToNextMarker: (direction) => {
+      const cur = playback.playheadFrame;
+      const markerFrames = [...project.sequence.markers].map(m => m.frame).sort((a, b) => a - b);
+      if (direction === 1) {
+        const next = markerFrames.find(f => f > cur);
+        if (next !== undefined) handleSeek(next);
+      } else {
+        const prev = [...markerFrames].reverse().find(f => f < cur);
+        if (prev !== undefined) handleSeek(prev);
+      }
+    },
+    onRippleDelete: () => {
+      if (selectedClipId) { pauseViewerPlayback(); removeClipById(selectedClipId); }
+    },
+    onDetachAudio: () => {
+      if (selectedClipId) { pauseViewerPlayback(); detachLinkedClips(selectedClipId); }
+    },
+    onToggleClipEnabled: () => {
+      if (selectedClipId) { pauseViewerPlayback(); toggleClipEnabled(selectedClipId); }
+    },
+    onOpenCommandPalette: () => setCommandPaletteOpen(v => !v),
+    onToggleStoryboard: () => setStoryboardOpen(v => !v),
   });
 
   // ── Waveform peak extraction (background, per-asset) ─────────────────────
@@ -1370,6 +1424,42 @@ export default function App() {
       {/* ── Toast notification system ── */}
       <ToastContainer />
 
+      {/* ── Command Palette ── */}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        commands={buildCommandList({
+          onTogglePlayback: handleTogglePlayback,
+          onSave: () => void handleSaveProject(),
+          onSaveAs: () => void handleSaveProjectAs(),
+          onOpen: () => void handleOpenProject(),
+          onNewProject: handleNewProject,
+          onExport: () => void handleExport(),
+          onUndo: undo,
+          onRedo: redo,
+          onSplitClip: splitSelectedClipAtPlayhead,
+          onDuplicateClip: () => { if (selectedClipId) duplicateClip(selectedClipId); },
+          onRemoveClip: () => { pauseViewerPlayback(); removeSelectedClip(); },
+          onFitTimeline: () => timelineZoomRef.current?.fitToWindow(),
+          onZoomIn: () => timelineZoomRef.current?.zoomIn(),
+          onZoomOut: () => timelineZoomRef.current?.zoomOut(),
+          onAddMarker: () => addMarker({ frame: playback.playheadFrame, label: "", color: "#f7c948" }),
+          onToggleMediaPool: () => setMediaPoolOpen(v => !v),
+          onToggleInspector: () => setInspectorOpen(v => !v),
+          onToggleFullscreen: () => void viewerPanelRef.current?.toggleFullscreen(),
+          onSeekToStart: () => handleSeek(0),
+          onSeekToEnd: () => handleSeek(Math.max(totalFrames - 1, 0)),
+          onSelectTool: () => setToolMode("select"),
+          onBladeTool: toggleBladeTool,
+          onColorPage: () => setActivePage("color"),
+          onEditPage: () => setActivePage("edit"),
+          onFusionPage: () => { if (selectedClipId) { openFusion(selectedClipId); setActivePage("fusion"); } },
+          onToggleStoryboard: () => setStoryboardOpen(v => !v),
+          onDetachAudio: () => { if (selectedClipId) { pauseViewerPlayback(); detachLinkedClips(selectedClipId); } },
+          onToggleClipEnabled: () => { if (selectedClipId) { pauseViewerPlayback(); toggleClipEnabled(selectedClipId); } },
+        })}
+      />
+
       {/* ── TOP MENU BAR ── */}
       <header className="app-menubar">
         <div className="menubar-brand">
@@ -1758,6 +1848,38 @@ export default function App() {
               />
             </div>{/* /inspector-collapse */}
 
+            {/* AI Quick Action Bar — shown when a clip is selected */}
+            {selectedClipId && activePage === "edit" && (
+              <div className="ai-quick-bar">
+                <span className="ai-quick-label">CLIP</span>
+                <button className="ai-quick-btn" type="button" title="Split at playhead (Ctrl+B)"
+                  onClick={() => { pauseViewerPlayback(); splitSelectedClipAtPlayhead(); }}>
+                  ✂ Split
+                </button>
+                <button className="ai-quick-btn" type="button" title="Duplicate clip (Ctrl+D)"
+                  onClick={() => { pauseViewerPlayback(); if (selectedClipId) duplicateClip(selectedClipId); }}>
+                  ⧉ Dup
+                </button>
+                <button className="ai-quick-btn" type="button" title="Delete clip (Del)"
+                  onClick={() => { pauseViewerPlayback(); removeSelectedClip(); }}>
+                  🗑 Del
+                </button>
+                <div className="ai-quick-sep" />
+                <button className="ai-quick-btn" type="button" title="Open in Fusion"
+                  onClick={() => { if (selectedClipId) { openFusion(selectedClipId); setActivePage("fusion"); } }}>
+                  ⬡ Fusion
+                </button>
+                <button className="ai-quick-btn" type="button" title="Color grade this clip"
+                  onClick={() => setActivePage("color")}>
+                  🎨 Color
+                </button>
+                <div className="ai-quick-sep" />
+                <button className="ai-quick-btn ai" type="button" title="AI operations (coming soon)">
+                  🤖 AI ▾
+                </button>
+              </div>
+            )}
+
             {/* Timeline resize handle */}
             <div
               className={`timeline-vertical-resizer${isResizingTimeline ? " dragging" : ""}`}
@@ -1765,6 +1887,23 @@ export default function App() {
               title="Drag to resize timeline"
               role="separator"
             />
+
+            {/* Storyboard view (toggle with G key) */}
+            {storyboardOpen && (
+              <div style={{ height: 160, borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
+                <StoryboardView
+                  trackLayouts={trackLayouts}
+                  selectedClipId={selectedClipId}
+                  playheadFrame={playback.playheadFrame}
+                  sequenceFps={project.sequence.settings.fps}
+                  onSelectClip={selectClip}
+                  onSeekToFrame={handleSeek}
+                  onDeleteClip={(clipId) => { pauseViewerPlayback(); removeClipById(clipId); }}
+                  onDuplicateClip={(clipId) => { pauseViewerPlayback(); duplicateClip(clipId); }}
+                  onSplitClip={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+                />
+              </div>
+            )}
 
             {/* Timeline */}
             <TimelinePanel
@@ -1820,6 +1959,10 @@ export default function App() {
                 setTransitionMessage(msg1);
               }}
               assets={project.assets}
+              markers={project.sequence.markers}
+              onAddMarker={(frame) => addMarker({ frame, label: "", color: "#f7c948" })}
+              onRemoveMarker={(id) => removeMarker(id)}
+              onUpdateMarker={(id, updates) => updateMarker(id, updates)}
             />
           </>
         )}
@@ -1895,7 +2038,9 @@ export default function App() {
                 <div className="scope-block">Waveform</div>
                 <div className="scope-block">Parade</div>
                 <div className="scope-block">Vectorscope</div>
-                <div className="scope-block">Histogram</div>
+                <div className="scope-block">
+                  <ColorHistogram videoRef={colorPageVideoRef} width={200} height={90} />
+                </div>
               </div>
             </div>
 
@@ -1954,6 +2099,10 @@ export default function App() {
                 setTransitionMessage(msg1);
               }}
               assets={project.assets}
+              markers={project.sequence.markers}
+              onAddMarker={(frame) => addMarker({ frame, label: "", color: "#f7c948" })}
+              onRemoveMarker={(id) => removeMarker(id)}
+              onUpdateMarker={(id, updates) => updateMarker(id, updates)}
               />
             </div>
           </>

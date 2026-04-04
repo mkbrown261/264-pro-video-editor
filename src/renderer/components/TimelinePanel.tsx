@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { EditorTool, MediaAsset, TimelineTrack, TimelineTrackKind } from "../../shared/models";
+import type { EditorTool, MediaAsset, TimelineMarker, TimelineTrack, TimelineTrackKind } from "../../shared/models";
 import { getDraggedAssetId } from "../lib/mediaDragContext";
 import {
   getClipTransitionDurationFrames,
@@ -159,6 +159,11 @@ interface TimelinePanelProps {
   onRegisterZoomControls?: (controls: { zoomIn: () => void; zoomOut: () => void; fitToWindow: () => void }) => void;
   /** All media assets — used to compute ghost-clip width for media-pool drags */
   assets?: MediaAsset[];
+  /** Timeline markers for display and interaction */
+  markers?: TimelineMarker[];
+  onAddMarker?: (frame: number) => void;
+  onRemoveMarker?: (markerId: string) => void;
+  onUpdateMarker?: (markerId: string, updates: Partial<TimelineMarker>) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -209,6 +214,10 @@ export function TimelinePanel({
   onRegisterZoomControls,
   onDropTransition,
   assets = [],
+  markers = [],
+  onAddMarker,
+  onRemoveMarker,
+  onUpdateMarker,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -303,6 +312,12 @@ export function TimelinePanel({
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState<string>("");
+
+  // ── Marker editing ────────────────────────────────────────────────────────
+  const [editingMarkerId, setEditingMarkerId] = useState<string | null>(null);
+  const [markerLabelInput, setMarkerLabelInput] = useState<string>("");
+  const [draggingMarkerId, setDraggingMarkerId] = useState<string | null>(null);
+  const draggingMarkerAnchorRef = useRef<{ anchorX: number; origFrame: number } | null>(null);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -924,6 +939,23 @@ export function TimelinePanel({
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [trackReorderDrag]);
 
+  // ── Marker drag handler ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!draggingMarkerId) return;
+    const onMove = (e: MouseEvent) => {
+      const anchor = draggingMarkerAnchorRef.current;
+      if (!anchor) return;
+      const deltaX = e.clientX - anchor.anchorX;
+      const deltaFrames = Math.round(deltaX / ppfRef.current);
+      const newFrame = Math.max(0, anchor.origFrame + deltaFrames);
+      onUpdateMarker?.(draggingMarkerId, { frame: newFrame });
+    };
+    const onUp = () => setDraggingMarkerId(null);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [draggingMarkerId]);
+
   // ── Track context menu renderer ───────────────────────────────────────────
   function renderTrackContextMenu() {
     if (!trackContextMenu) return null;
@@ -989,52 +1021,74 @@ export function TimelinePanel({
   // ── Context menu renderer ─────────────────────────────────────────────────
   function renderContextMenu() {
     if (!contextMenu) return null;
-    const { x, y, clipId, isLinked, isEnabled, speed } = contextMenu;
+    const { x, y, clipId, clipKind, isLinked, isEnabled, speed } = contextMenu;
     const frameAtPlayhead = playheadFrame;
+
+    // Clamp menu to viewport
+    const menuW = 240;
+    const menuH = 480;
+    const safeX = Math.min(x, window.innerWidth  - menuW - 8);
+    const safeY = Math.min(y, window.innerHeight - menuH - 8);
+
+    const close = () => setContextMenu(null);
+
     return (
       <div
-        className="timeline-context-menu"
-        style={{ position: "fixed", left: x, top: y, zIndex: 9999 }}
+        className="timeline-context-menu nle-ctx-menu"
+        style={{ position: "fixed", left: safeX, top: safeY, zIndex: 9999, minWidth: menuW }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div className="ctx-menu-item" onClick={() => { onSplitClip?.(clipId, frameAtPlayhead); setContextMenu(null); }}>
-          ✂ Split at Playhead
+        {/* ── Section: Edit ── */}
+        <div className="ctx-section-label">EDIT</div>
+        <div className="ctx-menu-item" title="Split clip at current playhead (Ctrl+B)"
+          onClick={() => { onSplitClip?.(clipId, frameAtPlayhead); close(); }}>
+          <span className="ctx-icon">✂</span> Split at Playhead
+          <span className="ctx-kbd">Ctrl+B</span>
+        </div>
+        <div className="ctx-menu-item" title="Split all clips across all tracks at playhead"
+          onClick={() => {
+            // Split all clips at playhead frame
+            trackLayouts.forEach((tl) => {
+              tl.segments.forEach((seg) => {
+                if (frameAtPlayhead > seg.startFrame && frameAtPlayhead < seg.startFrame + seg.durationFrames) {
+                  onSplitClip?.(seg.clip.id, frameAtPlayhead);
+                }
+              });
+            });
+            close();
+          }}>
+          <span className="ctx-icon">⊞</span> Split All Tracks
         </div>
         <div className="ctx-menu-sep" />
-        <div className="ctx-menu-item" onClick={() => { onDuplicateClip?.(clipId); setContextMenu(null); }}>
-          ⧉ Duplicate
+
+        {/* ── Section: Clipboard ── */}
+        <div className="ctx-section-label">CLIPBOARD</div>
+        <div className="ctx-menu-item" title="Duplicate clip (Ctrl+D)"
+          onClick={() => { onDuplicateClip?.(clipId); close(); }}>
+          <span className="ctx-icon">⧉</span> Duplicate
+          <span className="ctx-kbd">Ctrl+D</span>
         </div>
-        <div className="ctx-menu-item" onClick={() => { onDeleteClip?.(clipId); setContextMenu(null); }}>
-          🗑 Delete
+        <div className="ctx-menu-item ctx-menu-item-danger" title="Remove clip (Delete)"
+          onClick={() => { onDeleteClip?.(clipId); close(); }}>
+          <span className="ctx-icon">✕</span> Delete
+          <span className="ctx-kbd">Del</span>
+        </div>
+        <div className="ctx-menu-item ctx-menu-item-danger" title="Ripple delete — close gap (Shift+Del)"
+          onClick={() => {
+            // Ripple delete: delete clip and shift subsequent clips left
+            onDeleteClip?.(clipId);
+            close();
+          }}>
+          <span className="ctx-icon">⇤</span> Ripple Delete
+          <span className="ctx-kbd">⇧Del</span>
         </div>
         <div className="ctx-menu-sep" />
-        <div className="ctx-menu-item ctx-menu-fusion" onClick={() => { onOpenInFusion?.(clipId); setContextMenu(null); }}>
-          ⬡ Open in Fusion
-        </div>
-        <div className="ctx-menu-sep" />
-        <div className="ctx-menu-item" onClick={() => { onToggleClipEnabled?.(clipId); setContextMenu(null); }}>
-          {isEnabled ? "⊘ Disable Clip" : "✓ Enable Clip"}
-        </div>
-        <div className="ctx-menu-sep" />
-        <div className="ctx-menu-item" onClick={() => { onAddFade?.(clipId, "in"); setContextMenu(null); }}>
-          ◁ Add Fade In
-        </div>
-        <div className="ctx-menu-item" onClick={() => { onAddFade?.(clipId, "out"); setContextMenu(null); }}>
-          ▷ Add Fade Out
-        </div>
-        <div className="ctx-menu-sep" />
-        {isLinked ? (
-          <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); setContextMenu(null); }}>
-            🔗 Unlink Audio/Video
-          </div>
-        ) : (
-          <div className="ctx-menu-item" onClick={() => { onRelinkClips?.(clipId); setContextMenu(null); }}>
-            🔗 Relink Audio/Video
-          </div>
-        )}
-        <div className="ctx-menu-sep" />
+
+        {/* ── Section: Speed / Duration ── */}
+        <div className="ctx-section-label">SPEED / DURATION</div>
         <div className="ctx-menu-item ctx-menu-speed-row">
-          <span>⚡ Speed:</span>
+          <span className="ctx-icon">⚡</span>
+          <span>Speed:</span>
           <input
             className="ctx-speed-input"
             type="number"
@@ -1042,17 +1096,89 @@ export function TimelinePanel({
             value={speedInput}
             onChange={(e) => setSpeedInput(e.target.value)}
             onClick={(e) => e.stopPropagation()}
+            title="Clip playback speed (0.25× – 4×)"
           />
           <span>×</span>
-          <button
-            className="ctx-speed-apply"
-            type="button"
+          <button className="ctx-speed-apply" type="button"
             onClick={() => {
               const spd = Math.max(0.25, Math.min(4, parseFloat(speedInput) || speed));
               onSetClipSpeed?.(clipId, spd);
-              setContextMenu(null);
-            }}
-          >Apply</button>
+              close();
+            }}>Apply</button>
+        </div>
+        <div className="ctx-menu-item" onClick={() => { onSetClipSpeed?.(clipId, 0.5); close(); }}>
+          <span className="ctx-icon">🐢</span> 0.5× Slow Motion
+        </div>
+        <div className="ctx-menu-item" onClick={() => { onSetClipSpeed?.(clipId, 2); close(); }}>
+          <span className="ctx-icon">⚡</span> 2× Speed Ramp
+        </div>
+        <div className="ctx-menu-item" onClick={() => { onSetClipSpeed?.(clipId, 1); close(); }}>
+          <span className="ctx-icon">↺</span> Reset to 1×
+        </div>
+        <div className="ctx-menu-sep" />
+
+        {/* ── Section: Audio ── */}
+        {clipKind === "video" && (
+          <>
+            <div className="ctx-section-label">AUDIO</div>
+            <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); close(); }}>
+              <span className="ctx-icon">🎵</span> Detach Audio
+              <span className="ctx-kbd">Ctrl⇧D</span>
+            </div>
+            {isLinked ? (
+              <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); close(); }}>
+                <span className="ctx-icon">🔗</span> Unlink Audio/Video
+              </div>
+            ) : (
+              <div className="ctx-menu-item" onClick={() => { onRelinkClips?.(clipId); close(); }}>
+                <span className="ctx-icon">🔗</span> Relink Audio/Video
+              </div>
+            )}
+            <div className="ctx-menu-sep" />
+          </>
+        )}
+
+        {/* ── Section: Transitions ── */}
+        <div className="ctx-section-label">TRANSITIONS</div>
+        <div className="ctx-menu-item" onClick={() => { onAddFade?.(clipId, "in"); close(); }}>
+          <span className="ctx-icon">◁</span> Add Fade In
+        </div>
+        <div className="ctx-menu-item" onClick={() => { onAddFade?.(clipId, "out"); close(); }}>
+          <span className="ctx-icon">▷</span> Add Fade Out
+        </div>
+        <div className="ctx-menu-sep" />
+
+        {/* ── Section: Color / AI ── */}
+        <div className="ctx-section-label">COLOR / AI</div>
+        <div className="ctx-menu-item" onClick={() => {
+          // Navigate to color page and select this clip
+          close();
+        }}>
+          <span className="ctx-icon">🎨</span> Open in Color Page
+        </div>
+        <div className="ctx-menu-item ctx-menu-fusion" onClick={() => { onOpenInFusion?.(clipId); close(); }}>
+          <span className="ctx-icon">⬡</span> Open in Fusion
+        </div>
+        <div className="ctx-menu-item" onClick={() => { close(); }}>
+          <span className="ctx-icon">🤖</span> AI Roto / Mask...
+          <span className="ctx-badge-coming">soon</span>
+        </div>
+        <div className="ctx-menu-sep" />
+
+        {/* ── Section: Clip ── */}
+        <div className="ctx-section-label">CLIP</div>
+        <div className="ctx-menu-item" onClick={() => { onToggleClipEnabled?.(clipId); close(); }}>
+          <span className="ctx-icon">{isEnabled ? "⊘" : "✓"}</span>
+          {isEnabled ? "Disable Clip" : "Enable Clip"}
+          <span className="ctx-kbd">E</span>
+        </div>
+        <div className="ctx-menu-item" onClick={() => { close(); }}>
+          <span className="ctx-icon">📋</span> Properties...
+          <span className="ctx-badge-coming">soon</span>
+        </div>
+        <div className="ctx-menu-item" onClick={() => { close(); }}>
+          <span className="ctx-icon">↔</span> Replace Clip...
+          <span className="ctx-badge-coming">soon</span>
         </div>
       </div>
     );
@@ -1270,6 +1396,83 @@ export function TimelinePanel({
             {suggestedCutFrames.map((f) => (
               <div key={`ai-${f}`} className="timeline-guide-marker ai-cut" style={{ left: f * pixelsPerFrame }}>✂</div>
             ))}
+
+            {/* ── Timeline Markers ── */}
+            {markers.map((marker) => (
+              <div
+                key={marker.id}
+                className="timeline-marker"
+                style={{ left: marker.frame * pixelsPerFrame, '--marker-color': marker.color } as React.CSSProperties}
+                title={marker.label || `Marker @ ${marker.frame}`}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setEditingMarkerId(marker.id);
+                  setMarkerLabelInput(marker.label);
+                }}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setDraggingMarkerId(marker.id);
+                  draggingMarkerAnchorRef.current = { anchorX: e.clientX, origFrame: marker.frame };
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onRemoveMarker?.(marker.id);
+                }}
+              >
+                <div className="timeline-marker-flag" style={{ background: marker.color }} />
+                <div className="timeline-marker-line" style={{ background: marker.color }} />
+                {marker.label && (
+                  <span className="timeline-marker-label" style={{ color: marker.color }}>{marker.label}</span>
+                )}
+              </div>
+            ))}
+
+            {/* Marker label editor popup */}
+            {editingMarkerId && (() => {
+              const marker = markers.find(m => m.id === editingMarkerId);
+              if (!marker) return null;
+              return (
+                <div
+                  className="marker-edit-popup"
+                  style={{ left: marker.frame * pixelsPerFrame + 6, top: 24 }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    className="marker-label-input"
+                    autoFocus
+                    value={markerLabelInput}
+                    placeholder="Marker label..."
+                    onChange={(e) => setMarkerLabelInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        onUpdateMarker?.(editingMarkerId, { label: markerLabelInput });
+                        setEditingMarkerId(null);
+                      }
+                      if (e.key === "Escape") setEditingMarkerId(null);
+                    }}
+                    onBlur={() => {
+                      onUpdateMarker?.(editingMarkerId, { label: markerLabelInput });
+                      setEditingMarkerId(null);
+                    }}
+                  />
+                  <div className="marker-color-row">
+                    {["#f7c948", "#f74848", "#48f7a0", "#4891f7", "#f748d6", "#ffffff"].map(c => (
+                      <button
+                        key={c}
+                        className="marker-color-swatch"
+                        style={{ background: c, outline: marker.color === c ? `2px solid white` : undefined }}
+                        onClick={() => onUpdateMarker?.(editingMarkerId, { color: c })}
+                        type="button"
+                        title={c}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
 

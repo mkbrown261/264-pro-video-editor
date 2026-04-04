@@ -521,22 +521,100 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const isCtrl = e.ctrlKey || e.metaKey;
+
+      // Delete / Backspace → delete selected nodes
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedNodeIds.length > 0) deleteSelected();
+        if (selectedNodeIds.length > 0) { e.preventDefault(); deleteSelected(); }
       }
-      if (e.key === "d" && (e.ctrlKey || e.metaKey)) {
+
+      // Ctrl+A → select all nodes
+      if (isCtrl && e.key === "a") {
+        e.preventDefault();
+        onSelectNodes(graph.nodes.map(n => n.id));
+        return;
+      }
+      // Ctrl+Shift+A → deselect all
+      if (isCtrl && e.shiftKey && e.key === "A") {
+        e.preventDefault();
+        onSelectNodes([]);
+        return;
+      }
+      // Ctrl+D → duplicate selected
+      if (isCtrl && e.key === "d" && !e.shiftKey) {
         e.preventDefault();
         duplicateSelected();
+        return;
       }
-      if (e.key === "c" && (e.ctrlKey || e.metaKey)) copySelected();
-      if (e.key === "v" && (e.ctrlKey || e.metaKey)) pasteClipboard();
-      if (e.key === "f" && !e.ctrlKey) fitToView();
-      if (e.key === "Escape") { setAddMenu(null); setAddSearch(""); }
+      // Ctrl+C → copy selected
+      if (isCtrl && e.key === "c") { e.preventDefault(); copySelected(); return; }
+      // Ctrl+V → paste clipboard
+      if (isCtrl && e.key === "v") { e.preventDefault(); pasteClipboard(); return; }
+      // Ctrl+G → group selected (stub)
+      if (isCtrl && e.key === "g") {
+        e.preventDefault();
+        // Group: wrap selected nodes into a group (placeholder)
+        return;
+      }
+      // Ctrl+F → fit to view / frame selected
+      if (isCtrl && e.key === "f") { e.preventDefault(); fitToView(); return; }
+      // F → fit to view (no modifier)
+      if (e.key === "f" && !isCtrl) { fitToView(); return; }
+      // Tab → select next node
+      if (e.key === "Tab" && !isCtrl) {
+        e.preventDefault();
+        if (graph.nodes.length === 0) return;
+        const curIdx = selectedNodeIds.length > 0
+          ? graph.nodes.findIndex(n => n.id === selectedNodeIds[0])
+          : -1;
+        const nextIdx = (curIdx + 1) % graph.nodes.length;
+        onSelectNodes([graph.nodes[nextIdx].id]);
+        return;
+      }
+      // B → toggle bypass on selected nodes
+      if (e.key === "b" && !isCtrl) {
+        selectedNodeIds.forEach(id => toggleBypass(id));
+        return;
+      }
+      // P → open add node picker (like Fusion's Tab key)
+      if (e.key === "p" && !isCtrl) {
+        const cx = (containerRef.current?.clientWidth ?? 400) / 2;
+        const cy = (containerRef.current?.clientHeight ?? 300) / 2;
+        setAddMenu({ x: cx, y: cy, wx: (cx - pan.x) / zoom, wy: (cy - pan.y) / zoom });
+        setAddSearch("");
+        return;
+      }
+      // R → reset view
+      if (e.key === "r" && !isCtrl) { setPan({ x: 80, y: 80 }); setZoom(1.0); return; }
+      // = or + → zoom in
+      if (e.key === "=" || e.key === "+") {
+        setZoom(z => Math.min(MAX_ZOOM, z * 1.15));
+        return;
+      }
+      // - → zoom out
+      if (e.key === "-") {
+        setZoom(z => Math.max(MIN_ZOOM, z * 0.85));
+        return;
+      }
+      // 0 → reset zoom to 1:1
+      if (e.key === "0" && !isCtrl) { setZoom(1); setPan({ x: 80, y: 80 }); return; }
+      // 1 → zoom to fit
+      if (e.key === "1" && !isCtrl) { fitToView(); return; }
+      // 2 → zoom to 200%
+      if (e.key === "2" && !isCtrl) { setZoom(2); return; }
+      // 3 → zoom to 50%
+      if (e.key === "3" && !isCtrl) { setZoom(0.5); return; }
+      // Escape → cancel add menu or deselect
+      if (e.key === "Escape") {
+        if (addMenu) { setAddMenu(null); setAddSearch(""); return; }
+        if (wire) { setWire(null); return; }
+        onSelectNodes([]);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedNodeIds, deleteSelected, duplicateSelected, copySelected, pasteClipboard, fitToView]);
+  }, [selectedNodeIds, deleteSelected, duplicateSelected, copySelected, pasteClipboard, fitToView, graph.nodes, onSelectNodes, toggleBypass, pan, zoom, addMenu, wire]);
 
   // ── Filter nodes for add menu ─────────────────────────────────────────────
   const filteredAddNodes = addSearch.trim()
@@ -613,23 +691,39 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
             const p2 = getPortPos(toNode, w.toPortId, true);
             const fromPort = fromNode.ports.find(p => p.id === w.fromPortId);
             const toPort = toNode.ports.find(p => p.id === w.toPortId);
-            const color = (PORT_TYPE_COLORS as Record<string,string>)[(fromPort?.type ?? toPort?.type) ?? "image"] ?? "#f5c542";
+            const portType = (fromPort?.type ?? toPort?.type) ?? "image";
+            const color = (PORT_TYPE_COLORS as Record<string,string>)[portType] ?? "#f5c542";
+            // Faster flow for audio, slower for mask
+            const flowDur = portType === "audio" ? "0.9s" : portType === "mask" ? "3s" : "1.8s";
+            const isSelected = selectedNodeIds.includes(w.fromNodeId) || selectedNodeIds.includes(w.toNodeId);
+            const path = wirePath(p1.x, p1.y, p2.x, p2.y);
             return (
-              <g key={w.id}>
+              <g key={w.id} className="comp-wire-group">
+                {/* Wire glow when connected to selected node */}
+                {isSelected && (
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={4 / zoom}
+                    strokeOpacity={0.15}
+                  />
+                )}
+                {/* Wire body */}
                 <path
-                  d={wirePath(p1.x, p1.y, p2.x, p2.y)}
+                  d={path}
                   fill="none"
                   stroke={color}
-                  strokeWidth={1.5 / zoom}
-                  strokeOpacity={0.7}
+                  strokeWidth={(isSelected ? 2 : 1.5) / zoom}
+                  strokeOpacity={isSelected ? 0.9 : 0.65}
                   className="comp-wire"
                 />
-                {/* Animated flow dots */}
-                <circle r={2 / zoom} fill={color} opacity={0.9}>
+                {/* Animated flow dot */}
+                <circle r={2.5 / zoom} fill={color} opacity={0.85}>
                   <animateMotion
-                    dur="1.8s"
+                    dur={flowDur}
                     repeatCount="indefinite"
-                    path={wirePath(p1.x, p1.y, p2.x, p2.y)}
+                    path={path}
                   />
                 </circle>
               </g>
@@ -652,56 +746,78 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                 onContextMenu={ev => onNodeContextMenu(ev, node.id)}
                 onDoubleClick={ev => onNodeDblClick(ev, node.id)}
                 style={{ cursor: "grab" }}
-                opacity={isBypass ? 0.45 : 1}
+                opacity={isBypass ? 0.38 : 1}
               >
-                {/* Selection glow */}
+                {/* Drop shadow */}
+                <rect x={3} y={5} width={NODE_W} height={NODE_H} rx={5}
+                  fill="rgba(0,0,0,0.6)"
+                  style={{ filter: "blur(4px)" }}
+                />
+                {/* Body background */}
+                <rect width={NODE_W} height={NODE_H} rx={5} fill="#18191f" />
+                {/* Side accent bar */}
+                <rect x={0} y={0} width={4} height={NODE_H} rx={2} fill={catCol} opacity={0.9} />
+                {/* Header gradient */}
+                <defs>
+                  <linearGradient id={`ng-${node.id}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={catCol} stopOpacity="0.4" />
+                    <stop offset="100%" stopColor={catCol} stopOpacity="0.08" />
+                  </linearGradient>
+                </defs>
+                <rect x={4} y={0} width={NODE_W - 4} height={20} rx={3}
+                  fill={`url(#ng-${node.id})`}
+                />
+                {/* Top border glow when selected */}
+                {isSel && (
+                  <rect x={0} y={0} width={NODE_W} height={2} rx={1} fill="#ffd700" opacity={0.95} />
+                )}
+                {/* Selection ring */}
                 {isSel && (
                   <rect
-                    x={-3} y={-3}
-                    width={NODE_W + 6}
-                    height={NODE_H + 6}
-                    rx={6}
+                    x={-2} y={-2}
+                    width={NODE_W + 4}
+                    height={NODE_H + 4}
+                    rx={7}
                     fill="none"
                     stroke="#ffd700"
-                    strokeWidth={1.5 / zoom}
-                    opacity={0.9}
+                    strokeWidth={1.2 / zoom}
+                    opacity={0.85}
                   />
                 )}
-                {/* Shadow */}
-                <rect x={2} y={3} width={NODE_W} height={NODE_H} rx={4} fill="rgba(0,0,0,0.5)" />
-                {/* Body */}
-                <rect width={NODE_W} height={NODE_H} rx={4} fill="#1e1e24" />
-                {/* Category stripe */}
-                <rect width={NODE_W} height={14} rx={4} fill={catCol} />
-                <rect y={10} width={NODE_W} height={4} fill={catCol} />
-                {/* Label */}
+                {/* Node label */}
                 <text
-                  x={NODE_W / 2} y={8}
+                  x={(NODE_W + 4) / 2} y={11}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill="#fff"
-                  fontSize={7 / zoom < 7 ? 7 : 7}
+                  fill="#ffffff"
+                  fontSize={7}
                   fontWeight="700"
-                  letterSpacing="0.05em"
+                  letterSpacing="0.04em"
                   style={{ userSelect: "none", pointerEvents: "none" }}
                 >
-                  {node.label}
+                  {node.label.length > 14 ? node.label.slice(0, 14) + "…" : node.label}
                 </text>
                 {/* Node type sub-label */}
                 <text
-                  x={NODE_W / 2} y={32}
+                  x={(NODE_W + 4) / 2} y={33}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill="rgba(255,255,255,0.5)"
-                  fontSize={6}
+                  fill="rgba(255,255,255,0.38)"
+                  fontSize={5.5}
                   style={{ userSelect: "none", pointerEvents: "none" }}
                 >
                   {node.type}
                 </text>
+                {/* Category dot */}
+                <circle cx={NODE_W - 6} cy={11} r={3.5} fill={catCol} opacity={0.9} />
 
                 {/* Bypass indicator */}
                 {isBypass && (
-                  <text x={NODE_W - 6} y={7} textAnchor="end" fill="#ffb74d" fontSize={6} fontWeight="700">BYP</text>
+                  <g>
+                    <rect x={NODE_W / 2 - 10} y={NODE_H / 2 - 5} width={20} height={10} rx={2} fill="#ff5722" opacity={0.9} />
+                    <text x={NODE_W / 2} y={NODE_H / 2} textAnchor="middle" dominantBaseline="middle"
+                      fill="white" fontSize={5} fontWeight="700" style={{ pointerEvents: "none", userSelect: "none" }}>BYP</text>
+                  </g>
                 )}
 
                 {/* Input ports */}
@@ -714,8 +830,12 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                       onMouseDown={ev => { ev.stopPropagation(); }}
                       onMouseUp={ev => onPortMouseUp(ev, node.id, port.id, true)}
                     >
-                      <circle cx={0} cy={py} r={PORT_R} fill={col} stroke="#111" strokeWidth={1} />
-                      <text x={8} y={py} dominantBaseline="middle" fill="rgba(255,255,255,0.6)" fontSize={5.5} style={{ pointerEvents: "none", userSelect: "none" }}>{port.label}</text>
+                      {/* Port hover ring */}
+                      <circle cx={0} cy={py} r={PORT_R + 3} fill="transparent" style={{ cursor: "crosshair" }} />
+                      <circle cx={0} cy={py} r={PORT_R} fill={col} stroke="rgba(0,0,0,0.7)" strokeWidth={1.2} />
+                      <circle cx={0} cy={py} r={PORT_R - 1.5} fill="rgba(255,255,255,0.25)" />
+                      <text x={9} y={py} dominantBaseline="middle" fill="rgba(255,255,255,0.55)"
+                        fontSize={5.5} style={{ pointerEvents: "none", userSelect: "none" }}>{port.label}</text>
                     </g>
                   );
                 })}
@@ -731,8 +851,12 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                       onMouseUp={ev => { ev.stopPropagation(); }}
                       style={{ cursor: "crosshair" }}
                     >
-                      <circle cx={NODE_W} cy={py} r={PORT_R} fill={col} stroke="#111" strokeWidth={1} />
-                      <text x={NODE_W - 8} y={py} textAnchor="end" dominantBaseline="middle" fill="rgba(255,255,255,0.6)" fontSize={5.5} style={{ pointerEvents: "none", userSelect: "none" }}>{port.label}</text>
+                      <circle cx={NODE_W} cy={py} r={PORT_R + 3} fill="transparent" />
+                      <circle cx={NODE_W} cy={py} r={PORT_R} fill={col} stroke="rgba(0,0,0,0.7)" strokeWidth={1.2} />
+                      <circle cx={NODE_W} cy={py} r={PORT_R - 1.5} fill="rgba(255,255,255,0.25)" />
+                      <text x={NODE_W - 9} y={py} textAnchor="end" dominantBaseline="middle"
+                        fill="rgba(255,255,255,0.55)" fontSize={5.5}
+                        style={{ pointerEvents: "none", userSelect: "none" }}>{port.label}</text>
                     </g>
                   );
                 })}

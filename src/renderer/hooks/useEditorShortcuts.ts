@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-interface EditorShortcutOptions {
+export interface EditorShortcutOptions {
   sequenceFps: number;
   /** When true (any modal open) spacebar + arrow keys are suppressed */
   isModalOpen?: boolean;
@@ -28,6 +28,8 @@ interface EditorShortcutOptions {
   onAddMarker?: () => void;
   /** J = rewind (shuttle -1 speed), L = forward (shuttle +1 speed), K = pause */
   onJKLShuttle?: (direction: -1 | 0 | 1) => void;
+  /** Shift+J/L = slow shuttle (0.5× speed) */
+  onSlowShuttle?: (direction: -1 | 1) => void;
   // Panel toggles
   onToggleMediaPool?: () => void;
   onToggleInspector?: () => void;
@@ -37,6 +39,19 @@ interface EditorShortcutOptions {
   // Mark in/out
   onMarkIn?: () => void;
   onMarkOut?: () => void;
+  // Navigation
+  onJumpToClipBoundary?: (direction: -1 | 1) => void;
+  onJumpToNextMarker?: (direction: -1 | 1) => void;
+  // Editing
+  onRippleDelete?: () => void;
+  onDetachAudio?: () => void;
+  onToggleClipEnabled?: () => void;
+  // Clip operations
+  onSetClipSpeed?: (factor: number) => void;
+  // Command palette
+  onOpenCommandPalette?: () => void;
+  // Storyboard
+  onToggleStoryboard?: () => void;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -84,61 +99,70 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onZoomOut,
         onAddMarker,
         onJKLShuttle,
+        onSlowShuttle,
         onToggleMediaPool,
         onToggleInspector,
         onToggleDualViewer,
         onLayoutPreset,
         onMarkIn,
         onMarkOut,
+        onJumpToClipBoundary,
+        onJumpToNextMarker,
+        onRippleDelete,
+        onDetachAudio,
+        onToggleClipEnabled,
+        onOpenCommandPalette,
+        onToggleStoryboard,
       } = optionsRef.current;
 
       const key = event.key.toLowerCase();
       const isModifier = event.metaKey || event.ctrlKey;
 
       if (isModifier) {
-        // Cmd/Ctrl+Z → undo
+        // ── Command Palette ──────────────────────────────────────────────────
+        if (key === "p" && !event.shiftKey) {
+          event.preventDefault();
+          onOpenCommandPalette?.();
+          return;
+        }
+
+        // ── File Operations ──────────────────────────────────────────────────
         if (key === "z" && !event.shiftKey) {
           event.preventDefault();
           onUndo();
           return;
         }
-        // Cmd/Ctrl+Shift+Z → redo
         if (key === "z" && event.shiftKey) {
           event.preventDefault();
           onRedo();
           return;
         }
-        // Cmd/Ctrl+Y → redo (Windows convention)
         if (key === "y") {
           event.preventDefault();
           onRedo();
           return;
         }
-        // Cmd/Ctrl+S → save
         if (key === "s" && !event.shiftKey) {
           event.preventDefault();
           onSave();
           return;
         }
-        // Cmd/Ctrl+Shift+S → save as
         if (key === "s" && event.shiftKey) {
           event.preventDefault();
           onSaveAs?.();
           return;
         }
-        // Cmd/Ctrl+O → open
         if (key === "o") {
           event.preventDefault();
           onOpen();
           return;
         }
-        // Cmd/Ctrl+N → new project
         if (key === "n") {
           event.preventDefault();
           onNewProject?.();
           return;
         }
-        // Cmd/Ctrl+B → split
+        // Cmd/Ctrl+B → split at playhead
         if (key === "b") {
           event.preventDefault();
           onSplitSelectedClip();
@@ -156,7 +180,39 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           onExport?.();
           return;
         }
-        // Cmd/Ctrl+, → project settings (handled via File menu in App)
+
+        // ── Navigation ───────────────────────────────────────────────────────
+        // Ctrl+← / Ctrl+→ → jump to clip boundary
+        if (key === "arrowleft" && !event.shiftKey) {
+          event.preventDefault();
+          onJumpToClipBoundary?.(-1);
+          return;
+        }
+        if (key === "arrowright" && !event.shiftKey) {
+          event.preventDefault();
+          onJumpToClipBoundary?.(1);
+          return;
+        }
+        // Ctrl+Shift+← / → → jump to next/prev marker
+        if (key === "arrowleft" && event.shiftKey) {
+          event.preventDefault();
+          onJumpToNextMarker?.(-1);
+          return;
+        }
+        if (key === "arrowright" && event.shiftKey) {
+          event.preventDefault();
+          onJumpToNextMarker?.(1);
+          return;
+        }
+
+        // ── Editing ──────────────────────────────────────────────────────────
+        // Ctrl+Shift+D → detach audio
+        if (key === "d" && event.shiftKey) {
+          event.preventDefault();
+          onDetachAudio?.();
+          return;
+        }
+        // Ctrl+, → project settings
         if (key === ",") {
           event.preventDefault();
           return;
@@ -167,7 +223,6 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           if (key === "2") { event.preventDefault(); onLayoutPreset?.("color"); return; }
           if (key === "3") { event.preventDefault(); onLayoutPreset?.("audio"); return; }
         }
-        // Cmd/Ctrl+Shift+Z handled above; Shift+Z (no modifier) → fit timeline
         return;
       }
 
@@ -177,10 +232,15 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
       }
 
       switch (key) {
+        // ── Playback ─────────────────────────────────────────────────────────
         case " ":
+          event.preventDefault();
+          onTogglePlayback();
+          break;
+
         case "k":
           event.preventDefault();
-          if (key === "k" && onJKLShuttle) {
+          if (onJKLShuttle) {
             onJKLShuttle(0); // K = pause
           } else {
             onTogglePlayback();
@@ -190,19 +250,27 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         // JKL shuttle
         case "j":
           event.preventDefault();
-          onJKLShuttle ? onJKLShuttle(-1) : onTogglePlayback();
+          if (event.shiftKey && onSlowShuttle) {
+            onSlowShuttle(-1); // Shift+J = slow rewind
+          } else {
+            onJKLShuttle ? onJKLShuttle(-1) : onTogglePlayback();
+          }
           break;
         case "l":
           event.preventDefault();
-          onJKLShuttle ? onJKLShuttle(1) : onTogglePlayback();
+          if (event.shiftKey && onSlowShuttle) {
+            onSlowShuttle(1); // Shift+L = slow forward
+          } else {
+            onJKLShuttle ? onJKLShuttle(1) : onTogglePlayback();
+          }
           break;
 
+        // ── Tools ────────────────────────────────────────────────────────────
         case "a":
           event.preventDefault();
           onSelectTool();
           break;
         case "s":
-          // S = split at playhead (CapCut parity — the single most-used NLE shortcut)
           event.preventDefault();
           onSplitSelectedClip();
           break;
@@ -214,6 +282,8 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onToggleBladeTool();
           break;
+
+        // ── View ─────────────────────────────────────────────────────────────
         case "f":
           event.preventDefault();
           onToggleFullscreen();
@@ -230,6 +300,8 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onToggleDualViewer?.();
           break;
+
+        // Mark in/out
         case "i":
           event.preventDefault();
           onMarkIn?.();
@@ -257,12 +329,17 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           }
           break;
 
-        // M → add marker at playhead
+        // M → add marker at playhead / Shift+M → jump to next marker
         case "m":
           event.preventDefault();
-          onAddMarker?.();
+          if (event.shiftKey) {
+            onJumpToNextMarker?.(1);
+          } else {
+            onAddMarker?.();
+          }
           break;
 
+        // ── Navigation ────────────────────────────────────────────────────────
         case "arrowleft":
           event.preventDefault();
           onNudgePlayhead(event.shiftKey ? -sequenceFps : -1);
@@ -279,22 +356,40 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onSeekToEnd();
           break;
+
+        // ── Editing ──────────────────────────────────────────────────────────
         case "backspace":
         case "delete":
           event.preventDefault();
-          onRemoveSelectedClip();
+          if (event.shiftKey) {
+            onRippleDelete?.();
+          } else {
+            onRemoveSelectedClip();
+          }
           break;
+
+        // E → enable/disable clip
+        case "e":
+          event.preventDefault();
+          onToggleClipEnabled?.();
+          break;
+
+        // G → toggle storyboard
+        case "g":
+          event.preventDefault();
+          onToggleStoryboard?.();
+          break;
+
+        // Escape → exit fullscreen or switch to select tool
         case "escape":
           event.preventDefault();
-          // FIX 6: ESC exits fullscreen if active — NEVER shows blank blue screen
           if (document.fullscreenElement) {
-            void document.exitFullscreen().catch(() => {
-              // exitFullscreen can throw if no fullscreen active — safe to ignore
-            });
+            void document.exitFullscreen().catch(() => {});
           } else {
             onSelectTool();
           }
           break;
+
         default:
           break;
       }
