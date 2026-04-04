@@ -548,13 +548,37 @@ export function usePlaybackController({
   useEffect(() => {
     if (!isPlaying) return;
     const frameAtChange = stateRef.current.playheadFrame;
-    stateRef.current.playbackStartedAt = null;  // freeze RAF during load
     if (!activeSegment) {
       // Clip was removed from timeline while playing — stop everything cleanly
+      stateRef.current.playbackStartedAt = null;
       void syncVideo(null, frameAtChange, false);
       pausePlayback();
       return;
     }
+
+    const media = videoRef.current;
+    const newUrl = activeSegment.asset.previewUrl;
+    const urlChanged = lastLoadedVideoUrlRef.current !== newUrl;
+    // For same-URL segment changes (e.g. split clip seam), check if the video
+    // is already at the right position. If drift < 2 frames, skip the
+    // playbackStartedAt freeze entirely — the RAF keeps running uninterrupted,
+    // which eliminates the 1-3 frame video stutter at split seams.
+    if (!urlChanged && media) {
+      const targetTime = getTargetCurrentTime(activeSegment, frameAtChange, stateRef.current.sequenceFps);
+      const timeDrift = Math.abs(media.currentTime - targetTime);
+      const twoFrames = framesToSeconds(2, stateRef.current.sequenceFps);
+      if (timeDrift < twoFrames && !media.paused) {
+        // Video is already playing at the right position — just update the
+        // trim guard for the new segment and keep the RAF clock running.
+        attachTrimGuard(media, activeSegment);
+        // Re-anchor so accumulated drift is zeroed out from this frame forward.
+        stateRef.current.playbackAnchorFrame = frameAtChange;
+        stateRef.current.playbackStartedAt = performance.now();
+        return;
+      }
+    }
+
+    stateRef.current.playbackStartedAt = null;  // freeze RAF during load/seek
     void syncVideo(activeSegment, frameAtChange, true).then(() => {
       // Re-anchor from the frame we were at when the segment changed
       stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;

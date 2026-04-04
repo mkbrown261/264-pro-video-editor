@@ -402,6 +402,36 @@ export function useMultiTrackAudio({
     const ctx      = shouldPlay ? getAudioContext() : null;
     const wantedIds = new Set(targetSegments.map((s) => s.clip.id));
 
+    // ── Detect "seamless continue" pairs ─────────────────────────────────
+    // When outgoing clip A and incoming clip B:
+    //   1. Share the same previewUrl (same source file)
+    //   2. Are on the same track
+    //   3. A.endFrame === B.startFrame  (adjacent — a split seam)
+    //   4. A.sourceOutSeconds ≈ B.sourceInSeconds (continuous in source)
+    // Then we can transfer A's running element directly to B — zero gap,
+    // zero seek, zero fade. This is exactly what happens after a split.
+    // Map: incoming clip.id → outgoing slot whose element we'll reuse
+    const seamlessContinueMap = new Map<string, Slot>();
+    for (const incoming of targetSegments) {
+      if (wantedIds.has(incoming.clip.id)) continue; // already active — skip
+      for (const slot of slotsRef.current) {
+        if (wantedIds.has(slot.segment.clip.id)) continue; // still wanted — skip
+        const sameTrack   = slot.segment.track.id === incoming.track.id;
+        const adjacent    = slot.segment.endFrame === incoming.startFrame;
+        const sameUrl     = slot.segment.asset.previewUrl === incoming.asset.previewUrl;
+        // Allow up to 1 frame of float imprecision in source time comparison
+        const seamTime    = Math.abs(slot.segment.sourceOutSeconds - incoming.sourceInSeconds);
+        const frameSecs   = framesToSeconds(1, fps);
+        if (sameTrack && adjacent && sameUrl && seamTime < frameSecs * 2) {
+          seamlessContinueMap.set(incoming.clip.id, slot);
+          break;
+        }
+      }
+    }
+
+    // Outgoing slots that are being donated to a seamless continue — don't stop them
+    const donatedSlots = new Set(seamlessContinueMap.values());
+
     // ── Outgoing slots: ramp gain to 0, then release ──────────────────────
     const nextSlots: Slot[]           = [];
     const outgoingReleases: Promise<void>[] = [];
@@ -409,6 +439,9 @@ export function useMultiTrackAudio({
     for (const slot of slotsRef.current) {
       if (wantedIds.has(slot.segment.clip.id)) {
         nextSlots.push(slot);
+      } else if (donatedSlots.has(slot)) {
+        // This element is being handed off to the next clip — don't touch it
+        // (the incoming slot setup below will adopt it)
       } else {
         // Check if this outgoing clip is adjacent to any incoming clip on the
         // SAME track (hard cut — no fade bleed at seams between consecutive clips).
@@ -469,6 +502,21 @@ export function useMultiTrackAudio({
 
     for (const seg of targetSegments) {
       if (existingIds.has(seg.clip.id)) continue;
+
+      // ── Seamless continue: adopt the outgoing element unchanged ──────────
+      const donorSlot = seamlessContinueMap.get(seg.clip.id);
+      if (donorSlot) {
+        // The element is already playing at exactly the right position.
+        // Just update the segment reference so volume/trim checks use the
+        // new clip's parameters, and mark fadeInDone=true (no ramp needed).
+        nextSlots.push({
+          segment:      seg,
+          element:      donorSlot.element,
+          fadeInDone:   true,   // already at correct gain — skip ramp
+          isPrePlaying: false,
+        });
+        continue;
+      }
 
       const claimed   = claimPrefetched(seg.clip.id);
       const element   = claimed?.element ?? acquireElement();
