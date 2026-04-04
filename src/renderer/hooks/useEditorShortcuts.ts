@@ -201,6 +201,11 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onSelectTool();
           break;
+        case "s":
+          // S = split at playhead (CapCut parity — the single most-used NLE shortcut)
+          event.preventDefault();
+          onSplitSelectedClip();
+          break;
         case "v":
           event.preventDefault();
           onSelectTool();

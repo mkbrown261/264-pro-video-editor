@@ -463,6 +463,22 @@ export function usePlaybackController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.id, isPlaying]);
 
+  // ── Preload on mount / when activeSegment first becomes non-null ──────────
+  // Silently loads the video src so the browser decode pipeline is warm
+  // before the user hits Play, eliminating the first-play freeze.
+  useEffect(() => {
+    if (isPlaying) return;
+    if (!activeSegment) return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (lastLoadedVideoUrlRef.current === activeSegment.asset.previewUrl) return;
+    // Fire-and-forget: don't block, don't play, just get the src decoded
+    void loadMediaSource(video, activeSegment.asset.previewUrl, activeSegment.asset.name)
+      .then(() => { lastLoadedVideoUrlRef.current = activeSegment.asset.previewUrl; })
+      .catch(() => { /* ignore silent preload errors */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSegment?.asset.previewUrl]);
+
   // ── cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {

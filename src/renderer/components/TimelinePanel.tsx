@@ -345,6 +345,33 @@ export function TimelinePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onRegisterZoomControls]);
 
+  // ── Ctrl+= zoom in / Ctrl+- zoom out / Ctrl+0 fit ────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const tag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setPpf((prev) => Math.min(MAX_PPF, parseFloat((prev * 1.25).toFixed(2))));
+      } else if (e.key === "-") {
+        e.preventDefault();
+        setPpf((prev) => Math.max(MIN_PPF, parseFloat((prev * 0.8).toFixed(2))));
+      } else if (e.key === "0") {
+        e.preventDefault();
+        const editor = timelineEditorRef.current;
+        if (editor && timelineFrames > 0) {
+          const visibleWidth = editor.clientWidth - LABEL_W;
+          const fitPpf = Math.max(MIN_PPF, Math.min(MAX_PPF, visibleWidth / timelineFrames));
+          setPpf(parseFloat(fitPpf.toFixed(2)));
+          requestAnimationFrame(() => { if (timelineEditorRef.current) timelineEditorRef.current.scrollLeft = 0; });
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [timelineFrames]);
+
   // ── Playhead scrub ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isScrubbingPlayhead) return;

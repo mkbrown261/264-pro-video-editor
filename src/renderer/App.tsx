@@ -727,8 +727,8 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [projectDirty]);
 
-  // ── Auto-save every 5 minutes when project is dirty ───────────────────────
-  const AUTO_SAVE_MS = 5 * 60 * 1000; // 5 minutes
+  // ── Auto-save every 60 seconds when project is dirty ─────────────────────
+  const AUTO_SAVE_MS = 60 * 1000; // 60 seconds (CapCut parity)
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (autoSaveRef.current) clearInterval(autoSaveRef.current);
