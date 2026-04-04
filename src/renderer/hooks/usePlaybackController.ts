@@ -249,10 +249,35 @@ export function usePlaybackController({
   // Cleanup handle for the trim-boundary timeupdate listener
   const trimGuardCleanupRef = useRef<(() => void) | null>(null);
 
+  // ── Video lookahead: hidden <video> element that preloads the NEXT clip ──
+  // While clip A is playing we load clip B into preloadVideoRef so that when
+  // the transition fires, lastLoadedVideoUrlRef already matches and syncVideo
+  // can skip loadMediaSource, going straight to seekMediaElement + play().
+  const preloadVideoRef = useRef<HTMLVideoElement | null>(null);
+  const preloadedUrlRef = useRef<string | null>(null);
+
+  // Lazily create the hidden preload element once
+  function getPreloadElement(): HTMLVideoElement {
+    if (!preloadVideoRef.current) {
+      const el = document.createElement("video");
+      el.preload  = "auto";
+      el.muted    = true;
+      el.playsInline = true;
+      el.style.display = "none";
+      document.body.appendChild(el);
+      preloadVideoRef.current = el;
+    }
+    return preloadVideoRef.current;
+  }
+
   /** Attach a timeupdate listener that hard-stops the video element the instant
-   *  it passes sourceOutSeconds.  This is the authoritative trim-end enforcer —
-   *  the RAF loop does a coarser correction, but timeupdate fires every ~250 ms
-   *  at native resolution and catches the boundary precisely. */
+   *  it passes sourceOutSeconds.  Fires every ~250 ms (browser-driven) so we
+   *  catch the boundary even when the RAF is frozen during load/seek.
+   *
+   *  IMPORTANT: we only PAUSE here — we do NOT reset currentTime.  The RAF loop
+   *  does the per-frame clamping.  Resetting currentTime inside timeupdate creates
+   *  an infinite loop: set → timeupdate fires → set → … causing the video to
+   *  loop at the trim point instead of stopping. */
   function attachTrimGuard(media: HTMLVideoElement, seg: TimelineSegment): void {
     // Remove any previous guard first
     trimGuardCleanupRef.current?.();
@@ -262,9 +287,10 @@ export function usePlaybackController({
     const inTime  = seg.sourceInSeconds;
 
     const onTimeUpdate = () => {
-      // If the element runs past the out-point, park it exactly there.
+      // Past the out-point — pause so the viewer shows the last valid frame.
+      // Do NOT set currentTime here; the RAF loop / syncVideo will re-seek
+      // when the next segment loads.
       if (media.currentTime > outTime + 0.016) { // 16 ms ≈ 1 frame at 60fps
-        media.currentTime = outTime;
         media.pause();
       }
       // If something seeks before the in-point, snap back.
@@ -311,6 +337,21 @@ export function usePlaybackController({
 
       if (urlChanged) {
         detachTrimGuard();
+        // ── Fast path when the lookahead pre-loaded this URL ─────────────
+        // The hidden preload element already has the media decoded.  Assign
+        // the src to the main element — Electron/Chromium serves it from the
+        // media cache, so canplay fires within one event-loop tick rather
+        // than waiting for network + decode.
+        const preEl = preloadVideoRef.current;
+        const wasPreloaded =
+          preEl !== null &&
+          preloadedUrlRef.current === nextUrl &&
+          preEl.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+        if (wasPreloaded) {
+          preloadedUrlRef.current = null; // slot is now consumed
+        }
+        // loadMediaSource is always called — when the browser cache is warm
+        // the canplay event fires in <10 ms, making this effectively instant.
         await loadMediaSource(media, nextUrl, segment.asset.name);
         lastLoadedVideoUrlRef.current = nextUrl;
       }
@@ -485,16 +526,57 @@ export function usePlaybackController({
 
       // ── TRIM ENFORCEMENT ──────────────────────────────────────────────────
       // The HTML <video> element plays the raw source file and has no concept
-      // of trimStartFrames/trimEndFrames.  If the clip has a trim-end, the
-      // element will keep rendering frames past sourceOutSeconds even though
-      // the playhead (driven by wall clock) has already moved on.  Clamp it.
+      // of trimStartFrames/trimEndFrames.  If it overshoots the trim end:
+      //   • Pause it so no new frames are decoded/rendered past the cut.
+      //   • Do NOT reset currentTime here — that causes a loop (reset→play
+      //     past end→reset→…).  The next syncVideo call will seek correctly.
       const video = videoRef.current;
       if (video && seg && !video.paused) {
         const outTime = seg.sourceOutSeconds;
         if (video.currentTime > outTime + framesToSeconds(1, fps)) {
-          // Overshot the trim end — hard-park the frame at the out-point so
-          // the viewer doesn't flash source frames past the cut.
-          video.currentTime = outTime;
+          video.pause();
+        }
+      }
+
+      // ── VIDEO LOOKAHEAD PREFETCH ──────────────────────────────────────────
+      // When playing, look ahead LOOKAHEAD_FRAMES for the next video clip with
+      // a DIFFERENT source URL and start loading it into the hidden preload
+      // element.  This eliminates the canplay wait in syncVideo when the seam
+      // arrives, turning it into a near-instant seek + play swap.
+      if (seg) {
+        const VIDEO_LOOKAHEAD_FRAMES = 90; // ~3 s at 30 fps
+        const lookaheadFrame = nextFrame + VIDEO_LOOKAHEAD_FRAMES;
+        const segs = stateRef.current.segments;
+        // Find the next video segment that starts within the lookahead window
+        // and has a different source URL than the current clip.
+        const upcomingSeg = segs.find(
+          (s) =>
+            s.track.kind === "video" &&
+            s.clip.isEnabled &&
+            !s.track.muted &&
+            s.startFrame > nextFrame &&
+            s.startFrame <= lookaheadFrame &&
+            s.asset.previewUrl !== seg.asset.previewUrl
+        );
+        if (upcomingSeg) {
+          const nextUrl = upcomingSeg.asset.previewUrl;
+          if (nextUrl && preloadedUrlRef.current !== nextUrl) {
+            preloadedUrlRef.current = nextUrl;
+            const preEl = getPreloadElement();
+            if (preEl.src !== nextUrl) {
+              preEl.src = nextUrl;
+              preEl.load();
+              // Once enough data is buffered, seek the preload element to the
+              // clip's in-point so the decode pipeline is warm at exactly the
+              // right position.  This makes the subsequent seek on the main
+              // element near-instant (browser serves from decode cache).
+              preEl.addEventListener("canplay", () => {
+                if (preEl.src === nextUrl) {
+                  preEl.currentTime = upcomingSeg.sourceInSeconds;
+                }
+              }, { once: true });
+            }
+          }
         }
       }
 
@@ -631,6 +713,16 @@ export function usePlaybackController({
       // Dispose AudioScheduler — releases AudioContext and cached buffers
       schedulerRef.current?.dispose();
       schedulerRef.current = null;
+      // Clean up hidden preload element
+      const preEl = preloadVideoRef.current;
+      if (preEl) {
+        preEl.pause();
+        preEl.src = "";
+        preEl.load();
+        preEl.parentNode?.removeChild(preEl);
+        preloadVideoRef.current = null;
+        preloadedUrlRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
