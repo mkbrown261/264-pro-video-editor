@@ -149,18 +149,40 @@ async function seekMediaElement(
   sequenceFps: number
 ): Promise<void> {
   await new Promise<void>((resolve) => {
+    // 2-second hard timeout — always resolves so we never hang the viewer
     const timeoutId = window.setTimeout(() => { cleanup(); resolve(); }, 2000);
+
     const handleSeeked = () => { cleanup(); resolve(); };
     const cleanup = () => {
       window.clearTimeout(timeoutId);
       element.removeEventListener("seeked", handleSeeked);
     };
+
+    // If already seeking, let it finish then seek to our target
+    // (avoids double-seek race on rapid scrub)
+    if (element.seeking) {
+      const onCurrentSeeked = () => {
+        element.removeEventListener("seeked", onCurrentSeeked);
+        element.addEventListener("seeked", handleSeeked, { once: true });
+        element.currentTime = targetTime;
+      };
+      element.addEventListener("seeked", onCurrentSeeked, { once: true });
+      return;
+    }
+
     element.addEventListener("seeked", handleSeeked, { once: true });
     element.currentTime = targetTime;
-    if (Math.abs(element.currentTime - targetTime) < framesToSeconds(1, sequenceFps)) {
-      cleanup();
-      resolve();
-    }
+
+    // If the browser already has this frame decoded (readyState >= HAVE_CURRENT_DATA)
+    // and currentTime snapped exactly, seeked may not fire — resolve immediately.
+    // Use a microtask so the seeked listener has a chance to fire first.
+    Promise.resolve().then(() => {
+      if (Math.abs(element.currentTime - targetTime) < framesToSeconds(1, sequenceFps) &&
+          element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        cleanup();
+        resolve();
+      }
+    });
   });
 }
 
@@ -373,14 +395,24 @@ export function usePlaybackController({
       const urlChanged = lastLoadedVideoUrlRef.current !== nextUrl;
       const targetTime = getTargetCurrentTime(segment, frame, stateRef.current.sequenceFps);
 
-      // ── Hide video element during load+seek to prevent frame-0 flash ──────
-      // When the URL changes (new clip), element.load() resets currentTime to 0
-      // and the browser may paint frame 0 before the seek to targetTime completes.
-      // Also hide when seeking from a wrong position (e.g., outOfBounds recovery).
-      // We restore visibility immediately before play()/pause() so the first
-      // correctly-positioned frame is the first thing the user sees.
-      const needsHide = urlChanged;
-      if (needsHide) {
+      // ── Determine whether a seek is needed BEFORE hiding ─────────────────
+      // We compute needsSeek first so we can hide proactively for ALL seeks,
+      // not just URL changes.  The root cause of the frame-0 flash on trimmed
+      // clips was: same URL → needsHide=false → video stayed visible → browser
+      // painted the previously-buffered frame (often frame 0 or wrong position)
+      // before seekMediaElement resolved.  Fix: hide whenever ANY seek happens.
+      const timeDrift = Math.abs(media.currentTime - targetTime);
+      const outOfBounds = media.currentTime > segment.sourceOutSeconds + framesToSeconds(1, stateRef.current.sequenceFps) ||
+        media.currentTime < segment.sourceInSeconds - framesToSeconds(1, stateRef.current.sequenceFps);
+      const needsSeek = urlChanged || !shouldPlay || outOfBounds ||
+        timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
+
+      // ── Hide video element during ANY load or seek ────────────────────────
+      // Hide BEFORE we start any async work so the browser cannot paint a
+      // wrong frame between now and when seeked fires.
+      // Covers: new URL load (urlChanged), trim-in/out change (same URL, different
+      // targetTime), scrub, out-of-bounds recovery, and play-start on any clip.
+      if (urlChanged || needsSeek) {
         media.style.visibility = "hidden";
       }
 
@@ -408,26 +440,13 @@ export function usePlaybackController({
         if (isStale()) { media.style.visibility = "visible"; return false; }
       }
 
-      // Always seek when:
-      //   - URL just changed (new clip loaded)
-      //   - Not playing (scrub / trim preview — always snap to exact position)
-      //   - Drift exceeds 2 frames while playing (clock correction)
-      //   - currentTime has overshot the trim end (covers trim-drag while playing)
-      const timeDrift = Math.abs(media.currentTime - targetTime);
-      const outOfBounds = media.currentTime > segment.sourceOutSeconds ||
-        media.currentTime < segment.sourceInSeconds - framesToSeconds(1, stateRef.current.sequenceFps);
-      const needsSeek = urlChanged || !shouldPlay || outOfBounds ||
-        timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
       if (needsSeek) {
-        // Also hide during an out-of-bounds seek so we don't flash the wrong frame
-        if (!needsHide && outOfBounds) media.style.visibility = "hidden";
         await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
         if (isStale()) { media.style.visibility = "visible"; return false; }
       }
 
-      // Seek (and load) are complete — the correct frame is now decoded and
-      // ready in the element's frame buffer.  Restore visibility so the user
-      // sees the correct first frame, never frame 0.
+      // Load + seek complete — the correct frame is decoded and ready.
+      // Restore visibility so the first painted frame is always correct.
       media.style.visibility = "visible";
 
       if (shouldPlay) {
