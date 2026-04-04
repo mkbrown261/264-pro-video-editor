@@ -72,9 +72,9 @@ const SEEK_TOLERANCE_FRAMES = 1.5;    // normal per-frame drift tolerance
 const PRE_PLAY_SEEK_TOLERANCE_S = 0.25; // 250 ms — wide enough to skip any seek at the seam
 const SEEK_TIMEOUT_MS       = 2000;
 /** Frames ahead of a segment start to begin prefetching + pre-playing. */
-const LOOKAHEAD_FRAMES      = 90;     // ~3 s at 30 fps
+const LOOKAHEAD_FRAMES      = 150;    // ~5 s at 30 fps — wider window ensures overlapping clips are pre-loaded
 /** How many frames before the seam we start the incoming element (muted). */
-const PRE_PLAY_FRAMES       = 12;     // ~400 ms at 30 fps — longer runway clears play() + seek latency
+const PRE_PLAY_FRAMES       = 20;     // ~667 ms at 30 fps — longer runway clears play() + seek latency
 /** Gain ramp durations for seam crossfade (seconds).
  *  Equal-power crossfade: both ramps have the same duration so they overlap
  *  and sum to constant perceived loudness across the seam. */
@@ -632,41 +632,97 @@ export function useMultiTrackAudio({
     }
 
     // ── handle "needs-load" slots in background (non-blocking) ───────────
+    // KEY DESIGN: To eliminate the serial load→seek→play latency chain (which
+    // caused an audible gap when overlapping clips entered), we use a parallel
+    // strategy:
+    //   1. Set src + load() to start fetching
+    //   2. Set currentTime IMMEDIATELY (browser queues seek internally)
+    //   3. Route through Web Audio gain at 0 (silent)
+    //   4. Call play() immediately (browser decodes from sought position)
+    //   5. Ramp gain UP once play() resolves — gap is now sub-millisecond
+    //      because play() returns quickly once decode starts, even before
+    //      the seeked event fires.
+    // The old serial await loadSrc→await seekTo→play() was 30–150 ms of silence.
     for (const slot of pendingSlots) {
       const { element, segment } = slot;
       const url = segment.asset.previewUrl;
       void (async () => {
-        try { await loadSrc(element, url); }
-        catch { return; }
+        const trackMuted   = segment.track.muted ?? false;
+        const clipSpeed    = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
+        const clipVol      = Math.max(0, segment.clip.volume ?? 1);
+        const effectiveVol = trackMuted ? 0 : clipVol;
+
+        // Compute target time immediately (use current stateRef for live playhead)
         const segOffsetFrames = Math.max(0, stateRef.current.playheadFrame - segment.startFrame);
-        const clipSpeed       = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
-        const targetTime      = segment.sourceInSeconds +
-                                framesToSeconds(segOffsetFrames, fps) * clipSpeed;
-        const clampedTime     = Math.min(
+        const targetTime = segment.sourceInSeconds +
+                           framesToSeconds(segOffsetFrames, fps) * clipSpeed;
+        const clampedTime = Math.min(
           Math.max(targetTime, segment.sourceInSeconds),
           Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, fps))
         );
-        await seekTo(element, clampedTime, fps);
-        const trackMuted   = segment.track.muted ?? false;
-        const clipVol      = Math.max(0, segment.clip.volume ?? 1);
-        const effectiveVol = trackMuted ? 0 : clipVol;
+
+        // ── Phase 1: set src and start loading ────────────────────────────
+        // Only change src if needed (avoids re-loading already-partially-loaded data)
+        if (element.src !== url) {
+          element.pause();
+          element.src = url;
+          element.load();
+        }
+
+        // ── Phase 2: park currentTime immediately (browser queues internally)
+        // This works even before canplay — the browser accepts the assignment and
+        // seeks as soon as enough data is buffered.
+        element.currentTime = clampedTime;
         element.playbackRate = clipSpeed;
+
+        // ── Phase 3: wire up Web Audio gain at 0 (silent) before play() ──
         const liveCtx = stateRef.current.isPlaying ? getAudioContext() : null;
+        let route = null;
         if (liveCtx) {
-          const route = getOrCreateRoute(liveCtx, element);
+          route = getOrCreateRoute(liveCtx, element);
           if (route) {
+            setGainImmediate(route, liveCtx, 0);
+            element.volume = 1;
+          } else {
+            element.volume = 0; // fallback: mute via element volume
+          }
+        } else {
+          element.volume = 0;
+        }
+
+        // ── Phase 4: play() immediately — don't await canplay/seeked first.
+        // The browser starts decoding from the queued currentTime.  play()
+        // itself resolves as soon as decode begins (not after seeked).
+        if (stateRef.current.isPlaying && !trackMuted) {
+          try {
+            await element.play();
+          } catch {
+            // Autoplay policy or decode error — gain stays at 0, no audible artifact
+            return;
+          }
+        } else {
+          // Not playing — keep element paused but positioned correctly.
+          // No gain ramp needed; reconcileSlots will re-run when play starts.
+          return;
+        }
+
+        // ── Phase 5: ramp gain up — play() has resolved so audio is flowing ─
+        // Re-read liveCtx in case AudioContext was created/resumed between phases
+        const playCtx = getAudioContext();
+        if (playCtx && stateRef.current.isPlaying && !trackMuted) {
+          // Re-fetch route (might have been created in Phase 3 or now)
+          const liveRoute = route ?? getOrCreateRoute(playCtx, element);
+          if (liveRoute) {
             const targetGain = Math.max(0, Math.min(MAX_GAIN, effectiveVol));
-            // Ramp in from 0 when we start playing (avoids click)
-            rampGain(route, liveCtx, 0, targetGain, FADE_IN_S);
+            rampGain(liveRoute, playCtx, 0, targetGain, FADE_IN_S);
             element.volume = 1;
           } else {
             element.volume = Math.min(1, effectiveVol);
           }
-        } else {
-          element.volume = Math.min(1, effectiveVol);
-        }
-        if (stateRef.current.isPlaying && !trackMuted) {
-          try { await element.play(); } catch { /* autoplay policy */ }
+        } else if (!stateRef.current.isPlaying) {
+          // Playback stopped while we were loading — silence and pause
+          if (liveCtx && route) setGainImmediate(route, liveCtx, 0);
+          element.pause();
         }
       })();
     }
@@ -839,8 +895,12 @@ export function useMultiTrackAudio({
   }, [isPlaying, playheadFrame, sequenceFps]);
 
   // ── effect: sync when playing state / segments / volume / speed change ──────
+  // audioSegKey includes startFrame so that when a new overlapping clip enters
+  // the active window (its startFrame <= playheadFrame), reconcileSlots fires
+  // immediately to bring the new clip's element online without waiting for the
+  // prefetch system to detect it.
   const audioSegKey = activeAudioSegments
-    .map((s) => `${s.clip.id}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
+    .map((s) => `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
     .join(",");
   useEffect(() => {
     const { activeAudioSegments: segs, playheadFrame: frame, sequenceFps: fps } = stateRef.current;

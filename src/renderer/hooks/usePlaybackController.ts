@@ -205,6 +205,10 @@ export function usePlaybackController({
 }: PlaybackControllerOptions): PlaybackControllerResult {
 
   const rafRef = useRef<number | null>(null);
+  // Tracks the previous RAF timestamp so we can detect browser stalls
+  // (fullscreen transitions, tab switches, etc.) and compensate for them.
+  // Stalls show up as an abnormally large gap between consecutive RAF frames.
+  const lastRafTimestampRef = useRef<number | null>(null);
 
   // ── AudioScheduler (singleton across renders) ──────────────────────────────
   const schedulerRef = useRef<AudioScheduler | null>(null);
@@ -480,6 +484,7 @@ export function usePlaybackController({
 
     stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
     stateRef.current.playbackStartedAt = null;
+    lastRafTimestampRef.current = null; // clear stall-detection history
 
     if (stateRef.current.isPlaying) {
       stateRef.current.isPlaying = false;
@@ -523,6 +528,7 @@ export function usePlaybackController({
       //   authoritative zero-point for the RAF loop.
       stateRef.current.playbackStartedAt = performance.now();
       stateRef.current.playbackAnchorFrame = frame;  // anchor stays at start frame
+      lastRafTimestampRef.current = null; // reset stall-detection history at play start
 
       if (!stateRef.current.isPlaying) {
         stateRef.current.isPlaying = true;
@@ -576,6 +582,7 @@ export function usePlaybackController({
       // Reset RAF anchor so next play starts from the correct position
       stateRef.current.playbackStartedAt = null;
       stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
+      lastRafTimestampRef.current = null; // clear stall-detection history
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying]);
@@ -602,11 +609,35 @@ export function usePlaybackController({
       // If playbackStartedAt is null, media is still loading — skip this
       // frame so the playhead doesn't drift forward during load/seek.
       if (playbackStartedAt === null) {
+        lastRafTimestampRef.current = timestamp;
         rafRef.current = requestAnimationFrame(step);
         return;
       }
 
-      const startedAt = playbackStartedAt;
+      // ── Stall detection: compensate for RAF gaps caused by fullscreen
+      //    transitions, OS-level tab switches, or resize events.
+      //    When the browser freezes the RAF loop (e.g. during a fullscreen
+      //    animation) the next frame arrives with a large timestamp gap.
+      //    Without compensation, elapsedFrames shoots way ahead and the
+      //    playhead jumps forward, desyncing audio from video.
+      //
+      //    Heuristic: any gap > 200 ms between consecutive RAF frames is
+      //    treated as a stall.  We shift playbackStartedAt forward by the
+      //    stall duration (minus one normal frame interval) so the elapsed
+      //    time calculation stays accurate.
+      {
+        const prevTs = lastRafTimestampRef.current;
+        const oneFrameMs = 1000 / fps;
+        if (prevTs !== null && timestamp - prevTs > 200) {
+          // Stall detected: amount of "lost" time beyond a normal frame gap
+          const stallMs = (timestamp - prevTs) - oneFrameMs;
+          stateRef.current.playbackStartedAt = playbackStartedAt + stallMs;
+        }
+        lastRafTimestampRef.current = timestamp;
+      }
+
+      // Re-read playbackStartedAt in case stall detection adjusted it above
+      const startedAt = stateRef.current.playbackStartedAt ?? playbackStartedAt;
 
       const elapsedFrames = ((timestamp - startedAt) / 1000) * fps;
       const nextFrame = Math.min(total - 1, Math.round(playbackAnchorFrame + elapsedFrames));
@@ -756,15 +787,18 @@ export function usePlaybackController({
         // Re-anchor so accumulated drift is zeroed out from this frame forward.
         stateRef.current.playbackAnchorFrame = frameAtChange;
         stateRef.current.playbackStartedAt = performance.now();
+        lastRafTimestampRef.current = null; // reset stall history after re-anchor
         return;
       }
     }
 
     stateRef.current.playbackStartedAt = null;  // freeze RAF during load/seek
+    lastRafTimestampRef.current = null; // reset stall history during freeze
     void syncVideo(activeSegment, frameAtChange, true).then(() => {
       // Re-anchor from the frame we were at when the segment changed
       stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
       stateRef.current.playbackStartedAt = performance.now();
+      lastRafTimestampRef.current = null; // start fresh after re-anchor
     });
     // Audio segment changes are handled by useMultiTrackAudio
     // eslint-disable-next-line react-hooks/exhaustive-deps
