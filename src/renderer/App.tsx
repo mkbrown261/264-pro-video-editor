@@ -98,6 +98,7 @@ export default function App() {
   const removeTrack = useEditorStore((s) => s.removeTrack);
   const duplicateTrack = useEditorStore((s) => s.duplicateTrack);
   const addTracksAndMoveClip = useEditorStore((s) => s.addTracksAndMoveClip);
+  const addTracksAndDropAsset = useEditorStore((s) => s.addTracksAndDropAsset);
   const reorderTrack = useEditorStore((s) => s.reorderTrack);
   const addMarker = useEditorStore((s) => s.addMarker);
   const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
@@ -1596,6 +1597,7 @@ export default function App() {
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
               onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
               onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
+              onAddTracksAndDropAsset={(assetId, frame, idx) => { pauseViewerPlayback(); addTracksAndDropAsset(assetId, frame, idx); }}
               onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               onDropTransition={(clipId, transType, edge) => {
@@ -1603,6 +1605,7 @@ export default function App() {
                 const msg1 = setSelectedClipTransitionType(edge, transType as import("../../shared/models").ClipTransitionType);
                 setTransitionMessage(msg1);
               }}
+              assets={project.assets}
             />
           </>
         )}
@@ -1728,6 +1731,7 @@ export default function App() {
               onRenameTrack={(trackId, name) => updateTrack(trackId, { name })}
               onDuplicateTrack={(trackId) => duplicateTrack(trackId)}
               onAddTracksAndMoveClip={(clipId, frame, idx) => { pauseViewerPlayback(); addTracksAndMoveClip(clipId, frame, idx); }}
+              onAddTracksAndDropAsset={(assetId, frame, idx) => { pauseViewerPlayback(); addTracksAndDropAsset(assetId, frame, idx); }}
               onReorderTrack={(trackId, toIndex) => reorderTrack(trackId, toIndex)}
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               onDropTransition={(clipId, transType, edge) => {
@@ -1735,6 +1739,7 @@ export default function App() {
                 const msg1 = setSelectedClipTransitionType(edge, transType as import("../../shared/models").ClipTransitionType);
                 setTransitionMessage(msg1);
               }}
+              assets={project.assets}
               />
             </div>
           </>

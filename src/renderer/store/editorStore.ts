@@ -156,6 +156,14 @@ interface EditorStore {
    */
   addTracksAndMoveClip: (clipId: string, startFrame: number, insertIndex: number) => void;
 
+  /**
+   * Atomically: create a new video track (+ paired audio track if the asset
+   * has audio), drop the media-pool asset into those new tracks at the given
+   * frame and insertIndex.  Used when dragging from the media pool to a
+   * between-track ghost zone.
+   */
+  addTracksAndDropAsset: (assetId: string, startFrame: number, insertIndex: number) => void;
+
   /** Reorder a track by moving it to a new index in sequence.tracks[]. */
   reorderTrack: (trackId: string, toIndex: number) => void;
 
@@ -1674,6 +1682,81 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           ...state.playback,
           playheadFrame: clampPlayhead(nextProject, state.playback.playheadFrame)
         }
+      };
+    }));
+  },
+
+  addTracksAndDropAsset: (assetId, startFrame, insertIndex) => {
+    set(withUndo("Drop Asset to New Track", (state) => {
+      const asset = state.project.assets.find((a) => a.id === assetId);
+      if (!asset) return state;
+
+      let nextProject = withAssetSequenceDefaults(state.project, asset);
+      const seq = nextProject.sequence;
+
+      const resolvedStart = Math.max(0, startFrame);
+
+      // 1. Build new video track
+      const vCount = seq.tracks.filter((t) => t.kind === "video").length;
+      const newVideoTrackId = createId();
+      const newVideoTrack: TimelineTrack = {
+        id: newVideoTrackId,
+        name: `V${vCount + 1}`,
+        kind: "video",
+        muted: false, locked: false, solo: false,
+        height: 56,
+        color: "#4f8ef7",
+      };
+
+      // 2. Build new audio track (only if asset has audio)
+      const linkedGroupId = asset.hasAudio ? createId() : null;
+      const aCount = seq.tracks.filter((t) => t.kind === "audio").length;
+      const newAudioTrackId = createId();
+      const newAudioTrack: TimelineTrack | null = asset.hasAudio ? {
+        id: newAudioTrackId,
+        name: `A${aCount + 1}`,
+        kind: "audio",
+        muted: false, locked: false, solo: false,
+        height: 44,
+        color: "#2fc77a",
+      } : null;
+
+      // 3. Splice new tracks at insertIndex
+      const clamped = Math.max(0, Math.min(insertIndex, seq.tracks.length));
+      const newTracks = [
+        ...seq.tracks.slice(0, clamped),
+        newVideoTrack,
+        ...(newAudioTrack ? [newAudioTrack] : []),
+        ...seq.tracks.slice(clamped),
+      ];
+
+      // 4. Create clips
+      const videoClip = createEmptyClip(asset.id, newVideoTrackId, resolvedStart, { linkedGroupId });
+      const newClips: TimelineClip[] = [videoClip];
+      if (newAudioTrack && linkedGroupId) {
+        newClips.push(createEmptyClip(asset.id, newAudioTrackId, resolvedStart, { linkedGroupId }));
+      }
+
+      const nextSeq = {
+        ...seq,
+        tracks: newTracks,
+        clips: [...seq.clips, ...newClips],
+      };
+
+      const finalProject = resolveTracks(
+        { ...nextProject, sequence: nextSeq },
+        [newVideoTrackId, ...(newAudioTrack ? [newAudioTrackId] : [])]
+      );
+
+      return {
+        project: finalProject,
+        selectedAssetId: assetId,
+        selectedClipId: videoClip.id,
+        playback: {
+          ...state.playback,
+          isPlaying: false,
+          playheadFrame: clampPlayhead(finalProject, resolvedStart),
+        },
       };
     }));
   },

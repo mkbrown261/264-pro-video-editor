@@ -376,7 +376,15 @@ export function useMultiTrackAudio({
       if (wantedIds.has(slot.segment.clip.id)) {
         nextSlots.push(slot);
       } else {
-        if (shouldPlay && ctx) {
+        // Check if this outgoing clip is adjacent to any incoming clip on the
+        // SAME track (hard cut — no fade bleed at seams between consecutive clips).
+        const isAdjacentHardCut = targetSegments.some(
+          (incoming) =>
+            incoming.track.id === slot.segment.track.id &&
+            slot.segment.endFrame === incoming.startFrame
+        );
+
+        if (shouldPlay && ctx && !isAdjacentHardCut) {
           const route = getOrCreateRoute(ctx, slot.element);
           if (route) {
             rampGain(route, ctx, route.gainNode.gain.value, 0, FADE_OUT_S);
@@ -393,6 +401,14 @@ export function useMultiTrackAudio({
             releaseElement(slot.element);
           }
         } else {
+          // Hard cut: stop immediately with no fade-out bleed
+          if (ctx) {
+            const route = getOrCreateRoute(ctx, slot.element);
+            if (route) {
+              // Kill gain immediately to avoid any residual audio
+              setGainImmediate(route, ctx, 0);
+            }
+          }
           slot.element.pause();
           releaseElement(slot.element);
         }
@@ -401,14 +417,31 @@ export function useMultiTrackAudio({
 
     // ── Incoming slots: prefer pre-playing prefetch element ───────────────
     const existingIds = new Set(nextSlots.map((s) => s.segment.clip.id));
+    // Identify clips that are hard-cut adjacent to a just-outgoing clip on the same track.
+    // For these we skip the fade-in to avoid the "fade up from silence" artifact.
+    const hardCutIncomingIds = new Set(
+      targetSegments
+        .filter((incoming) =>
+          slotsRef.current.some(
+            (outgoing) =>
+              !wantedIds.has(outgoing.segment.clip.id) &&
+              outgoing.segment.track.id === incoming.track.id &&
+              outgoing.segment.endFrame === incoming.startFrame
+          )
+        )
+        .map((s) => s.clip.id)
+    );
+
     for (const seg of targetSegments) {
       if (existingIds.has(seg.clip.id)) continue;
 
       const claimed   = claimPrefetched(seg.clip.id);
       const element   = claimed?.element ?? acquireElement();
       const wasPrePlaying = claimed?.wasPrePlaying ?? false;
+      // Mark as fadeInDone so the sync loop sets gain immediately (no ramp)
+      const isHardCut = hardCutIncomingIds.has(seg.clip.id);
 
-      nextSlots.push({ segment: seg, element, fadeInDone: false, isPrePlaying: wasPrePlaying });
+      nextSlots.push({ segment: seg, element, fadeInDone: isHardCut, isPrePlaying: wasPrePlaying });
     }
 
     slotsRef.current = nextSlots;
