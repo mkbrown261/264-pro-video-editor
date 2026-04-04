@@ -246,6 +246,34 @@ export function usePlaybackController({
   });
 
   const lastLoadedVideoUrlRef = useRef<string | null>(null);
+  // Guard: prevents two concurrent syncVideo calls from racing each other.
+  // Only one sync is allowed at a time; if a new one starts, the old one's
+  // results are discarded (via the generation counter below).
+  const syncGenerationRef = useRef(0);
+
+  // ── Auto-invalidate lastLoadedVideoUrlRef on external video reset ─────────
+  // ViewerPanel may call video.src = x; video.load() to show a media-pool
+  // asset when no timeline clip is active.  That resets the element state
+  // (currentTime → 0, readyState → 0).  We listen for 'emptied' to detect
+  // when the element is reset by an EXTERNAL caller, so the next syncVideo
+  // correctly re-loads instead of assuming the URL is still valid.
+  //
+  // We use a boolean ref that syncVideo sets to true while loadMediaSource
+  // is running, so the emptied listener knows to ignore those internal resets.
+  const syncVideoLoadingRef = useRef(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onEmptied = () => {
+      // Ignore emptied events triggered by syncVideo's own loadMediaSource call.
+      if (syncVideoLoadingRef.current) return;
+      // External reset — clear the tracking ref so next syncVideo re-loads.
+      lastLoadedVideoUrlRef.current = null;
+    };
+    video.addEventListener("emptied", onEmptied);
+    return () => video.removeEventListener("emptied", onEmptied);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Cleanup handle for the trim-boundary timeupdate listener
   const trimGuardCleanupRef = useRef<(() => void) | null>(null);
 
@@ -314,6 +342,12 @@ export function usePlaybackController({
     frame: number,
     shouldPlay: boolean
   ): Promise<boolean> {
+    // Each syncVideo call gets its own generation number.  If a newer call
+    // starts before this one finishes, we abort so stale results are never
+    // applied to the video element.
+    const myGen = ++syncGenerationRef.current;
+    const isStale = () => syncGenerationRef.current !== myGen;
+
     const media = videoRef.current;
     if (!media) return false;
 
@@ -338,10 +372,6 @@ export function usePlaybackController({
       if (urlChanged) {
         detachTrimGuard();
         // ── Fast path when the lookahead pre-loaded this URL ─────────────
-        // The hidden preload element already has the media decoded.  Assign
-        // the src to the main element — Electron/Chromium serves it from the
-        // media cache, so canplay fires within one event-loop tick rather
-        // than waiting for network + decode.
         const preEl = preloadVideoRef.current;
         const wasPreloaded =
           preEl !== null &&
@@ -350,10 +380,17 @@ export function usePlaybackController({
         if (wasPreloaded) {
           preloadedUrlRef.current = null; // slot is now consumed
         }
-        // loadMediaSource is always called — when the browser cache is warm
-        // the canplay event fires in <10 ms, making this effectively instant.
-        await loadMediaSource(media, nextUrl, segment.asset.name);
+        // Set the loading flag so the emptied listener ignores this reset.
+        syncVideoLoadingRef.current = true;
+        try {
+          // loadMediaSource is always called — when the browser cache is warm
+          // the canplay event fires in <10 ms, making this effectively instant.
+          await loadMediaSource(media, nextUrl, segment.asset.name);
+        } finally {
+          syncVideoLoadingRef.current = false;
+        }
         lastLoadedVideoUrlRef.current = nextUrl;
+        if (isStale()) return false; // a newer sync started while we awaited
       }
 
       // Always seek when:
@@ -368,6 +405,7 @@ export function usePlaybackController({
         timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
       if (needsSeek) {
         await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
+        if (isStale()) return false; // a newer sync started while we awaited
       }
 
       if (shouldPlay) {
@@ -600,13 +638,17 @@ export function usePlaybackController({
   }, [isPlaying, totalFrames]);
 
   // ── sync when NOT playing (scrub / seek) ──────────────────────────────────
-  // Dependencies include sourceInSeconds so trim changes re-seek immediately.
+  // This is the SOLE loader/seeker for the video element when not playing.
+  // It fires whenever: playhead moves (scrub), active clip changes, trim
+  // changes (sourceInSeconds/sourceOutSeconds), or asset URL changes.
+  // The generation counter inside syncVideo ensures concurrent calls from
+  // rapid scrubbing don't produce stale seeks that overwrite the latest frame.
   useEffect(() => {
     if (isPlaying) return;
     void syncVideo(activeSegment, playheadFrame, false);
     // Audio scrub is handled by useMultiTrackAudio's own effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.clip.id, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying, playheadFrame]);
+  }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying, playheadFrame]);
 
   // ── FIX 4: Immediately apply playback speed change to video element ────────
   // When clip speed changes while playing, update playbackRate in-place
@@ -670,38 +712,13 @@ export function usePlaybackController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying]);
 
-  // ── Preload on mount / when activeSegment first becomes non-null ──────────
-  // Silently loads the video src so the browser decode pipeline is warm
-  // before the user hits Play, eliminating the first-play freeze.
-  // After load we also seek to the correct trim position so the first frame
-  // shown is the in-point of the clip, not frame 0 of the raw asset.
-  useEffect(() => {
-    if (isPlaying) return;
-    if (!activeSegment) return;
-    const video = videoRef.current;
-    if (!video) return;
-    if (lastLoadedVideoUrlRef.current === activeSegment.asset.previewUrl) {
-      // URL already loaded — but seek to correct trim position in case
-      // trim was adjusted since the last load (handles Bug 3: trim ignored)
-      const seg = activeSegment;
-      const frame = stateRef.current.playheadFrame;
-      const targetTime = getTargetCurrentTime(seg, frame, stateRef.current.sequenceFps);
-      void seekMediaElement(video, targetTime, stateRef.current.sequenceFps);
-      return;
-    }
-    // Fire-and-forget: load the src decoded, then seek to in-point
-    const seg = activeSegment;
-    const frame = stateRef.current.playheadFrame;
-    void loadMediaSource(video, seg.asset.previewUrl, seg.asset.name)
-      .then(async () => {
-        lastLoadedVideoUrlRef.current = seg.asset.previewUrl;
-        // Seek to the correct in-point after load so viewer shows the right frame
-        const targetTime = getTargetCurrentTime(seg, frame, stateRef.current.sequenceFps);
-        await seekMediaElement(video, targetTime, stateRef.current.sequenceFps);
-      })
-      .catch(() => { /* ignore silent preload errors */ });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, isPlaying]);
+  // NOTE: The separate "preload on mount" effect that previously lived here
+  // was removed.  The scrub effect at line ~602 already handles load + seek
+  // whenever activeSegment appears or playheadFrame changes while not playing.
+  // Having two concurrent loaders caused a race where they both called
+  // loadMediaSource on the same element, the second call canceling the first
+  // and leaving the video at currentTime=0 (source frame 0) instead of the
+  // correct trim in-point.
 
   // ── cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
