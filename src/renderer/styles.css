@@ -3206,6 +3206,76 @@ kbd {
 .export-message.success { color: var(--success); background: rgba(94,168,122,0.1); }
 .export-message.error { color: #e05555; background: rgba(184,48,48,0.1); }
 
+/* Fix 10: Export preset grid */
+.export-preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.export-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  border-radius: 5px;
+  background: var(--bg-item);
+  border: 1.5px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.export-preset-btn:hover {
+  border-color: var(--border-mid);
+  background: var(--bg-item-hi);
+}
+.export-preset-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.export-preset-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.export-preset-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+.export-preset-btn.active .export-preset-label {
+  color: var(--accent);
+}
+
+/* Export progress bar */
+.export-progress-row {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.export-progress-bar {
+  height: 4px;
+  background: var(--bg-item);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.export-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: exportProgressAnim 2s ease-in-out infinite;
+}
+@keyframes exportProgressAnim {
+  0%   { width: 0%; }
+  50%  { width: 70%; }
+  100% { width: 95%; }
+}
+.export-eta {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
 /* BPM display */
 .bpm-display {
   display: flex;
@@ -3574,39 +3644,50 @@ kbd {
 /* ═══════════════════════════════════════════════════════════════════════════
    GHOST CLIP PREVIEW
    ══════════════════════════════════════════════════════════════════════════ */
+/* BUG 5: Ghost clip on existing track — opacity:0.4, visible styling */
 .timeline-clip-ghost {
   position: absolute;
   top: 2px;
+  height: calc(100% - 4px);
   border-radius: 3px;
-  background: rgba(79,142,247,0.25);
-  border: 2px dashed rgba(79,142,247,0.7);
+  background: rgba(79,142,247,0.22);
+  border: 2px dashed rgba(79,142,247,0.75);
+  opacity: 0.4;
   pointer-events: none;
   z-index: 20;
-  animation: ghostPulse 1s ease-in-out infinite;
+  animation: ghostPulse 0.9s ease-in-out infinite;
+}
+.timeline-clip-ghost.audio-ghost {
+  background: rgba(47,199,122,0.22);
+  border-color: rgba(47,199,122,0.75);
 }
 @keyframes ghostPulse {
-  0%, 100% { border-color: rgba(79,142,247,0.7); }
-  50% { border-color: rgba(79,142,247,1); }
+  0%, 100% { opacity: 0.4; border-color: rgba(79,142,247,0.75); }
+  50%       { opacity: 0.6; border-color: rgba(79,142,247,1.0); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   NEW TRACK GHOST INDICATOR
+   BUG 2: NEW TRACK GHOST INDICATOR (cyan/teal)
    ══════════════════════════════════════════════════════════════════════════ */
 .timeline-new-track-ghost {
   position: relative;
   height: 52px;
   display: flex; align-items: center;
-  background: rgba(79,142,247,0.08);
-  border: 1.5px dashed rgba(79,142,247,0.6);
+  background: rgba(0,200,200,0.07);
+  border: 1.5px dashed rgba(0,210,210,0.65);
   margin: 2px 0;
   border-radius: 4px;
   overflow: hidden;
-  animation: ghostPulse 0.8s ease-in-out infinite;
+  animation: ghostTrackPulse 0.85s ease-in-out infinite;
+}
+@keyframes ghostTrackPulse {
+  0%, 100% { border-color: rgba(0,210,210,0.65); background: rgba(0,200,200,0.07); }
+  50%       { border-color: rgba(0,240,240,0.90); background: rgba(0,210,210,0.12); }
 }
 .ghost-new-track-label {
   padding: 0 0 0 108px;
   font-size: 0.7rem;
-  color: var(--blue);
+  color: #00d4d4;
   font-weight: 600;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -3617,15 +3698,15 @@ kbd {
 /* Clip preview inside ghost new-track row */
 .new-track-ghost-clip {
   border-radius: 3px;
-  background: rgba(79,142,247,0.35);
-  border: 1.5px solid rgba(79,142,247,0.8);
+  background: rgba(0,200,200,0.30);
+  border: 1.5px solid rgba(0,210,210,0.85);
   pointer-events: none;
   z-index: 3;
   min-width: 24px;
-  animation: ghostPulse 0.8s ease-in-out infinite;
+  animation: ghostTrackPulse 0.85s ease-in-out infinite;
 }
 .new-track-ghost-clip.audio-clip {
-  background: rgba(47,199,122,0.30);
+  background: rgba(47,199,122,0.28);
   border-color: rgba(47,199,122,0.8);
 }
 

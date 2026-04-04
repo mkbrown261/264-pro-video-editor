@@ -13,6 +13,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
 import { useAsyncImport } from "./hooks/useAsyncImport";
+import { useFilmstripGenerator } from "./hooks/useFilmstripGenerator";
 import { VoiceChopAI } from "./lib/VoiceChopAI";
 import { toast } from "./lib/toast";
 import { useEditorStore } from "./store/editorStore";
@@ -100,6 +101,7 @@ export default function App() {
   const reorderTrack = useEditorStore((s) => s.reorderTrack);
   const addMarker = useEditorStore((s) => s.addMarker);
   const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
+  const setAssetFilmstrip = useEditorStore((s) => s.setAssetFilmstrip);
 
   // Masks
   const addMaskToClip = useEditorStore((s) => s.addMaskToClip);
@@ -646,6 +648,9 @@ export default function App() {
 
   // ── Waveform peak extraction (background, per-asset) ─────────────────────
   useWaveformExtractor({ assets: project.assets, setAssetWaveform });
+
+  // ── Fix 6: Filmstrip thumbnail generation (background, per-asset) ──────────
+  useFilmstripGenerator({ assets: project.assets, setAssetFilmstrip });
 
   // ── File menu click-outside close ─────────────────────────────────────────
   useEffect(() => {

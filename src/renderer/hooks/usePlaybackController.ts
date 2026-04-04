@@ -28,6 +28,7 @@ import {
   useMultiTrackAudio,
   findAllActiveAudioSegments
 } from "./useMultiTrackAudio";
+import { AudioScheduler } from "../lib/AudioScheduler";
 
 interface PlaybackControllerOptions {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -182,6 +183,12 @@ export function usePlaybackController({
 
   const rafRef = useRef<number | null>(null);
 
+  // ── AudioScheduler (singleton across renders) ──────────────────────────────
+  const schedulerRef = useRef<AudioScheduler | null>(null);
+  if (!schedulerRef.current) {
+    schedulerRef.current = new AudioScheduler();
+  }
+
   // All mutable state tracked via refs to avoid stale closures
   const stateRef = useRef({
     isPlaying,
@@ -210,6 +217,20 @@ export function usePlaybackController({
     stateRef.current.setPlaybackPlaying = setPlaybackPlaying;
     stateRef.current.onPlaybackMessage = onPlaybackMessage;
   });
+
+  // ── Preload audio assets via AudioScheduler whenever segment list changes ──
+  // This pre-buffers upcoming clips so there are no gaps at seam points.
+  useEffect(() => {
+    const scheduler = schedulerRef.current;
+    if (!scheduler) return;
+    const audioAssets = segments
+      .filter((s) => s.track.kind === ("audio" as TimelineTrackKind) && s.clip.isEnabled && !s.track.muted)
+      .map((s) => s.asset);
+    // Deduplicate by id
+    const unique = Array.from(new Map(audioAssets.map((a) => [a.id, a])).values());
+    void scheduler.preload(unique);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments]);
 
   // ── Multi-track audio engine ───────────────────────────────────────────────
   // Compute all active audio segments (across ALL tracks) at the current frame
@@ -448,6 +469,9 @@ export function usePlaybackController({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       videoRef.current?.pause();
       stopAudio();
+      // Dispose AudioScheduler — releases AudioContext and cached buffers
+      schedulerRef.current?.dispose();
+      schedulerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

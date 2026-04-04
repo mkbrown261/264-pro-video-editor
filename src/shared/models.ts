@@ -15,6 +15,11 @@ export interface MediaAsset {
   hasAudio: boolean;
   /** Normalised peak amplitudes [0..1], one value per ~100ms of source audio. */
   waveformPeaks?: number[];
+  /**
+   * Fix 6: Filmstrip thumbnail data URLs, one frame every ~2 s of source media.
+   * Used to tile a repeating background across clips in the timeline.
+   */
+  filmstripThumbs?: string[];
 
   // ── Extended metadata (populated via ffprobe) ─────────────────────────────
   /** File size in bytes */

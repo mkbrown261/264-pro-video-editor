@@ -197,7 +197,7 @@ function transIcon(type: ClipTransitionType): string {
 
 const TRANSITION_CATEGORIES = Array.from(new Set(ALL_TRANSITION_TYPES.map((t) => t.category)));
 
-// ── Collapsible section ───────────────────────────────────────────────────────
+// ── Collapsible section (Fix 9: persists open/closed state per section label) ─
 function CollapsibleCard({
   label,
   defaultOpen = true,
@@ -209,12 +209,30 @@ function CollapsibleCard({
   children: React.ReactNode;
   badge?: string | number | null;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  // Persist each section's open/closed state in localStorage keyed by label
+  const storageKey = `264pro_insp_${label.toLowerCase().replace(/\s+/g, "_")}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      const stored = localStorage.getItem(storageKey);
+      return stored !== null ? stored === "true" : defaultOpen;
+    } catch {
+      return defaultOpen;
+    }
+  });
+
+  const toggle = () => {
+    setOpen((v) => {
+      const next = !v;
+      try { localStorage.setItem(storageKey, String(next)); } catch { /* noop */ }
+      return next;
+    });
+  };
+
   return (
     <div className={`inspector-card collapsible${open ? " open" : " closed"}`}>
       <button
         className="collapsible-header"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         type="button"
       >
         <span className="collapsible-arrow">{open ? "▾" : "▸"}</span>
@@ -493,6 +511,155 @@ function TransformTab({
           ↺ Reset All Transform
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── Fix 10: Export Preset Panel ──────────────────────────────────────────────
+
+interface ExportPreset {
+  id: string;
+  label: string;
+  icon: string;
+  description: string;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  bitrate: string;
+  audioCodec: string;
+  audioBitrate: string;
+  container: string;
+}
+
+const EXPORT_PRESETS: ExportPreset[] = [
+  {
+    id: "youtube",
+    label: "YouTube",
+    icon: "▶",
+    description: "YouTube HD – H.264 / AAC",
+    width: 1920, height: 1080, fps: 30,
+    codec: "H.264", bitrate: "8 Mbps", audioCodec: "AAC", audioBitrate: "192 kbps", container: "MP4",
+  },
+  {
+    id: "instagram_reel",
+    label: "Instagram Reel",
+    icon: "📱",
+    description: "Vertical 9:16 – H.264 / AAC",
+    width: 1080, height: 1920, fps: 30,
+    codec: "H.264", bitrate: "6 Mbps", audioCodec: "AAC", audioBitrate: "192 kbps", container: "MP4",
+  },
+  {
+    id: "tiktok",
+    label: "TikTok",
+    icon: "🎵",
+    description: "TikTok – H.264 / AAC",
+    width: 1080, height: 1920, fps: 60,
+    codec: "H.264", bitrate: "6 Mbps", audioCodec: "AAC", audioBitrate: "256 kbps", container: "MP4",
+  },
+  {
+    id: "prores422",
+    label: "ProRes 422",
+    icon: "🎬",
+    description: "ProRes 422 HQ – Archive quality",
+    width: 1920, height: 1080, fps: 24,
+    codec: "ProRes 422", bitrate: "~220 Mbps", audioCodec: "PCM 24-bit", audioBitrate: "Lossless", container: "MOV",
+  },
+];
+
+function ExportPresetPanel({
+  sequenceSettings,
+  exportBusy,
+  exportMessage,
+  environment,
+  onExport,
+}: {
+  sequenceSettings: { width: number; height: number; fps: number; audioSampleRate: number };
+  exportBusy: boolean;
+  exportMessage: string | null;
+  environment: EnvironmentStatus | null;
+  onExport: () => Promise<void>;
+}) {
+  const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
+  const preset = EXPORT_PRESETS.find((p) => p.id === selectedPreset) ?? EXPORT_PRESETS[0];
+
+  // Estimated render ETA (rough: 2× duration per minute of 1080p)
+  const etaLabel = "ETA: ~2–5 min depending on length";
+
+  return (
+    <div className="inspector-stack">
+      <CollapsibleCard label="Export Presets" defaultOpen>
+        <div className="export-preset-grid">
+          {EXPORT_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`export-preset-btn${selectedPreset === p.id ? " active" : ""}`}
+              onClick={() => setSelectedPreset(p.id)}
+              title={p.description}
+            >
+              <span className="export-preset-icon">{p.icon}</span>
+              <span className="export-preset-label">{p.label}</span>
+            </button>
+          ))}
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Render Settings" defaultOpen>
+        <div className="clip-meta-grid">
+          <span>Platform</span><strong>{preset.label}</strong>
+          <span>Resolution</span><strong>{preset.width}×{preset.height}</strong>
+          <span>Frame Rate</span><strong>{preset.fps} fps</strong>
+          <span>Video Codec</span><strong>{preset.codec}</strong>
+          <span>Video Bitrate</span><strong>{preset.bitrate}</strong>
+          <span>Audio Codec</span><strong>{preset.audioCodec}</strong>
+          <span>Audio Bitrate</span><strong>{preset.audioBitrate}</strong>
+          <span>Container</span><strong>{preset.container}</strong>
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Sequence Info" defaultOpen={false}>
+        <div className="clip-meta-grid">
+          <span>Sequence Resolution</span><strong>{sequenceSettings.width}×{sequenceSettings.height}</strong>
+          <span>Sequence FPS</span><strong>{sequenceSettings.fps} fps</strong>
+          <span>Audio Sample Rate</span><strong>{sequenceSettings.audioSampleRate / 1000} kHz</strong>
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Render" defaultOpen>
+        <button
+          className="panel-action primary export-btn"
+          disabled={exportBusy}
+          onClick={() => void onExport()}
+          type="button"
+        >
+          {exportBusy ? "⏳ Rendering…" : `▶ Export ${preset.container}`}
+        </button>
+        {exportBusy && (
+          <div className="export-progress-row">
+            <div className="export-progress-bar">
+              <div className="export-progress-fill" />
+            </div>
+            <span className="export-eta">{etaLabel}</span>
+          </div>
+        )}
+        {exportMessage && (
+          <span className={`export-message${exportMessage.startsWith("✓") ? " success" : " error"}`}>
+            {exportMessage}
+          </span>
+        )}
+      </CollapsibleCard>
+
+      <CollapsibleCard label="Environment" defaultOpen={false}>
+        <strong className={environment?.ffmpegAvailable ? "text-success" : "text-warning"}>
+          {environment?.ffmpegAvailable ? "✓ FFmpeg Ready" : "⚠ FFmpeg Unavailable"}
+        </strong>
+        <span>FFmpeg: {environment?.ffmpegPath ?? "not found"}</span>
+        <span>FFprobe: {environment?.ffprobePath ?? "not found"}</span>
+        {environment?.warnings.map((w) => (
+          <span key={w} className="warning-text">{w}</span>
+        ))}
+      </CollapsibleCard>
     </div>
   );
 }
@@ -1011,40 +1178,13 @@ export function InspectorPanel({
 
         {/* ── EXPORT TAB ── */}
         {activeTab === "export" && (
-          <div className="inspector-stack">
-            <CollapsibleCard label="Render" defaultOpen>
-              <strong>MP4 H.264 / AAC</strong>
-              <div className="clip-meta-grid">
-                <span>Resolution</span><strong>{sequenceSettings.width}×{sequenceSettings.height}</strong>
-                <span>Frame Rate</span><strong>{sequenceSettings.fps} fps</strong>
-                <span>Audio</span><strong>{sequenceSettings.audioSampleRate / 1000} kHz</strong>
-              </div>
-              <button
-                className="panel-action primary export-btn"
-                disabled={exportBusy}
-                onClick={() => void onExport()}
-                type="button"
-              >
-                {exportBusy ? "⏳ Rendering…" : "▶ Export MP4"}
-              </button>
-              {exportMessage && (
-                <span className={`export-message${exportMessage.startsWith("✓") ? " success" : " error"}`}>
-                  {exportMessage}
-                </span>
-              )}
-            </CollapsibleCard>
-
-            <CollapsibleCard label="Environment" defaultOpen={false}>
-              <strong className={environment?.ffmpegAvailable ? "text-success" : "text-warning"}>
-                {environment?.ffmpegAvailable ? "✓ FFmpeg Ready" : "⚠ FFmpeg Unavailable"}
-              </strong>
-              <span>FFmpeg: {environment?.ffmpegPath ?? "not found"}</span>
-              <span>FFprobe: {environment?.ffprobePath ?? "not found"}</span>
-              {environment?.warnings.map((w) => (
-                <span key={w} className="warning-text">{w}</span>
-              ))}
-            </CollapsibleCard>
-          </div>
+          <ExportPresetPanel
+            sequenceSettings={sequenceSettings}
+            exportBusy={exportBusy}
+            exportMessage={exportMessage}
+            environment={environment}
+            onExport={onExport}
+          />
         )}
       </div>
     </section>

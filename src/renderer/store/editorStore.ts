@@ -81,6 +81,8 @@ interface EditorStore {
   setAssetWaveform: (assetId: string, peaks: number[]) => void;
   /** Patch a thumbnail URL after async generation (non-undoable) */
   setAssetThumbnail: (assetId: string, thumbnailUrl: string) => void;
+  /** Fix 6: Store filmstrip thumb data URLs (non-undoable) */
+  setAssetFilmstrip: (assetId: string, thumbs: string[]) => void;
   /** Swap previewUrl once background proxy encoding finishes (non-undoable) */
   setAssetPreviewUrl: (assetId: string, previewUrl: string) => void;
   appendAssetToTimeline: (assetId: string) => void;
@@ -256,6 +258,84 @@ function findOrCreateFreeAudioTrack(
     },
   };
   return { project: updatedProject, audioTrackId: newTrack.id };
+}
+
+// ── BUG 4: Clip overlap detection & snap-to-free-position ──────────────────
+
+/**
+ * Returns true if placing a clip of `durationFrames` at `startFrame` on
+ * `trackId` would overlap any *other* clip (excludes clipId itself).
+ */
+function wouldOverlap(
+  project: EditorProjectState,
+  trackId: string,
+  startFrame: number,
+  durationFrames: number,
+  excludeClipId?: string
+): boolean {
+  const fps = project.sequence.settings.fps;
+  const endFrame = startFrame + durationFrames;
+  return project.sequence.clips
+    .filter((c) => c.trackId === trackId && c.id !== excludeClipId)
+    .some((c) => {
+      const asset = project.assets.find((a) => a.id === c.assetId);
+      if (!asset) return false;
+      const cEnd = c.startFrame + getClipDurationFrames(c, asset, fps);
+      return c.startFrame < endFrame && cEnd > startFrame;
+    });
+}
+
+/**
+ * Given a desired `startFrame`, find the nearest frame on `trackId` where a
+ * clip of `durationFrames` fits without overlapping (searches outward from the
+ * target position, prefers earlier positions).  Returns the clamped frame.
+ */
+function findNearestFreePosition(
+  project: EditorProjectState,
+  trackId: string,
+  startFrame: number,
+  durationFrames: number,
+  excludeClipId?: string
+): number {
+  if (!wouldOverlap(project, trackId, startFrame, durationFrames, excludeClipId)) {
+    return startFrame;
+  }
+  const fps = project.sequence.settings.fps;
+  const clips = project.sequence.clips
+    .filter((c) => c.trackId === trackId && c.id !== excludeClipId)
+    .map((c) => {
+      const asset = project.assets.find((a) => a.id === c.assetId);
+      if (!asset) return { start: c.startFrame, end: c.startFrame };
+      return { start: c.startFrame, end: c.startFrame + getClipDurationFrames(c, asset, fps) };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  // Try before first clip
+  const firstGapEnd = clips[0]?.start ?? Infinity;
+  if (durationFrames <= firstGapEnd) {
+    const candidate = Math.min(startFrame, Math.max(0, firstGapEnd - durationFrames));
+    if (!wouldOverlap(project, trackId, candidate, durationFrames, excludeClipId)) {
+      return candidate;
+    }
+  }
+
+  // Try each gap between clips
+  for (let i = 0; i < clips.length; i++) {
+    const gapStart = clips[i].end;
+    const gapEnd = clips[i + 1]?.start ?? Infinity;
+    if (gapEnd - gapStart >= durationFrames) {
+      const candidate = Math.max(gapStart, Math.min(startFrame, gapEnd - durationFrames));
+      if (!wouldOverlap(project, trackId, candidate, durationFrames, excludeClipId)) {
+        return candidate;
+      }
+      // Fallback: snap to gap start
+      return gapStart;
+    }
+  }
+
+  // No free gap found — append after all clips
+  const lastEnd = clips[clips.length - 1]?.end ?? 0;
+  return lastEnd;
 }
 
 function clampPlayhead(project: EditorProjectState, frame: number): number {
@@ -645,6 +725,17 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
   },
 
+  setAssetFilmstrip: (assetId, thumbs) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        assets: state.project.assets.map((a) =>
+          a.id === assetId ? { ...a, filmstripThumbs: thumbs } : a
+        )
+      }
+    }));
+  },
+
   setAssetPreviewUrl: (assetId, previewUrl) => {
     set((state) => ({
       project: {
@@ -690,6 +781,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       let nextProject = withAssetSequenceDefaults(state.project, asset);
       const track = nextProject.sequence.tracks.find((t) => t.id === trackId);
       if (!track) return state;
+      // BUG 4: Snap to nearest free position if drop would overlap an existing clip
+      const dur = getClipDurationFrames(
+        { trimStartFrames: 0, trimEndFrames: 0, speed: 1 } as Parameters<typeof getClipDurationFrames>[0],
+        asset,
+        nextProject.sequence.settings.fps
+      );
+      const resolvedStart = findNearestFreePosition(nextProject, trackId, startFrame, dur);
+      startFrame = resolvedStart;
       const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;
       const videoClip = createEmptyClip(asset.id, trackId, startFrame, { linkedGroupId });
       const newClips: TimelineClip[] = [videoClip];
@@ -737,6 +836,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Move Clip", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip) return state;
+      // BUG 4: Resolve overlaps by snapping to nearest free position on target track
+      const asset = state.project.assets.find((a) => a.id === clip.assetId);
+      if (asset) {
+        const dur = getClipDurationFrames(clip, asset, state.project.sequence.settings.fps);
+        startFrame = findNearestFreePosition(state.project, trackId, Math.max(0, startFrame), dur, clipId);
+      }
       const linked = getLinkedClips(state.project, clipId);
       const delta = Math.max(0, startFrame) - clip.startFrame;
       const linkedIds = new Set(linked.map((c) => c.id));

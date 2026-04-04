@@ -1378,13 +1378,19 @@ export function TimelinePanel({
                           left: displayLeft,
                           width: clipWidth,
                           height: "calc(100% - 4px)",
-                          ...(segment.track.kind === "video" && segment.asset.thumbnailUrl
-                            ? {
-                                backgroundImage: `url(${segment.asset.thumbnailUrl})`,
-                                backgroundRepeat: "repeat-x",
-                                backgroundSize: `${Math.max(48, pixelsPerFrame * 16)}px 100%`,
-                                backgroundPosition: "left center"
-                              }
+                          // Fix 6: Prefer filmstrip repeating background; fall back to single thumbnail
+                          ...(segment.track.kind === "video" && (segment.asset.filmstripThumbs?.length || segment.asset.thumbnailUrl)
+                            ? (() => {
+                                // Use first filmstrip thumb as repeating tile, or fallback to thumbnailUrl
+                                const thumbSrc = segment.asset.filmstripThumbs?.[0] ?? segment.asset.thumbnailUrl;
+                                const tileW = Math.max(48, pixelsPerFrame * 16);
+                                return {
+                                  backgroundImage: `url(${thumbSrc})`,
+                                  backgroundRepeat: "repeat-x",
+                                  backgroundSize: `${tileW}px 100%`,
+                                  backgroundPosition: "left center"
+                                };
+                              })()
                             : {})
                         }}
                         onDragOver={(e) => {
@@ -1627,16 +1633,22 @@ export function TimelinePanel({
                     );
                   })}
 
-                  {/* Ghost clip preview while dragging — shows origin position as shadow, clip follows cursor */}
+                  {/* BUG 5: Ghost clip preview while dragging — shows origin as shadow at 0.4 opacity */}
                   {dragState && layout.segments.some((s) => s.clip.id === dragState.clipId) && (() => {
                     const seg = layout.segments.find((s) => s.clip.id === dragState.clipId);
                     if (!seg) return null;
                     const w = Math.max(seg.durationFrames * pixelsPerFrame, 24);
+                    const isAudio = seg.track.kind === "audio";
                     // Show ghost at original position while clip moves
                     return (
                       <div
-                        className="timeline-clip-ghost"
-                        style={{ left: seg.startFrame * pixelsPerFrame, width: w, height: "calc(100% - 4px)" }}
+                        className={`timeline-clip-ghost${isAudio ? " audio-ghost" : ""}`}
+                        style={{
+                          left: seg.startFrame * pixelsPerFrame,
+                          width: w,
+                          top: 2,
+                          height: "calc(100% - 4px)"
+                        }}
                       />
                     );
                   })()}

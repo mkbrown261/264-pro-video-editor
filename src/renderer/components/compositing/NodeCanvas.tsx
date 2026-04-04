@@ -137,7 +137,27 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
   const [pan, setPan] = useState({ x: 80, y: 80 });
   const [zoom, setZoom] = useState(1.0);
   const [isPanning, setIsPanning] = useState(false);
+  const [spaceHeld, setSpaceHeld] = useState(false);
   const panStart = useRef({ mx: 0, my: 0, px: 0, py: 0 });
+
+  // BUG 3B: Space key held tracking for space+drag pan
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
+        e.preventDefault();
+        setSpaceHeld(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setSpaceHeld(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
 
   // Wire-in-progress state
   const [wire, setWire] = useState<{
@@ -223,8 +243,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     const wx = (mx - pan.x) / zoom;
     const wy = (my - pan.y) / zoom;
 
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      // Middle-click or Alt+drag = pan
+    // BUG 3B: Middle-click, Alt+drag, or Space+drag = pan
+    if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && spaceHeld)) {
       setIsPanning(true);
       panStart.current = { mx, my, px: pan.x, py: pan.y };
       e.preventDefault();
@@ -236,7 +256,7 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       lassoRef.current = { x1: wx, y1: wy, x2: wx, y2: wy };
       setLasso({ x1: wx, y1: wy, x2: wx, y2: wy });
     }
-  }, [ctxMenu, addMenu, pan, zoom]);
+  }, [ctxMenu, addMenu, pan, zoom, spaceHeld]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = containerRef.current!.getBoundingClientRect();
@@ -252,12 +272,15 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     }
 
     if (dragRef.current) {
+      // BUG 3A: Correct drag offset using getBoundingClientRect-based world coords.
+      // ox/oy = click position within node (in world coords), so:
+      //   newNodePos = currentMouseWorld - clickOffset
       const wx = (mx - pan.x) / zoom;
       const wy = (my - pan.y) / zoom;
-      const dx = wx - dragRef.current.ox;
-      const dy = wy - dragRef.current.oy;
-      const snappedX = Math.round(dx / GRID_SIZE) * GRID_SIZE + dragRef.current.startX;
-      const snappedY = Math.round(dy / GRID_SIZE) * GRID_SIZE + dragRef.current.startY;
+      const rawX = wx - dragRef.current.ox;
+      const rawY = wy - dragRef.current.oy;
+      const snappedX = Math.round(rawX / GRID_SIZE) * GRID_SIZE;
+      const snappedY = Math.round(rawY / GRID_SIZE) * GRID_SIZE;
       onUpdateGraph({
         ...graph,
         nodes: graph.nodes.map(n =>
@@ -337,16 +360,21 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       onSelectNodes([nodeId]);
     }
 
+    // BUG 3A: Record precise offset from node's top-left corner using getBoundingClientRect
     const rect = containerRef.current!.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
+    // Convert click to world coords
     const wx = (mx - pan.x) / zoom;
     const wy = (my - pan.y) / zoom;
+    // Offset = click position inside the node (in world space)
+    const ox = wx - node.x;
+    const oy = wy - node.y;
 
     dragRef.current = {
       nodeId,
-      ox: wx - node.x,
-      oy: wy - node.y,
+      ox,   // offset of click from node's left edge in world coords
+      oy,   // offset of click from node's top edge in world coords
       startX: node.x,
       startY: node.y,
     };
@@ -525,7 +553,7 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onContextMenu={onContextMenu}
-      style={{ cursor: isPanning ? "grabbing" : wire ? "crosshair" : "default" }}
+      style={{ cursor: isPanning ? "grabbing" : spaceHeld ? "grab" : wire ? "crosshair" : "default" }}
     >
       {/* Grid background */}
       <svg
