@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { FlowStatePanel } from "./components/FlowStatePanel";
+import { AIToolsPanel } from "./components/AIToolsPanel";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MediaPool } from "./components/MediaPool";
 import { TimelinePanel } from "./components/TimelinePanel";
@@ -235,6 +236,9 @@ export default function App() {
 
   // ── FlowState Panel ────────────────────────────────────────────────────────
   const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
+
+  // ── AI Tools Panel ─────────────────────────────────────────────────────────
+  const [aiToolsPanelOpen, setAiToolsPanelOpen] = useState(false);
 
   // ── AI Quick Bar dropdown ──────────────────────────────────────────────────
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
@@ -1702,7 +1706,8 @@ export default function App() {
             {fsLinked && (
               <span style={{
                 marginLeft: 4,
-                width: 6, height: 6,
+                width: 6,
+                height: 6,
                 borderRadius: "50%",
                 background: "#10b981",
                 display: "inline-block",
@@ -1710,6 +1715,23 @@ export default function App() {
                 flexShrink: 0,
               }} />
             )}
+          </button>
+
+          {/* AI Tools Panel toggle */}
+          <button
+            className={`panel-toggle-btn${aiToolsPanelOpen ? " on" : ""}`}
+            onClick={() => setAiToolsPanelOpen((v) => !v)}
+            title="AI Tools — Upscale, Denoise, Rotoscope, Slow-Mo, Face Enhance…"
+            type="button"
+            style={{
+              background: aiToolsPanelOpen
+                ? "linear-gradient(135deg,rgba(236,72,153,0.25),rgba(245,158,11,0.25))"
+                : undefined,
+              borderColor: aiToolsPanelOpen ? "rgba(236,72,153,0.4)" : undefined,
+              color: aiToolsPanelOpen ? "#f9a8d4" : undefined,
+            }}
+          >
+            ⚡ AI Tools
           </button>
         </div>
 
@@ -2327,6 +2349,12 @@ export default function App() {
       <FlowStatePanel
         isOpen={flowstatePanelOpen}
         onClose={() => setFlowstatePanelOpen(false)}
+      />
+
+      {/* ── AI TOOLS PANEL (modal overlay) ── */}
+      <AIToolsPanel
+        isOpen={aiToolsPanelOpen}
+        onClose={() => setAiToolsPanelOpen(false)}
       />
     </div>
   );

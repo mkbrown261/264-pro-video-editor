@@ -467,7 +467,8 @@ let pendingUpdaterStatus: object | null = null;  // buffer events before window 
 function initAutoUpdater(): void {
   if (process.env.VITE_DEV_SERVER_URL) return; // skip in dev
 
-  autoUpdater.autoDownload = true;
+  // ── ASK before downloading — user controls when updates happen ──────────
+  autoUpdater.autoDownload = false;       // we'll prompt first
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.logger = null; // suppress console noise in prod
 
@@ -482,8 +483,35 @@ function initAutoUpdater(): void {
   autoUpdater.on("checking-for-update", () =>
     broadcast({ state: "checking" }));
 
-  autoUpdater.on("update-available", (info) =>
-    broadcast({ state: "available", version: info.version }));
+  // ── "Update available" — ask the user before downloading ────────────────
+  autoUpdater.on("update-available", async (info) => {
+    broadcast({ state: "available", version: info.version });
+
+    // Find the most appropriate window to show the dialog on
+    const targetWin = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!targetWin || targetWin.isDestroyed()) {
+      // No window yet — auto-download silently so it's ready when they open
+      void autoUpdater.downloadUpdate();
+      return;
+    }
+
+    const { response } = await dialog.showMessageBox(targetWin, {
+      type: "info",
+      title: "264 Pro Update Available",
+      message: `v${info.version} is available`,
+      detail: `A new version of 264 Pro is ready to download.\n\nWhat's new in v${info.version}:\n• Bug fixes and performance improvements\n\nDownload size is small and the app will restart automatically when done.`,
+      buttons: ["Download & Install", "Remind Me Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+
+    if (response === 0) {
+      broadcast({ state: "downloading", percent: 0 });
+      void autoUpdater.downloadUpdate();
+    } else {
+      broadcast({ state: "up-to-date" }); // treat "later" as up-to-date for banner purposes
+    }
+  });
 
   autoUpdater.on("update-not-available", () =>
     broadcast({ state: "up-to-date" }));
@@ -498,15 +526,18 @@ function initAutoUpdater(): void {
 
   autoUpdater.on("update-downloaded", async (info) => {
     broadcast({ state: "ready", version: info.version });
-    // Show native dialog on whichever window is focused
+    // Show native dialog — update is ready, confirm restart
     const focusedWin = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-    if (!focusedWin) return;
+    if (!focusedWin || focusedWin.isDestroyed()) {
+      // No window — install on next quit (already enabled via autoInstallOnAppQuit)
+      return;
+    }
     const { response } = await dialog.showMessageBox(focusedWin, {
       type: "info",
-      title: "264 Pro Update Ready",
-      message: `v${info.version} is ready to install.`,
-      detail: "Restart now to apply the update, or it installs automatically on next quit.",
-      buttons: ["Restart & Install", "Later"],
+      title: "264 Pro Ready to Update",
+      message: `v${info.version} downloaded and ready`,
+      detail: "Restart 264 Pro now to apply the update. Your project will be saved automatically before restarting.",
+      buttons: ["Restart & Install", "Install on Next Launch"],
       defaultId: 0,
       cancelId: 1,
     });
@@ -758,6 +789,43 @@ ipcMain.handle("flowstate:api-call", async (_event, path: string, method: string
         'Authorization': `Bearer ${token}`,
       },
       body: body ? JSON.stringify(body) : undefined,
+    });
+    return res.json();
+  } catch (e: any) {
+    return { error: e.message };
+  }
+});
+
+// ── AI Tool IPC — runs a 264 Pro AI tool via FlowState backend ────────────────
+ipcMain.handle("flowstate:ai-tool", async (_event, tool: string, options: {
+  imageUrl?: string;
+  videoUrl?: string;
+  params?: Record<string, unknown>;
+}) => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    const res = await fetch(`${FS_BASE_URL}/api/264pro/ai-tool`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ tool, ...options }),
+    });
+    return res.json();
+  } catch (e: any) {
+    return { error: e.message };
+  }
+});
+
+// ── Poll AI Tool prediction status ────────────────────────────────────────────
+ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    const res = await fetch(`${FS_BASE_URL}/api/264pro/ai-tool/poll/${predictionId}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
     });
     return res.json();
   } catch (e: any) {

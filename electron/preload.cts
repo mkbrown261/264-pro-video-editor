@@ -103,5 +103,14 @@ const flowstateAPI = {
     ipcRenderer.invoke("flowstate:get-user"),
   apiCall: (path: string, method: string, body?: unknown): Promise<unknown> =>
     ipcRenderer.invoke("flowstate:api-call", path, method, body),
+  // AI tools — run a 264 Pro AI tool via FlowState backend
+  runAITool: (tool: string, options: {
+    imageUrl?: string;
+    videoUrl?: string;
+    params?: Record<string, unknown>;
+  }): Promise<unknown> => ipcRenderer.invoke("flowstate:ai-tool", tool, options),
+  // Poll Replicate prediction status
+  pollAITool: (predictionId: string): Promise<unknown> =>
+    ipcRenderer.invoke("flowstate:ai-tool-poll", predictionId),
 };
 contextBridge.exposeInMainWorld("flowstateAPI", flowstateAPI);
