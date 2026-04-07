@@ -53,6 +53,11 @@ export function useMultiTrackAudio({
   // effect. Used to prevent double-play when both change on the same render.
   const lastPlayedKeyRef = useRef<string>("");
 
+  // Incremented every time stop/pause is called. startAudio and the seam effect
+  // capture the value before any async work; if it changed by the time they
+  // finish, playback was cancelled and they must not call engine.play().
+  const stopGenRef = useRef<number>(0);
+
   function getEngine(): AudioEngine {
     if (!engineRef.current) engineRef.current = new AudioEngine();
     return engineRef.current;
@@ -72,8 +77,11 @@ export function useMultiTrackAudio({
     const { activeAudioSegments: segs, sequenceFps: fps } = stateRef.current;
     const engine = getEngine();
 
-    // Mark this key BEFORE the async decode so the seam effect never
-    // double-fires even if the decode takes a while.
+    // Snapshot the stop generation before any async work. If stop/pause is
+    // called while we await preload, stopGenRef will have incremented and we
+    // must NOT call engine.play().
+    const stopGen = stopGenRef.current;
+
     const key = segs
       .map((s) => `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
       .join(",");
@@ -82,20 +90,20 @@ export function useMultiTrackAudio({
     // Decode any uncached buffers (fast-path if already cached by lookahead).
     await engine.preload(segs);
 
-    // NOTE: do NOT check isPlaying here. usePlaybackController calls startAudio
-    // and then sets isPlaying=true — so isPlaying is still false at this point
-    // by design. Just check that the key hasn't been invalidated (e.g. user
-    // paused AND scrubbed to a different position while we were decoding).
+    // If stop/pause was called while we were decoding, abort.
+    if (stopGenRef.current !== stopGen) return;
     if (key !== lastPlayedKeyRef.current) return;
 
     engine.play({ segments: segs, playheadFrame: frame, fps, seamResume: false });
   }
 
   function pauseAudio(): void {
+    stopGenRef.current++; // invalidate any in-flight startAudio/seam preload
     getEngine().pause();
   }
 
   function stopAudio(): void {
+    stopGenRef.current++;
     getEngine().stop();
   }
 
@@ -154,11 +162,13 @@ export function useMultiTrackAudio({
     } = stateRef.current;
 
     const engine = getEngine();
+    const stopGen = stopGenRef.current;
 
     // Preload (instant if already cached) then reschedule.
     void engine.preload(segs).then(() => {
-      if (!stateRef.current.isPlaying) return; // paused while preloading
-      if (audioSegKey !== lastPlayedKeyRef.current) return; // key changed again
+      if (stopGenRef.current !== stopGen) return; // stop/pause called while preloading
+      if (!stateRef.current.isPlaying) return;
+      if (audioSegKey !== lastPlayedKeyRef.current) return;
       engine.play({ segments: segs, playheadFrame: frame, fps, seamResume: true });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,6 +182,7 @@ export function useMultiTrackAudio({
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (isPlaying) return;
+    stopGenRef.current++;
     getEngine().stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying, playheadFrame]);
