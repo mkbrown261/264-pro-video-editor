@@ -380,6 +380,16 @@ export interface TimelineClip {
   compGraph: import("./compositing.js").CompGraph | null;  // Fusion node graph
   aiBackgroundRemoval: BackgroundRemovalConfig | null;
   beatSync: BeatSyncConfig | null;
+  // Keyframe animation tracks
+  keyframes?: {
+    opacity?: KeyframeTrack<number>;
+    volume?: KeyframeTrack<number>;
+    posX?: KeyframeTrack<number>;
+    posY?: KeyframeTrack<number>;
+    scaleX?: KeyframeTrack<number>;
+    scaleY?: KeyframeTrack<number>;
+    rotation?: KeyframeTrack<number>;
+  };
 }
 
 // ── Background Removal ────────────────────────────────────────────────────────
@@ -407,6 +417,7 @@ export interface TimelineTrack {
   solo: boolean;
   height: number;  // px, user-resizable
   color: string;
+  volume?: number;  // 0-2, track-level gain (1 = unity)
 }
 
 export type TimelineTrackKind = "video" | "audio";
@@ -418,6 +429,7 @@ export interface SequenceSettings {
   height: number;
   fps: number;
   audioSampleRate: number;
+  masterVolume?: number;  // 0-2, master output gain (1 = unity)
 }
 
 export interface TimelineSequence {
@@ -463,9 +475,31 @@ export interface EnvironmentStatus {
   warnings: string[];
 }
 
+export type ExportCodec = "libx264" | "libx265" | "prores_ks" | "libvpx-vp9";
+
+export interface ExportResolutionPreset {
+  label: string;
+  width: number;
+  height: number;
+}
+
+export const EXPORT_RESOLUTION_PRESETS: ExportResolutionPreset[] = [
+  { label: "Original", width: 0, height: 0 },
+  { label: "4K (3840×2160)", width: 3840, height: 2160 },
+  { label: "1080p (1920×1080)", width: 1920, height: 1080 },
+  { label: "720p (1280×720)", width: 1280, height: 720 },
+  { label: "Vertical 1080p (1080×1920)", width: 1080, height: 1920 },
+  { label: "Square (1080×1080)", width: 1080, height: 1080 },
+];
+
 export interface ExportRequest {
   outputPath: string;
   project: EditorProject;
+  /** Video codec to use. Defaults to libx264 if omitted. */
+  codec?: ExportCodec;
+  /** Override output resolution. 0×0 means use sequence settings. */
+  outputWidth?: number;
+  outputHeight?: number;
 }
 
 export interface ExportResponse {

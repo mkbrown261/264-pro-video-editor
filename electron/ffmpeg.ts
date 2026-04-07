@@ -359,8 +359,29 @@ export async function generateProxiesInBackground(
   }
 }
 
+// ── atempo chain helper ───────────────────────────────────────────────────────
+// atempo filter only accepts 0.5–2.0. For values outside that range we chain
+// multiple atempo filters. E.g. 4x speed = atempo=2.0,atempo=2.0
+function buildAtempoChain(speed: number): string {
+  const clamped = Math.max(0.1, Math.min(4, speed));
+  if (clamped >= 0.5 && clamped <= 2.0) {
+    return `atempo=${clamped.toFixed(4)}`;
+  }
+  const filters: string[] = [];
+  let remaining = clamped;
+  // Build chain: each stage handles at most 2x (speed > 1) or 0.5x (speed < 1)
+  const limit = clamped > 1 ? 2.0 : 0.5;
+  while (remaining > 2.0 + 1e-6 || remaining < 0.5 - 1e-6) {
+    filters.push(`atempo=${limit}`);
+    remaining = clamped > 1 ? remaining / limit : remaining / limit;
+  }
+  filters.push(`atempo=${remaining.toFixed(4)}`);
+  return filters.join(",");
+}
+
 export async function exportSequence(
-  request: ExportRequest
+  request: ExportRequest,
+  onProgress?: (pct: number) => void
 ): Promise<ExportResponse> {
   const environment = getEnvironmentStatus();
 
@@ -369,24 +390,37 @@ export async function exportSequence(
   }
 
   const { project, outputPath } = request;
-  const segments = buildTimelineSegments(project.sequence, project.assets)
-    .filter(
-      (segment) => segment.track.kind === "video" && segment.clip.isEnabled
-    )
+  const codec = request.codec ?? "libx264";
+
+  // Determine output resolution
+  const seqW = project.sequence.settings.width;
+  const seqH = project.sequence.settings.height;
+  const outW = (request.outputWidth && request.outputWidth > 0) ? request.outputWidth : seqW;
+  const outH = (request.outputHeight && request.outputHeight > 0) ? request.outputHeight : seqH;
+
+  // Build segments from ALL tracks (video + audio)
+  const allSegments = buildTimelineSegments(project.sequence, project.assets)
+    .filter((segment) => segment.clip.isEnabled)
     .sort((left, right) => {
       if (left.startFrame !== right.startFrame) {
         return left.startFrame - right.startFrame;
       }
-
       return left.trackIndex - right.trackIndex;
     });
 
-  if (!segments.length) {
+  // Primary video segments (top video track per timeline frame)
+  // For export we take the topmost video clip at each position.
+  // We flatten: sort all video segments by startFrame then trackIndex,
+  // and include them all (FFmpeg concat handles it sequentially).
+  const videoSegments = allSegments.filter((s) => s.track.kind === "video");
+
+  if (!videoSegments.length) {
     throw new Error("Nothing is on the timeline. Add clips before exporting.");
   }
 
+  // Deduplicate assets used across video segments (audio-only clips may reuse same asset)
   const uniqueAssets = Array.from(
-    new Map(segments.map((segment) => [segment.asset.id, segment.asset])).values()
+    new Map(allSegments.map((segment) => [segment.asset.id, segment.asset])).values()
   );
   const assetInputIndexes = new Map(
     uniqueAssets.map((asset, index) => [asset.id, index])
@@ -394,7 +428,7 @@ export async function exportSequence(
   const filterParts: string[] = [];
   let concatInputs = "";
 
-  for (const [index, segment] of segments.entries()) {
+  for (const [index, segment] of videoSegments.entries()) {
     const inputIndex = assetInputIndexes.get(segment.asset.id);
 
     if (inputIndex === undefined) {
@@ -406,6 +440,8 @@ export async function exportSequence(
     const end = segment.sourceOutSeconds.toFixed(3);
     const duration = segment.durationSeconds.toFixed(3);
     const clipIndex = String(index);
+    const speed = Math.max(0.1, Math.min(4, segment.clip.speed ?? 1));
+
     const transitionInSeconds = (
       getClipTransitionDurationFrames(
         segment.clip.transitionIn,
@@ -418,39 +454,140 @@ export async function exportSequence(
         segment.durationFrames
       ) / project.sequence.settings.fps
     ).toFixed(3);
+
+    // ── Video filter chain ─────────────────────────────────────────────────
     const videoFilters = [
       `trim=start=${start}:end=${end}`,
-      "setpts=PTS-STARTPTS",
-      `scale=${project.sequence.settings.width}:${project.sequence.settings.height}:force_original_aspect_ratio=decrease`,
-      `pad=${project.sequence.settings.width}:${project.sequence.settings.height}:(ow-iw)/2:(oh-ih)/2`,
+      // Speed: setpts changes presentation timestamps
+      speed !== 1 ? `setpts=PTS/${speed.toFixed(4)}` : "setpts=PTS-STARTPTS",
+    ];
+    // If we used speed-adjusted setpts, we still need to reset to 0
+    if (speed !== 1) {
+      videoFilters.push("setpts=PTS-STARTPTS");
+    }
+    videoFilters.push(
+      `scale=${outW}:${outH}:force_original_aspect_ratio=decrease`,
+      `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2`,
       `fps=${project.sequence.settings.fps}`,
       "format=yuv420p"
-    ];
-    const audioFilters = [
-      `atrim=start=${start}:end=${end}`,
-      "asetpts=PTS-STARTPTS",
-      `aresample=${project.sequence.settings.audioSampleRate}`,
-      "aformat=channel_layouts=stereo"
-    ];
+    );
+
+    // ── Transform ─────────────────────────────────────────────────────────
+    const t = segment.clip.transform;
+    if (t) {
+      const sx = t.scaleX ?? 1;
+      const sy = t.scaleY ?? 1;
+      const rot = t.rotation ?? 0;
+      const opacity = t.opacity ?? 1;
+      const posX = t.posX ?? 0;
+      const posY = t.posY ?? 0;
+
+      if (sx !== 1 || sy !== 1) {
+        videoFilters.push(`scale=iw*${sx.toFixed(4)}:ih*${sy.toFixed(4)}`);
+      }
+      if (rot !== 0) {
+        videoFilters.push(`rotate=${rot}*(PI/180):fillcolor=black@0`);
+      }
+      if (posX !== 0 || posY !== 0) {
+        // Pan: use pad+overlay
+        const xPx = Math.round(posX * outW * 0.5);
+        const yPx = Math.round(posY * outH * 0.5);
+        videoFilters.push(`pad=${outW}:${outH}:${outW / 2 - outW / 2 + xPx}:${outH / 2 - outH / 2 + yPx}`);
+      }
+      if (opacity < 1) {
+        videoFilters.push(`colorchannelmixer=aa=${opacity.toFixed(4)}`);
+      }
+    }
+
+    // ── Color Grade ───────────────────────────────────────────────────────
+    const cg = segment.clip.colorGrade;
+    if (cg && !cg.bypass) {
+      // exposure → eq brightness
+      if (cg.exposure !== 0) {
+        const ev = Math.pow(2, cg.exposure);
+        videoFilters.push(`exposure=exposure=${cg.exposure.toFixed(3)}`);
+        void ev; // acknowledged
+      }
+      // contrast via eq
+      if (cg.contrast !== 0) {
+        const ffContrast = 1 + cg.contrast;
+        videoFilters.push(`eq=contrast=${ffContrast.toFixed(3)}`);
+      }
+      // saturation via hue filter or eq
+      if (cg.saturation !== 1) {
+        videoFilters.push(`hue=s=${cg.saturation.toFixed(3)}`);
+      }
+      // temperature: warm (positive) → boost red/reduce blue
+      if (cg.temperature !== 0) {
+        const rBoost = (cg.temperature / 100) * 0.1;
+        const bBoost = -(cg.temperature / 100) * 0.1;
+        videoFilters.push(
+          `colorbalance=rs=${rBoost.toFixed(3)}:gs=0:bs=${bBoost.toFixed(3)}:rm=${rBoost.toFixed(3)}:gm=0:bm=${bBoost.toFixed(3)}:rh=${rBoost.toFixed(3)}:gh=0:bh=${bBoost.toFixed(3)}`
+        );
+      }
+      // lift/gamma/gain color wheels via colorlevels
+      const { lift, gamma: gm, gain } = cg;
+      const hasWheels =
+        lift.r !== 0 || lift.g !== 0 || lift.b !== 0 ||
+        gm.r !== 0 || gm.g !== 0 || gm.b !== 0 ||
+        gain.r !== 0 || gain.g !== 0 || gain.b !== 0;
+      if (hasWheels) {
+        // colorlevels: rimin/rimax/romin/romax for input/output range per channel
+        // Simplified: use lift→input min raise, gain→output max scale
+        const riminR = Math.max(0, lift.r * 0.25).toFixed(3);
+        const riminG = Math.max(0, lift.g * 0.25).toFixed(3);
+        const riminB = Math.max(0, lift.b * 0.25).toFixed(3);
+        const romaxR = Math.min(1, 1 + gain.r * 0.25).toFixed(3);
+        const romaxG = Math.min(1, 1 + gain.g * 0.25).toFixed(3);
+        const romaxB = Math.min(1, 1 + gain.b * 0.25).toFixed(3);
+        videoFilters.push(
+          `colorlevels=rimin=${riminR}:gimin=${riminG}:bimin=${riminB}:romax=${romaxR}:gomax=${romaxG}:bomax=${romaxB}`
+        );
+      }
+    }
 
     if (Number(transitionInSeconds) > 0) {
       videoFilters.push(`fade=t=in:st=0:d=${transitionInSeconds}`);
-      audioFilters.push(`afade=t=in:st=0:d=${transitionInSeconds}`);
     }
-
     if (Number(transitionOutSeconds) > 0) {
       const fadeOutStart = Math.max(
         0,
         segment.durationSeconds - Number(transitionOutSeconds)
       ).toFixed(3);
-
       videoFilters.push(`fade=t=out:st=${fadeOutStart}:d=${transitionOutSeconds}`);
-      audioFilters.push(`afade=t=out:st=${fadeOutStart}:d=${transitionOutSeconds}`);
     }
 
     filterParts.push(
       `[${inputLabel}:v]${videoFilters.join(",")}[v${clipIndex}]`
     );
+
+    // ── Audio filter chain ─────────────────────────────────────────────────
+    const volume = Math.max(0, Math.min(2, segment.clip.volume ?? 1));
+    const audioFilters = [
+      `atrim=start=${start}:end=${end}`,
+      "asetpts=PTS-STARTPTS",
+    ];
+    if (speed !== 1) {
+      audioFilters.push(buildAtempoChain(speed));
+    }
+    if (volume !== 1) {
+      audioFilters.push(`volume=${volume.toFixed(4)}`);
+    }
+    audioFilters.push(
+      `aresample=${project.sequence.settings.audioSampleRate}`,
+      "aformat=channel_layouts=stereo"
+    );
+
+    if (Number(transitionInSeconds) > 0) {
+      audioFilters.push(`afade=t=in:st=0:d=${transitionInSeconds}`);
+    }
+    if (Number(transitionOutSeconds) > 0) {
+      const fadeOutStart = Math.max(
+        0,
+        segment.durationSeconds - Number(transitionOutSeconds)
+      ).toFixed(3);
+      audioFilters.push(`afade=t=out:st=${fadeOutStart}:d=${transitionOutSeconds}`);
+    }
 
     if (segment.asset.hasAudio) {
       filterParts.push(
@@ -466,8 +603,43 @@ export async function exportSequence(
   }
 
   filterParts.push(
-    `${concatInputs}concat=n=${segments.length}:v=1:a=1[vout][aout]`
+    `${concatInputs}concat=n=${videoSegments.length}:v=1:a=1[vout][aout]`
   );
+
+  // ── Codec-specific output args ─────────────────────────────────────────────
+  function getVideoCodecArgs(c: typeof codec): string[] {
+    switch (c) {
+      case "libx265":
+        return ["-c:v", "libx265", "-preset", "medium", "-crf", "22", "-tag:v", "hvc1"];
+      case "prores_ks":
+        return ["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-bits_per_mb", "8000", "-pix_fmt", "yuv422p10le"];
+      case "libvpx-vp9":
+        return ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "30", "-deadline", "good", "-cpu-used", "2"];
+      case "libx264":
+      default:
+        return ["-c:v", "libx264", "-preset", "medium", "-crf", "18"];
+    }
+  }
+  function getAudioCodecArgs(c: typeof codec): string[] {
+    switch (c) {
+      case "prores_ks":
+        return ["-c:a", "pcm_s16le"];
+      case "libvpx-vp9":
+        return ["-c:a", "libopus", "-b:a", "192k"];
+      default:
+        return ["-c:a", "aac", "-b:a", "192k"];
+    }
+  }
+  function getContainerArgs(c: typeof codec): string[] {
+    switch (c) {
+      case "prores_ks":
+        return ["-movflags", "+faststart"];
+      case "libvpx-vp9":
+        return [];
+      default:
+        return ["-movflags", "+faststart"];
+    }
+  }
 
   const args = [
     ...uniqueAssets.flatMap((asset) => ["-i", asset.sourcePath]),
@@ -477,23 +649,47 @@ export async function exportSequence(
     "[vout]",
     "-map",
     "[aout]",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "medium",
-    "-crf",
-    "18",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "192k",
-    "-movflags",
-    "+faststart",
+    ...getVideoCodecArgs(codec),
+    ...getAudioCodecArgs(codec),
+    ...getContainerArgs(codec),
     "-y",
     outputPath
   ];
 
-  await runProcess(environment.ffmpegPath, args);
+  // ── Spawn FFmpeg with progress parsing ─────────────────────────────────────
+  // Calculate total frames for progress reporting
+  const totalFrames = videoSegments.reduce((sum, s) => sum + s.durationFrames, 0);
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(environment.ffmpegPath, args, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stderr = "";
+    child.stdout.on("data", () => { /* no-op */ });
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderr += text;
+      // Parse frame=N from FFmpeg progress output
+      if (onProgress && totalFrames > 0) {
+        const match = /frame=\s*(\d+)/.exec(text);
+        if (match) {
+          const frame = Number(match[1]);
+          const pct = Math.min(99, Math.round((frame / totalFrames) * 100));
+          onProgress(pct);
+        }
+      }
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        if (onProgress) onProgress(100);
+        resolve();
+      } else {
+        reject(new Error(stderr.trim() || `ffmpeg exited with code ${String(code)}`));
+      }
+    });
+  });
 
   return {
     outputPath,

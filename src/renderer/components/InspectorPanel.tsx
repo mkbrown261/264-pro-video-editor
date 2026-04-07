@@ -6,9 +6,10 @@ import type {
   ClipTransitionType,
   ColorGrade,
   EnvironmentStatus,
+  ExportCodec,
   MediaAsset
 } from "../../shared/models";
-import { ALL_TRANSITION_TYPES } from "../../shared/models";
+import { ALL_TRANSITION_TYPES, EXPORT_RESOLUTION_PRESETS } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 import { formatDuration, formatTimecode } from "../lib/format";
 import { MaskInspector, type MaskTool } from "./MaskingCanvas";
@@ -105,7 +106,8 @@ interface InspectorPanelProps {
   onSetVoiceGridFrames: (gridFrames: number) => void;
 
   // Export
-  onExport: () => Promise<void>;
+  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
+  exportProgress?: number;
 
   // Color grade (for effects page display)
   colorGrade?: ColorGrade | null;
@@ -571,20 +573,32 @@ function ExportPresetPanel({
   sequenceSettings,
   exportBusy,
   exportMessage,
+  exportProgress,
   environment,
   onExport,
 }: {
   sequenceSettings: { width: number; height: number; fps: number; audioSampleRate: number };
   exportBusy: boolean;
   exportMessage: string | null;
+  exportProgress?: number;
   environment: EnvironmentStatus | null;
-  onExport: () => Promise<void>;
+  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
 }) {
   const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
+  const [selectedCodec, setSelectedCodec] = useState<ExportCodec>("libx264");
+  const [selectedResIdx, setSelectedResIdx] = useState<number>(0); // 0 = Original
   const preset = EXPORT_PRESETS.find((p) => p.id === selectedPreset) ?? EXPORT_PRESETS[0];
+  const resPre = EXPORT_RESOLUTION_PRESETS[selectedResIdx] ?? EXPORT_RESOLUTION_PRESETS[0];
+  const pct = exportProgress ?? 0;
 
-  // Estimated render ETA (rough: 2× duration per minute of 1080p)
-  const etaLabel = "ETA: ~2–5 min depending on length";
+  const CODEC_OPTIONS: Array<{ value: ExportCodec; label: string }> = [
+    { value: "libx264", label: "H.264 (libx264)" },
+    { value: "libx265", label: "H.265 (libx265)" },
+    { value: "prores_ks", label: "ProRes (prores_ks)" },
+    { value: "libvpx-vp9", label: "WebM (VP9)" },
+  ];
+
+  const containerLabel = selectedCodec === "libvpx-vp9" ? "WebM" : selectedCodec === "prores_ks" ? "MOV" : "MP4";
 
   return (
     <div className="inspector-stack">
@@ -605,16 +619,40 @@ function ExportPresetPanel({
         </div>
       </CollapsibleCard>
 
+      <CollapsibleCard label="Codec &amp; Resolution" defaultOpen>
+        <div className="clip-meta-grid">
+          <span>Video Codec</span>
+          <select
+            value={selectedCodec}
+            onChange={(e) => setSelectedCodec(e.target.value as ExportCodec)}
+            style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, color: "#e8e8e8", fontSize: 11, padding: "3px 5px" }}
+          >
+            {CODEC_OPTIONS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+          <span>Resolution</span>
+          <select
+            value={selectedResIdx}
+            onChange={(e) => setSelectedResIdx(Number(e.target.value))}
+            style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, color: "#e8e8e8", fontSize: 11, padding: "3px 5px" }}
+          >
+            {EXPORT_RESOLUTION_PRESETS.map((r, i) => (
+              <option key={i} value={i}>{r.label}</option>
+            ))}
+          </select>
+        </div>
+      </CollapsibleCard>
+
       <CollapsibleCard label="Render Settings" defaultOpen>
         <div className="clip-meta-grid">
           <span>Platform</span><strong>{preset.label}</strong>
-          <span>Resolution</span><strong>{preset.width}×{preset.height}</strong>
+          <span>Resolution</span><strong>{resPre.width > 0 ? `${resPre.width}×${resPre.height}` : `${sequenceSettings.width}×${sequenceSettings.height} (seq)`}</strong>
           <span>Frame Rate</span><strong>{preset.fps} fps</strong>
-          <span>Video Codec</span><strong>{preset.codec}</strong>
-          <span>Video Bitrate</span><strong>{preset.bitrate}</strong>
+          <span>Video Codec</span><strong>{CODEC_OPTIONS.find(c => c.value === selectedCodec)?.label ?? selectedCodec}</strong>
           <span>Audio Codec</span><strong>{preset.audioCodec}</strong>
           <span>Audio Bitrate</span><strong>{preset.audioBitrate}</strong>
-          <span>Container</span><strong>{preset.container}</strong>
+          <span>Container</span><strong>{containerLabel}</strong>
         </div>
       </CollapsibleCard>
 
@@ -630,17 +668,17 @@ function ExportPresetPanel({
         <button
           className="panel-action primary export-btn"
           disabled={exportBusy}
-          onClick={() => void onExport()}
+          onClick={() => void onExport({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height })}
           type="button"
         >
-          {exportBusy ? "⏳ Rendering…" : `▶ Export ${preset.container}`}
+          {exportBusy ? "⏳ Rendering…" : `▶ Export ${containerLabel}`}
         </button>
         {exportBusy && (
           <div className="export-progress-row">
             <div className="export-progress-bar">
-              <div className="export-progress-fill" />
+              <div className="export-progress-fill" style={{ width: `${pct}%`, transition: "width 0.3s ease" }} />
             </div>
-            <span className="export-eta">{etaLabel}</span>
+            <span className="export-eta">{pct}%</span>
           </div>
         )}
         {exportMessage && (
@@ -671,6 +709,7 @@ export function InspectorPanel({
   environment,
   exportBusy,
   exportMessage,
+  exportProgress,
   clipMessage,
   sequenceSettings,
   voiceListening,
@@ -1182,6 +1221,7 @@ export function InspectorPanel({
             sequenceSettings={sequenceSettings}
             exportBusy={exportBusy}
             exportMessage={exportMessage}
+            exportProgress={exportProgress}
             environment={environment}
             onExport={onExport}
           />

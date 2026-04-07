@@ -1,5 +1,6 @@
 import type {
   EnvironmentStatus,
+  ExportCodec,
   ExportRequest,
   ExportResponse,
   MediaAsset
@@ -37,6 +38,8 @@ declare global {
       onUpdaterStatus: (callback: (status: UpdaterStatus) => void) => () => void;
       /** Called by main process when a background proxy finishes encoding */
       onProxyReady: (callback: (assetId: string, previewUrl: string) => void) => () => void;
+      /** Export render progress 0-100 */
+      onExportProgress: (callback: (pct: number) => void) => () => void;
       // Project persistence
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;

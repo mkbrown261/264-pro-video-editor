@@ -557,6 +557,7 @@ export default function App() {
   const [exportBusy,  setExportBusy]  = useState(false);
   const [importBusy,  setImportBusy]  = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportProgress, setExportProgress] = useState<number>(0);
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null);
   const [bridgeReady, setBridgeReady] = useState(
     typeof window !== "undefined" && Boolean(window.editorApi)
@@ -1407,24 +1408,43 @@ export default function App() {
     await triggerImport();
   }
 
-  async function handleExport() {
+  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number }) {
     if (!window.editorApi) { setBridgeReady(false); setExportMessage("Export unavailable."); return; }
     setExportMessage(null);
     if (!segments.length) { setExportMessage("Add clips before exporting."); return; }
+    const codec = opts?.codec;
+    const ext = (codec === "libvpx-vp9") ? "webm" : (codec === "prores_ks") ? "mov" : "mp4";
+    const suggestedName = `${project.sequence.name}.${ext}`;
     try {
-      const outputPath = await window.editorApi.chooseExportFile(`${project.sequence.name}.mp4`);
+      const outputPath = await window.editorApi.chooseExportFile(suggestedName);
       if (!outputPath) return;
       setExportBusy(true);
-      const result = await window.editorApi.exportSequence({ outputPath, project });
-      setExportMessage(`✓ Rendered to ${result.outputPath}`);
-      // Notify FlowState of export activity
-      if (window.flowstateAPI && fsLinked) {
-        void window.flowstateAPI.apiCall('/api/264pro/activity', 'POST', {
-          event: 'export_completed',
-          projectName: project.name ?? 'Untitled',
-          format: 'mp4',
-          outputPath: result.outputPath,
+      setExportProgress(0);
+      // Subscribe to progress events
+      const unsubProgress = window.editorApi.onExportProgress?.((pct) => {
+        setExportProgress(pct);
+      });
+      try {
+        const result = await window.editorApi.exportSequence({
+          outputPath,
+          project,
+          codec,
+          outputWidth: opts?.outputWidth,
+          outputHeight: opts?.outputHeight,
         });
+        setExportProgress(100);
+        setExportMessage(`✓ Rendered to ${result.outputPath}`);
+        // Notify FlowState of export activity
+        if (window.flowstateAPI && fsLinked) {
+          void window.flowstateAPI.apiCall('/api/264pro/activity', 'POST', {
+            event: 'export_completed',
+            projectName: project.name ?? 'Untitled',
+            format: ext,
+            outputPath: result.outputPath,
+          });
+        }
+      } finally {
+        unsubProgress?.();
       }
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Render failed.");
@@ -2360,6 +2380,7 @@ export default function App() {
               environment={environment}
               exportBusy={exportBusy}
               exportMessage={exportMessage}
+              exportProgress={exportProgress}
               clipMessage={transitionMessage}
               sequenceSettings={project.sequence.settings}
               voiceListening={voiceListening}

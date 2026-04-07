@@ -654,8 +654,12 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
   return result.canceled ? null : result.filePath ?? null;
 });
 
-ipcMain.handle("export:render", async (_event, request: ExportRequest) => {
-  return exportSequence(request);
+ipcMain.handle("export:render", async (event, request: ExportRequest) => {
+  return exportSequence(request, (pct) => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send("export:progress", pct);
+    }
+  });
 });
 
 // ── Project persistence (.264proj) ───────────────────────────────────────────

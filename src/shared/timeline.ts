@@ -1,5 +1,6 @@
 import type {
   ClipTransition,
+  KeyframeTrack,
   MediaAsset,
   TimelineClip,
   TimelineSequence,
@@ -7,6 +8,45 @@ import type {
   TimelineTrackKind
 } from "./models.js";
 import { createEmptyClip, createId } from "./models.js";
+
+/**
+ * interpolateKeyframe
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Linear interpolation between keyframes on a numeric track.
+ * - Before the first keyframe → returns the first value.
+ * - After the last keyframe  → returns the last value.
+ * - Between two keyframes    → linear lerp.
+ */
+export function interpolateKeyframe(
+  track: KeyframeTrack<number>,
+  frame: number
+): number {
+  const kfs = track.keyframes;
+  if (!kfs || kfs.length === 0) return 0;
+  if (kfs.length === 1) return kfs[0].value;
+
+  // Sort by frame (defensive – callers may not guarantee order)
+  const sorted = [...kfs].sort((a, b) => a.frame - b.frame);
+
+  if (frame <= sorted[0].frame) return sorted[0].value;
+  if (frame >= sorted[sorted.length - 1].frame) return sorted[sorted.length - 1].value;
+
+  // Find the surrounding pair
+  let lo = sorted[0];
+  let hi = sorted[sorted.length - 1];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (sorted[i].frame <= frame && sorted[i + 1].frame >= frame) {
+      lo = sorted[i];
+      hi = sorted[i + 1];
+      break;
+    }
+  }
+
+  const range = hi.frame - lo.frame;
+  if (range <= 0) return lo.value;
+  const t = (frame - lo.frame) / range;
+  return lo.value + t * (hi.value - lo.value);
+}
 
 export interface TimelineSegment {
   clip: TimelineClip;

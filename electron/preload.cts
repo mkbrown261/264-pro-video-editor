@@ -77,6 +77,12 @@ const editorApi = {
   notifyAppReady: (): void => {
     ipcRenderer.send("app:renderer-ready");
   },
+  // Export progress (0-100) sent by main process during rendering
+  onExportProgress: (callback: (pct: number) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, pct: number) => callback(pct);
+    ipcRenderer.on("export:progress", listener);
+    return () => ipcRenderer.removeListener("export:progress", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("editorApi", editorApi);
