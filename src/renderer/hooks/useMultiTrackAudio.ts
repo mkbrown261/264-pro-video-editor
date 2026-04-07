@@ -74,12 +74,12 @@ const SEEK_TIMEOUT_MS       = 2000;
 /** Frames ahead of a segment start to begin prefetching + pre-playing. */
 const LOOKAHEAD_FRAMES      = 150;    // ~5 s at 30 fps — wider window ensures overlapping clips are pre-loaded
 /** How many frames before the seam we start the incoming element (muted). */
-const PRE_PLAY_FRAMES       = 20;     // ~667 ms at 30 fps — longer runway clears play() + seek latency
+const PRE_PLAY_FRAMES       = 45;     // ~1.5 s at 30 fps — wider runway gives play() more time to stabilise
 /** Gain ramp durations for seam crossfade (seconds).
  *  Equal-power crossfade: both ramps have the same duration so they overlap
  *  and sum to constant perceived loudness across the seam. */
-const FADE_OUT_S            = 0.060;  // 60 ms outgoing ramp — tight but pop-free
-const FADE_IN_S             = 0.060;  // 60 ms incoming ramp — matches outgoing for equal-power
+const FADE_OUT_S            = 0.020;  // 20 ms outgoing ramp — tight enough to prevent perceived "tail"
+const FADE_IN_S             = 0.020;  // 20 ms incoming ramp — fast enough not to be heard as a fade-up
 /** Hard-cut micro-ramp: prevents DC-offset click on instant cuts (5 ms). */
 const HARD_CUT_RAMP_S       = 0.005;  // 5 ms — inaudible ramp, zero-crossing protection
 
@@ -431,7 +431,7 @@ function tickPrefetch(
     })();
   }
   // Already pre-playing — nothing to do. The element has been running for at
-  // most PRE_PLAY_FRAMES (~400 ms) so drift at the seam is within tolerance.
+  // most PRE_PLAY_FRAMES (~1.5 s) so drift at the seam is within tolerance.
 }
 
 /** Claim a prefetched/pre-playing element for a segment. */
@@ -609,10 +609,14 @@ export function useMultiTrackAudio({
       const claimed   = claimPrefetched(seg.clip.id);
       const element   = claimed?.element ?? acquireElement();
       const wasPrePlaying = claimed?.wasPrePlaying ?? false;
-      // Mark as fadeInDone so the sync loop sets gain immediately (no ramp)
+      // Mark as fadeInDone so the sync loop sets gain immediately (no ramp):
+      //   • Hard-cut incoming: skip the equal-power ramp (use HARD_CUT_RAMP_S instead)
+      //   • Pre-playing incoming: element is already running at ~correct position —
+      //     skip ALL ramps and set gain immediately to avoid any perceived fade-up.
+      //     A pre-playing element has no click risk because it was already at gain=0.
       const isHardCut = hardCutIncomingIds.has(seg.clip.id);
 
-      nextSlots.push({ segment: seg, element, fadeInDone: isHardCut, isPrePlaying: wasPrePlaying });
+      nextSlots.push({ segment: seg, element, fadeInDone: isHardCut || wasPrePlaying, isPrePlaying: wasPrePlaying });
     }
 
     slotsRef.current = nextSlots;
@@ -763,15 +767,14 @@ export function useMultiTrackAudio({
         // reconcile cycles treat this slot normally.
         slot.isSeamlessContinue = false;
       } else if (slot.isPrePlaying && shouldPlay) {
-        // Pre-playing (muted) element: use wide tolerance so we never await a
-        // seeked event at the seam.  A small drift is completely inaudible.
-        const drift = Math.abs(element.currentTime - clampedTime);
-        if (drift > PRE_PLAY_SEEK_TOLERANCE_S) {
-          // Drifted too far — synchronous seek only (no await); accept brief glitch
-          // rather than silence. This only happens if prefetch started very early.
-          element.currentTime = clampedTime;
-        }
-        // else: drift is acceptable, skip seek entirely — element is already running
+        // Pre-playing (muted) element: the element has been running silently for at
+        // most PRE_PLAY_FRAMES (~1.5 s) so drift from the target position is at most
+        // ~1.5 s * playbackRate which decays to well under PRE_PLAY_SEEK_TOLERANCE_S
+        // by the seam frame.  ANY seek here — even a synchronous currentTime
+        // assignment — causes a momentary silence because the browser must re-buffer
+        // from the new position.  Skip correction entirely: the accumulated drift is
+        // inaudible (sub-frame at the seam) and no seek means no gap.
+        // Element is already running — no action needed.
       } else {
         // Already loaded, but not pre-playing — seek normally (fast, no network wait)
         await seekTo(element, clampedTime, fps);
