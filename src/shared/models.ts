@@ -305,7 +305,15 @@ export type EffectType =
   | "kaleidoscope"
   | "vhsEffect"
   | "glitchEffect"
-  | "painterly";
+  | "painterly"
+  // AI effects
+  | "ai_upscale"
+  | "ai_denoise"
+  | "ai_stabilize"
+  | "ai_face_enhance"
+  | "ai_color_match"
+  | "filmnoise"
+  | "chromatic_aberration";
 
 export interface ClipEffect {
   id: string;

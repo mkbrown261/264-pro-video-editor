@@ -30,8 +30,10 @@ declare global {
       getToken: () => Promise<string | null>;
       getUser: () => Promise<FSUser | null>;
       apiCall: (path: string, method: string, body?: unknown) => Promise<unknown>;
+      runAITool?: (tool: string, options: { imageUrl?: string; videoUrl?: string; params?: Record<string, unknown> }) => Promise<unknown>;
+      pollAITool?: (predictionId: string) => Promise<unknown>;
     };
-    editorApi?: { notifyAppReady?: () => void };
+    // editorApi is declared in vite-env.d.ts with the full type
   }
 }
 

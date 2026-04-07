@@ -326,6 +326,37 @@ void main(){
   }
 }`;
 
+const FRAG_FISHEYE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_strength;
+uniform float u_zoom;
+varying vec2 v_uv;
+void main(){
+  vec2 uv = v_uv * 2.0 - 1.0;
+  float r = length(uv);
+  float theta = (r > 0.0) ? atan(r * u_strength) / max(u_strength, 0.0001) : r;
+  vec2 distorted = (r > 0.0) ? normalize(uv) * theta : uv;
+  distorted = (distorted + 1.0) / 2.0;
+  distorted = mix(v_uv, distorted, u_zoom);
+  if(distorted.x < 0.0 || distorted.x > 1.0 || distorted.y < 0.0 || distorted.y > 1.0)
+    gl_FragColor = vec4(0.0);
+  else
+    gl_FragColor = texture2D(u_tex, distorted);
+}`;
+
+const FRAG_XF = `
+precision mediump float;
+uniform sampler2D u_texA;
+uniform sampler2D u_texB;
+uniform float u_blend;
+varying vec2 v_uv;
+void main(){
+  vec4 a = texture2D(u_texA, v_uv);
+  vec4 b = texture2D(u_texB, v_uv);
+  gl_FragColor = mix(a, b, clamp(u_blend, 0.0, 1.0));
+}`;
+
 // ── Blend mode index map ──────────────────────────────────────────────────────
 const BLEND_MODE_INDEX: Record<string, number> = {
   Normal: 0, Add: 1, Multiply: 2, Screen: 3, Overlay: 4,
@@ -471,6 +502,8 @@ export class CompRenderer {
     this.programs.set("sharpen",        createProgram(gl, FRAG_SHARPEN));
     this.programs.set("dissolve",       createProgram(gl, FRAG_DISSOLVE_BLEND));
     this.programs.set("letterbox",      createProgram(gl, FRAG_LETTERBOX));
+    this.programs.set("fishEye",        createProgram(gl, FRAG_FISHEYE));
+    this.programs.set("xf",             createProgram(gl, FRAG_XF));
 
     // FBO pool
     this.pool = new FBOPool(gl, this.w, this.h);
@@ -830,6 +863,90 @@ export class CompRenderer {
         gl.uniform1f(gl.getUniformLocation(prog, "u_similarity"), 0);
         gl.uniform1f(gl.getUniformLocation(prog, "u_smoothness"), 0.001);
         gl.uniform1f(gl.getUniformLocation(prog, "u_spill"), pVal(node, "spill", 0.2));
+        drawQuad(gl, prog, this.vbo);
+        break;
+      }
+
+      case "XF":
+      case "CrossDissolve": {
+        // XF = crossfade/dissolve between two inputs
+        const texA = getInputTex(node.id, "inA") ?? getInputTex(node.id, "in");
+        const texB = getInputTex(node.id, "inB") ?? getInputTex(node.id, "bg");
+        if (!texA && !texB) break;
+        const prog = this.programs.get("xf")!;
+        gl.useProgram(prog);
+        if (texA) {
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, texA);
+        }
+        gl.uniform1i(gl.getUniformLocation(prog, "u_texA"), 0);
+        if (texB) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, texB);
+        }
+        gl.uniform1i(gl.getUniformLocation(prog, "u_texB"), 1);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_blend"), pVal(node, "blend", 0.5));
+        drawQuad(gl, prog, this.vbo);
+        break;
+      }
+
+      case "TextPlus":
+      case "Text+": {
+        // Render text to an offscreen canvas and upload as texture
+        const textCanvas = document.createElement("canvas");
+        textCanvas.width  = this.w;
+        textCanvas.height = this.h;
+        const ctx2d = textCanvas.getContext("2d");
+        if (!ctx2d) break;
+        ctx2d.clearRect(0, 0, this.w, this.h);
+        const text     = pString(node, "text", "Text");
+        const fontSize = Math.max(8, Math.round(pVal(node, "size", 72)));
+        const fontFace = pString(node, "font", "Arial");
+        const colArr   = pColor(node, "color", [1,1,1,1]);
+        const r = Math.round(colArr[0] * 255);
+        const g = Math.round(colArr[1] * 255);
+        const b = Math.round(colArr[2] * 255);
+        const a = colArr[3];
+        ctx2d.font         = `${fontSize}px "${fontFace}", sans-serif`;
+        ctx2d.fillStyle    = `rgba(${r},${g},${b},${a})`;
+        ctx2d.textAlign    = "center";
+        ctx2d.textBaseline = "middle";
+        const cx = pVal(node, "centerX", 0.5) * this.w;
+        const cy = pVal(node, "centerY", 0.5) * this.h;
+        ctx2d.fillText(text, cx, cy);
+
+        // Upload canvas as texture and blit to FBO via passthrough shader
+        const texT = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, texT);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        const prog = this.programs.get("passthrough")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texT);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        drawQuad(gl, prog, this.vbo);
+        gl.deleteTexture(texT);
+        break;
+      }
+
+      case "fishEye":
+      case "FishEye":
+      case "lensDistortion": {
+        const inTex = getInputTex(node.id, "in");
+        if (!inTex) break;
+        const prog = this.programs.get("fishEye")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_strength"), pVal(node, "strength", 1.0));
+        gl.uniform1f(gl.getUniformLocation(prog, "u_zoom"), pVal(node, "zoom", 1.0));
         drawQuad(gl, prog, this.vbo);
         break;
       }

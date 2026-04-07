@@ -17,8 +17,9 @@
 
 import type { MediaAsset } from "../../shared/models";
 
-// 3 ms linear fade applied to start and end of every scheduled buffer
-const FADE_DURATION_S = 0.003;
+// 40 ms crossfade applied to start and end of every scheduled buffer
+// (was 3 ms — too short for seamless clip-to-clip crossfade; 40 ms is inaudible but pop-free)
+const FADE_DURATION_S = 0.04;
 
 interface ScheduledSource {
   source: AudioBufferSourceNode;

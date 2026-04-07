@@ -200,6 +200,18 @@ export class VoiceChopAI {
       return;
     }
 
+    // Pre-check microphone permission (surfaces a clear error if denied)
+    if (typeof navigator !== "undefined" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+        // Stop tracks immediately — we only needed the permission prompt
+        stream.getTracks().forEach((t) => t.stop());
+      }).catch((err: unknown) => {
+        console.error("[VoiceChopAI] Microphone access denied:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        this.handlers.setStatus(`Mic access denied: ${msg}`);
+      });
+    }
+
     const recognition = new Recognition();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -234,7 +246,16 @@ export class VoiceChopAI {
     };
 
     this.recognition = recognition;
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("[VoiceChopAI] Failed to start speech recognition:", err);
+      this.handlers.setStatus(
+        err instanceof Error ? `Mic error: ${err.message}` : "Mic error: could not start voice recognition."
+      );
+      this.handlers.setListening(false);
+      this.recognition = null;
+    }
   }
 
   processVoiceCommand(command: string): void {

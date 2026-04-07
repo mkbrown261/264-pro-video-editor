@@ -153,15 +153,18 @@ function ColorWheel({ label, value, onChange, onReset }: ColorWheelProps) {
     const canvas = canvasRef.current;
     if (!canvas) return valueRef.current;
     const rect  = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return valueRef.current;
+    const wheelRadius = RADIUS; // guard against zero (RADIUS is a const, but kept as runtime check)
+    if (wheelRadius <= 0) return valueRef.current;
     const scaleX = SIZE / rect.width;
     const scaleY = SIZE / rect.height;
     const cx = (clientX - rect.left) * scaleX;
     const cy = (clientY - rect.top)  * scaleY;
-    const dx = (cx - CX) / RADIUS;
-    const dy = (cy - CY) / RADIUS;
+    const dx = (cx - CX) / wheelRadius;
+    const dy = (cy - CY) / wheelRadius;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const ndx  = dist > 1 ? dx / dist : dx;
-    const ndy  = dist > 1 ? dy / dist : dy;
+    const ndx  = dist > 0 ? (dist > 1 ? dx / dist : dx) : 0;
+    const ndy  = dist > 0 ? (dist > 1 ? dy / dist : dy) : 0;
     return {
       r: Math.round(ndx * 1000) / 1000,
       g: Math.round(ndy * 1000) / 1000,
@@ -423,9 +426,12 @@ function CurveEditor({ points, color, onChange, size = 210 }: CurveEditorProps) 
   useEffect(() => { draw(); }, [draw]);
 
   function ptFromCanvas(clientX: number, clientY: number): CurvePoint {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const sx = S / rect.width;
-    const sy = S / rect.height;
+    if (!canvasRef.current) return { x: 0.5, y: 0.5 };
+    const rect = canvasRef.current.getBoundingClientRect();
+    const sw = rect.width  > 0 ? rect.width  : 1;
+    const sh = rect.height > 0 ? rect.height : 1;
+    const sx = S / sw;
+    const sy = S / sh;
     return {
       x: clamp((clientX - rect.left) * sx / S, 0, 1),
       y: clamp(1 - (clientY - rect.top) * sy / S, 0, 1),

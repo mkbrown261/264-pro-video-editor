@@ -91,7 +91,14 @@ export type CompNodeType =
   | "TimeStretcher"     // time-based frame blending
   | "Delay"             // delay input by N frames
   | "Custom"            // user-written GLSL fragment shader node
-  | "Expression";       // math expression evaluator node
+  | "Expression"        // math expression evaluator node
+  // ALIASES / EXTENDED TYPES
+  | "XF"                // crossfade/dissolve between two inputs
+  | "CrossDissolve"     // explicit cross-dissolve alias
+  | "TextPlus"          // alias for Text+ (for code that uses no special chars)
+  | "FishEye"           // fisheye / barrel lens distortion
+  | "fishEye"           // lowercase alias
+  | "lensDistortion";   // generic lens distortion alias
 
 // ── Node category (for header colour + picker grouping) ───────────────────────
 

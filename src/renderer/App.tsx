@@ -533,7 +533,7 @@ export default function App() {
       if (window.flowstateAPI && fsLinked) {
         void window.flowstateAPI.apiCall('/api/264pro/context-sync', 'POST', {
           projectName: project.name ?? 'Untitled',
-          trackCount: project.tracks?.length ?? project.sequence?.tracks?.length ?? 0,
+          trackCount: project.sequence?.tracks?.length ?? 0,
           clipCount: project.sequence.clips.length,
           fps: project.sequence.settings.fps,
           resolution: `${project.sequence.settings.width}×${project.sequence.settings.height}`,
@@ -1607,7 +1607,7 @@ export default function App() {
                 if (page === "fusion") {
                   const clipId = selectedClipId ?? project.sequence.clips.find(c => {
                     const asset = project.assets.find(a => a.id === c.assetId);
-                    return asset?.kind === "video";
+                    return asset && (asset.videoCodec != null || asset.width > 0);
                   })?.id ?? "";
                   openFusion(clipId);
                 } else {
@@ -2014,7 +2014,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_upscale", enabled: true, params: { scale: 2, model: "realesrgan" } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_upscale", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { scale: 2, model: "realesrgan" } });
                           showToast("AI Upscale 2x — applies on export");
                         }
                       }}>Upscale 2x (AI)</button>
@@ -2023,7 +2023,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_denoise", enabled: true, params: { strength: 0.7, temporal: true } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_denoise", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { strength: 0.7, temporal: true } });
                           showToast("AI Denoise — reduces noise on export");
                         }
                       }}>Denoise (AI)</button>
@@ -2032,7 +2032,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_stabilize", enabled: true, params: { strength: 0.8, cropRatio: 0.05 } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_stabilize", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { strength: 0.8, cropRatio: 0.05 } });
                           showToast("AI Stabilize — smooths camera shake on export");
                         }
                       }}>Stabilize (AI)</button>
@@ -2041,7 +2041,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_face_enhance", enabled: true, params: { strength: 0.85, model: "codeformer" } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "ai_face_enhance", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { strength: 0.85, model: "codeformer" } });
                           showToast("AI Face Enhance — restores facial detail on export");
                         }
                       }}>Face Enhance (AI)</button>
@@ -2050,7 +2050,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "filmnoise", enabled: true, params: { intensity: 0.4, grainSize: 1.2 } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "filmnoise", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { intensity: 0.4, grainSize: 1.2 } });
                           showToast("Film noise effect added");
                         }
                       }}>
@@ -2060,7 +2060,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "vignette", enabled: true, params: { intensity: 0.5, radius: 0.7, feather: 0.4 } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "vignette", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { intensity: 0.5, radius: 0.7, feather: 0.4 } });
                           showToast("Vignette added");
                         }
                       }}>
@@ -2070,7 +2070,7 @@ export default function App() {
                         setAiMenuOpen(false);
                         if (selectedClipId) {
                           pauseViewerPlayback();
-                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "chromatic_aberration", enabled: true, params: { amount: 3 } });
+                          addEffectToClip(selectedClipId, { id: `fx_${Date.now()}`, type: "chromatic_aberration", enabled: true, order: 0, maskIds: [], keyframes: {}, params: { amount: 3 } });
                           showToast("Chromatic aberration added");
                         }
                       }}>
@@ -2169,7 +2169,7 @@ export default function App() {
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               onDropTransition={(clipId, transType, edge) => {
                 selectClip(clipId);
-                const msg1 = setSelectedClipTransitionType(edge, transType as import("../../shared/models").ClipTransitionType);
+                const msg1 = setSelectedClipTransitionType(edge, transType as import("../shared/models").ClipTransitionType);
                 setTransitionMessage(msg1);
               }}
               assets={project.assets}
@@ -2310,7 +2310,7 @@ export default function App() {
               onRegisterZoomControls={(ctrls) => { timelineZoomRef.current = ctrls; }}
               onDropTransition={(clipId, transType, edge) => {
                 selectClip(clipId);
-                const msg1 = setSelectedClipTransitionType(edge, transType as import("../../shared/models").ClipTransitionType);
+                const msg1 = setSelectedClipTransitionType(edge, transType as import("../shared/models").ClipTransitionType);
                 setTransitionMessage(msg1);
               }}
               assets={project.assets}

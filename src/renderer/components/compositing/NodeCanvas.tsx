@@ -809,7 +809,7 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
             const portType = (fromPort?.type ?? toPort?.type) ?? "image";
             const color = (PORT_TYPE_COLORS as Record<string,string>)[portType] ?? "#f5c542";
             // Faster flow for audio, slower for mask
-            const flowDur = portType === "audio" ? "0.9s" : portType === "mask" ? "3s" : "1.8s";
+            const flowDur = (portType as string) === "audio" ? "0.9s" : portType === "mask" ? "3s" : "1.8s";
             const isSelected = selectedNodeIds.includes(w.fromNodeId) || selectedNodeIds.includes(w.toNodeId);
             const path = wirePath(p1.x, p1.y, p2.x, p2.y);
             return (
@@ -950,7 +950,7 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                       <circle cx={0} cy={py} r={PORT_R} fill={col} stroke="rgba(0,0,0,0.7)" strokeWidth={1.2} />
                       <circle cx={0} cy={py} r={PORT_R - 1.5} fill="rgba(255,255,255,0.25)" />
                       <text x={9} y={py} dominantBaseline="middle" fill="rgba(255,255,255,0.55)"
-                        fontSize={5.5} style={{ pointerEvents: "none", userSelect: "none" }}>{port.label}</text>
+                        fontSize={5.5} style={{ pointerEvents: "none", userSelect: "none" }}>{(port as unknown as { label?: string }).label ?? port.name}</text>
                     </g>
                   );
                 })}
@@ -971,7 +971,7 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                       <circle cx={NODE_W} cy={py} r={PORT_R - 1.5} fill="rgba(255,255,255,0.25)" />
                       <text x={NODE_W - 9} y={py} textAnchor="end" dominantBaseline="middle"
                         fill="rgba(255,255,255,0.55)" fontSize={5.5}
-                        style={{ pointerEvents: "none", userSelect: "none" }}>{port.label}</text>
+                        style={{ pointerEvents: "none", userSelect: "none" }}>{(port as unknown as { label?: string }).label ?? port.name}</text>
                     </g>
                   );
                 })}

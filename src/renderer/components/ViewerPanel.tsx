@@ -475,10 +475,31 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const timelineReady   = totalFrames > 0;
     const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
     const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
-    const { overlayStyle, videoStyle: rawVideoStyle, wrapperStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
+    const { overlayStyle, videoStyle: rawVideoStyle, wrapperStyle: transWrapperStyle } = getTransitionPreviewStyles(transitionState, playheadFrame);
     // Extract transitionFilter (blur/sepia from blur & oldFilm transitions) before spreading videoStyle onto <video>
     const { transitionFilter, ...videoStyle } = rawVideoStyle as CSSProperties & { transitionFilter?: string };
     const currentMasks    = activeSegment?.clip.masks ?? [];
+
+    // ── Clip transform (position, scale, rotation, opacity from Inspector) ─────
+    const clipTransform = activeSegment?.clip.transform ?? null;
+    const clipTransformStyle: CSSProperties = clipTransform ? {
+      transform: [
+        clipTransform.posX !== 0 || clipTransform.posY !== 0
+          ? `translate(${clipTransform.posX * 100}%, ${clipTransform.posY * 100}%)`
+          : "",
+        clipTransform.scaleX !== 1 || clipTransform.scaleY !== 1
+          ? `scale(${clipTransform.scaleX}, ${clipTransform.scaleY})`
+          : "",
+        clipTransform.rotation !== 0
+          ? `rotate(${clipTransform.rotation}deg)`
+          : "",
+      ].filter(Boolean).join(" ") || undefined,
+      transformOrigin: `${(clipTransform.anchorX ?? 0.5) * 100}% ${(clipTransform.anchorY ?? 0.5) * 100}%`,
+      opacity: clipTransform.opacity,
+    } : {};
+
+    // Merge clip transform into wrapperStyle (clip transform applied first, then transition transform on top)
+    const wrapperStyle: CSSProperties = { ...clipTransformStyle, ...transWrapperStyle };
 
     // ── WebGL transition rendering via RAF loop ───────────────────────────────
     // IMPORTANT: Never call renderTransitionFrame inside JSX render.

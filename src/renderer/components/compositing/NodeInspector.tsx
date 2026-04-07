@@ -303,7 +303,7 @@ const NodeInspector: React.FC<NodeInspectorProps> = ({
           ...n,
           params: {
             ...n.params,
-            [key]: { ...param, keyframes: hasKf ? [] : [{ frame: 0, value: param.value }] },
+            [key]: { ...param, keyframes: hasKf ? [] : [{ frame: 0, value: param.value, easing: "linear" as const }] },
           },
         };
       }),
@@ -437,7 +437,7 @@ const NodeInspector: React.FC<NodeInspectorProps> = ({
                 className="ni-port-dot"
                 style={{ backgroundColor: `hsl(${p.type === "image" ? 44 : p.type === "mask" ? 207 : 283}, 70%, 60%)` }}
               />
-              <span className="ni-port-dir">{p.direction === "input" ? "▶" : "◀"}</span>
+              <span className="ni-port-dir">{p.direction === "in" ? "▶" : "◀"}</span>
               <span className="ni-port-label">{p.name}</span>
               <span className="ni-port-type">{p.type}</span>
             </div>

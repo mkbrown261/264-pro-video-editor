@@ -135,15 +135,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   utility: "🛠 Utility",
 };
 
-// ── Declare global for flowstateAPI ──────────────────────────────────────────
-declare global {
-  interface Window {
-    flowstateAPI?: {
-      runAITool: (tool: string, options: { imageUrl?: string; videoUrl?: string; params?: Record<string, unknown> }) => Promise<unknown>;
-      pollAITool: (predictionId: string) => Promise<unknown>;
-    };
-  }
-}
+// AIToolsPanel uses flowstateAPI declared in FlowStatePanel.tsx (same global interface Window merge)
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 interface AIToolsPanelProps {
@@ -195,7 +187,7 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
     if (tool.inputType === "video" || tool.inputType === "both") options.videoUrl = inputUrl;
 
     try {
-      const res = (await window.flowstateAPI.runAITool(selectedTool, options)) as any;
+      const res = (await window.flowstateAPI?.runAITool?.(selectedTool, options)) as any;
 
       if (res.error && !res.predictionId) {
         setStatus("error");

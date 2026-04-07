@@ -335,11 +335,11 @@ function uploadTexture(gl: WebGLRenderingContext, src: TexImageSource): WebGLTex
 }
 
 const QUAD_VERTS = new Float32Array([
-  // x,    y,   u,   v
-  -1.0, -1.0,  0.0, 0.0,
-   1.0, -1.0,  1.0, 0.0,
-  -1.0,  1.0,  0.0, 1.0,
-   1.0,  1.0,  1.0, 1.0,
+  // x,    y,   u,   v  (V flipped: WebGL origin is bottom-left, textures top-left)
+  -1.0, -1.0,  0.0, 1.0,
+   1.0, -1.0,  1.0, 1.0,
+  -1.0,  1.0,  0.0, 0.0,
+   1.0,  1.0,  1.0, 0.0,
 ]);
 
 // ── Renderer class ────────────────────────────────────────────────────────────
