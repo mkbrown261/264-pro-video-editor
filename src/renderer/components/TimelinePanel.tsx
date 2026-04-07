@@ -1118,13 +1118,16 @@ export function TimelinePanel({
         <div className="ctx-menu-sep" />
 
         {/* ── Section: Audio ── */}
-        {clipKind === "video" && (
+        {/* ── Section: Audio — shown for video clips AND for linked audio clips ── */}
+        {(clipKind === "video" || (clipKind === "audio" && isLinked)) && (
           <>
             <div className="ctx-section-label">AUDIO</div>
-            <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); close(); }}>
-              <span className="ctx-icon">🎵</span> Detach Audio
-              <span className="ctx-kbd">Ctrl⇧D</span>
-            </div>
+            {clipKind === "video" && (
+              <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); close(); }}>
+                <span className="ctx-icon">🎵</span> Detach Audio
+                <span className="ctx-kbd">Ctrl⇧D</span>
+              </div>
+            )}
             {isLinked ? (
               <div className="ctx-menu-item" onClick={() => { onDetachLinkedClips?.(clipId); close(); }}>
                 <span className="ctx-icon">🔗</span> Unlink Audio/Video
@@ -1346,13 +1349,15 @@ export function TimelinePanel({
               } else if (event.shiftKey) {
                 // Shift + scroll → horizontal scroll (scrub through timeline)
                 event.preventDefault();
-                el.scrollLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+                // Dampen scroll speed — raw deltaY from trackpad/mouse is too fast at high zoom
+                const scrollDelta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+                el.scrollLeft += scrollDelta * 0.4;
               } else {
                 // Plain scroll → vertical scroll (tracks up/down) — let the browser handle it naturally
                 // Only prevent default for deltaX (trackpad horizontal swipe) so it scrolls horizontally
                 if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
                   event.preventDefault();
-                  el.scrollLeft += event.deltaX;
+                  el.scrollLeft += event.deltaX * 0.4;
                 }
                 // deltaY: let it fall through to native vertical scroll of the container
               }
