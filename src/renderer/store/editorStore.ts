@@ -1364,13 +1364,22 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Set Transition Duration", (s) => {
       const t = getTransitionTargetClip(s.project, s.selectedClipId!);
       if (!t) return s;
+      // Apply fade to the target clip AND all clips in the same linked group
+      // so audio clip gets the same fade as its paired video clip
+      const linkedIds = new Set(
+        t.linkedGroupId
+          ? s.project.sequence.clips
+              .filter((c) => c.linkedGroupId === t.linkedGroupId)
+              .map((c) => c.id)
+          : [t.id]
+      );
       return {
         project: {
           ...s.project,
           sequence: {
             ...s.project.sequence,
             clips: s.project.sequence.clips.map((c) => {
-              if (c.id !== t.id) return c;
+              if (!linkedIds.has(c.id)) return c;
               const existingType = (edge === "in" ? c.transitionIn?.type : c.transitionOut?.type) ?? "fade";
               return edge === "in"
                 ? { ...c, transitionIn: tDur > 0 ? { type: existingType, durationFrames: tDur } : null }
