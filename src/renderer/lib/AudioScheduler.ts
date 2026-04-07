@@ -282,10 +282,14 @@ export class AudioEngine {
     const ctx = this.getCtx();
     if (ctx.state === "suspended") void ctx.resume();
 
-    // Stop existing nodes with a micro-fade to prevent click
-    this._stopAll(ctx, STOP_FADE_S);
+    // Stop existing nodes with a micro-fade to prevent click.
+    // New nodes must start AFTER the old ones have stopped to prevent
+    // double-play. Use the stop-fade duration as the scheduling offset.
+    const stopFade = this.activeSources.size > 0 ? STOP_FADE_S : 0;
+    this._stopAll(ctx, stopFade);
 
-    const latency = seamResume ? 0 : START_LATENCY;
+    // Schedule new nodes to start after the outgoing fade completes.
+    const latency = seamResume ? stopFade + 0.001 : START_LATENCY;
     const startAt = ctx.currentTime + latency;
 
     for (const seg of segments) {
