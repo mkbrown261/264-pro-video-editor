@@ -1901,6 +1901,7 @@ export function TimelinePanel({
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();
+                            propsRef.current.onSelectClip(segment.clip.id);
                             setFadeHandleState({
                               clipId: segment.clip.id,
                               edge: "in",
@@ -2042,6 +2043,7 @@ export function TimelinePanel({
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();
+                            propsRef.current.onSelectClip(segment.clip.id);
                             setFadeHandleState({
                               clipId: segment.clip.id,
                               edge: "out",

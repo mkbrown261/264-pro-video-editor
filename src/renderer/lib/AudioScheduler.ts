@@ -365,10 +365,33 @@ export class AudioEngine {
       const safeDuration = Math.max(0, Math.min(duration, buffer.duration - safeSourceOffset));
       if (safeDuration <= 0) continue;
 
-      // Per-clip gain (fade-in + volume)
+      // --- Fade-in duration ---
+      // Use the larger of: the engine's structural fade-in (click prevention)
+      // and the user-set transitionIn duration (converted from frames to seconds).
+      const userFadeInFrames = seg.clip.transitionIn?.durationFrames ?? 0;
+      // Only apply user fade-in if playhead is at the clip start (not mid-clip resume)
+      const atClipStart = playheadFrame <= seg.startFrame;
+      const userFadeInSecs = atClipStart ? (userFadeInFrames / fps) / clipSpeed : 0;
+      const actualFadeIn = Math.max(fadeInSecs, userFadeInSecs);
+
+      // --- Fade-out duration ---
+      const userFadeOutFrames = seg.clip.transitionOut?.durationFrames ?? 0;
+      const userFadeOutSecs = (userFadeOutFrames / fps) / clipSpeed;
+      // Schedule fade-out: ramp gain to 0 starting at (endAt - fadeOutSecs)
+      const endAt = startAt + safeDuration;
+      const fadeOutStart = userFadeOutSecs > 0
+        ? Math.max(startAt + actualFadeIn + 0.001, endAt - userFadeOutSecs)
+        : null;
+
+      // Per-clip gain node
       const gainNode = ctx.createGain();
       gainNode.gain.setValueAtTime(0, startAt);
-      gainNode.gain.linearRampToValueAtTime(effectiveGain, startAt + fadeInSecs);
+      gainNode.gain.linearRampToValueAtTime(effectiveGain, startAt + actualFadeIn);
+      // Schedule fade-out ramp if user set one
+      if (fadeOutStart !== null && userFadeOutSecs > 0) {
+        gainNode.gain.setValueAtTime(effectiveGain, fadeOutStart);
+        gainNode.gain.linearRampToValueAtTime(0, endAt);
+      }
       gainNode.connect(this.getTrackGain(ctx, seg.track.id));
 
       const source = ctx.createBufferSource();

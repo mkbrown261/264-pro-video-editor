@@ -419,11 +419,17 @@ function getTransitionTargetClip(project: EditorProjectState, clipId: string): T
   const clip = project.sequence.clips.find((c) => c.id === clipId);
   if (!clip) return null;
   const track = project.sequence.tracks.find((t) => t.id === clip.trackId);
+  // Video clip — use directly
   if (track?.kind === "video") return clip;
-  return getLinkedClips(project, clipId).find((c) => {
+  // Audio clip with a linked video clip — apply to the video (preserves existing behaviour)
+  const linkedVideo = getLinkedClips(project, clipId).find((c) => {
     const t = project.sequence.tracks.find((tr) => tr.id === c.trackId);
     return t?.kind === "video";
-  }) ?? null;
+  });
+  if (linkedVideo) return linkedVideo;
+  // Standalone audio clip — apply fade directly to the audio clip itself
+  if (track?.kind === "audio") return clip;
+  return null;
 }
 
 function withAssetSequenceDefaults(project: EditorProjectState, asset: MediaAsset): EditorProjectState {
