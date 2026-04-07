@@ -1,453 +1,49 @@
 /**
  * useMultiTrackAudio
  * ─────────────────────────────────────────────────────────────────────────────
- * True multi-track audio mixing engine using the Web Audio API.
+ * Sample-accurate multi-track audio engine using AudioBufferSourceNode.
  *
  * Architecture
  * ────────────
- *   For every UNIQUE source URL that is active at the current playhead we
- *   keep one <audio> element (from a pool) that is routed through its own
- *   GainNode into a single shared AudioContext destination.
+ *   Each source file (identified by its previewUrl) is decoded ONCE into an
+ *   AudioBuffer and cached permanently in the AudioEngine.  Playback is
+ *   scheduled via:
  *
- *   This means Clip A (1 min) and Clip B (10 s) that overlap on different
- *   tracks BOTH play simultaneously — their output is summed by the Web
- *   Audio graph, exactly like a hardware mixer.
+ *     source.start(audioCtx.currentTime + latency, sourceOffset, duration)
  *
- * Seam Design (why there was a pause between clips)
- * ─────────────────────────────────────────────────
- *   The root cause of the seam pause was a cascade of async waits that all
- *   had to complete before element.play() could fire on the incoming clip:
+ *   This is the same mechanism used by DAWs and professional audio software.
+ *   It is SAMPLE-ACCURATE — the latency is deterministic (15 ms for fresh
+ *   play; 0 ms at seams) and there is no HTMLMediaElement seek pipeline.
  *
- *   1. React render cycle latency — audioSegKey useEffect fires AFTER the
- *      frame that crosses the seam boundary (1-2 render ticks = 8-33 ms).
+ * Seam design
+ * ───────────
+ *   When the playhead crosses a clip seam, `audioSegKey` changes and the
+ *   seam effect fires:
+ *     1. engine.stop()  — micro-fade (5 ms) the outgoing nodes
+ *     2. engine.play()  — instantly schedule new nodes (seamResume=true,
+ *        so latency=0; buffers are already decoded)
  *
- *   2. seekTo() await — even with a prefetched element, the element's
- *      currentTime is parked at sourceInSeconds.  At the seam the target
- *      time is sourceInSeconds + small offset (frames already elapsed since
- *      prefetch completed).  The tolerance check fails → browser fires a
- *      seeked event → 30-150 ms silence on Chromium/Electron.
+ *   The result: ≤5 ms quiet gap at the seam, vs 30–150 ms with HTMLMediaElement.
  *
- *   3. Hard-cut pop — outgoing element.pause() was instantaneous, leaving
- *      residual speaker energy that the ear hears as a click.
- *
- * Fixes applied
- * ─────────────
- *   A. PRE-PLAY strategy: prefetched elements are started in MUTED playback
- *      mode (gain=0) slightly BEFORE the seam.  By the time the seam arrives
- *      the element is already running — no seek needed, no play() latency.
- *      At the exact seam frame we just ramp the gain up.
- *
- *   B. Wide seek tolerance for pre-playing elements: if the element is
- *      already playing and within PRE_PLAY_SEEK_TOLERANCE_S of the target,
- *      we skip the seek entirely and rely on real-time drift correction.
- *
- *   C. Gain crossfade: outgoing clip ramps to 0 over FADE_OUT_S before
- *      pause.  Incoming clip ramps from 0 to target over FADE_IN_S.
- *      Both use AudioContext.gain.linearRampToValueAtTime (sample-accurate).
- *
- *   D. Rolling seek update during prefetch: every LOOKAHEAD_FRAMES ticks we
- *      update the prefetched element's currentTime so it stays within
- *      PRE_PLAY_SEEK_TOLERANCE_S of where it needs to be at the seam.
- *
- * Pool strategy
- * ─────────────
- *   We reuse audio elements across renders.  An element is considered
- *   "dirty" only when its src changes.  Seek is skipped when the element
- *   is already within tolerance of the target time.
- *
- * Cleanup
- * ───────
- *   When the hook unmounts (or the segment list shrinks) surplus elements
- *   are paused, their src cleared, and they are returned to the pool.
+ * Lookahead
+ * ─────────
+ *   While playing, any segment within 5 seconds of the playhead is preloaded
+ *   (decoded into the cache) so the buffer is always hot at the seam.
  */
 
 import { useEffect, useRef } from "react";
-import { framesToSeconds, type TimelineSegment } from "../../shared/timeline";
+import type { TimelineSegment } from "../../shared/timeline";
+import { AudioEngine } from "../lib/AudioScheduler";
 
 // ── constants ─────────────────────────────────────────────────────────────────
-const MAX_GAIN              = 4;       // matches the clip-volume ceiling
-const SEEK_TOLERANCE_FRAMES = 1.5;    // normal per-frame drift tolerance
-/** For a pre-playing (muted, pre-started) element we allow much larger drift
- *  so we never issue a mid-flight seek that would cause a glitch. */
-const PRE_PLAY_SEEK_TOLERANCE_S = 0.25; // 250 ms — wide enough to skip any seek at the seam
-const SEEK_TIMEOUT_MS       = 2000;
-/** Frames ahead of a segment start to begin prefetching + pre-playing. */
-const LOOKAHEAD_FRAMES      = 150;    // ~5 s at 30 fps — wider window ensures overlapping clips are pre-loaded
-/** How many frames before the seam we start the incoming element (muted). */
-const PRE_PLAY_FRAMES       = 45;     // ~1.5 s at 30 fps — wider runway gives play() more time to stabilise
-/** Gain ramp durations for seam crossfade (seconds).
- *  Equal-power crossfade: both ramps have the same duration so they overlap
- *  and sum to constant perceived loudness across the seam. */
-const FADE_OUT_S            = 0.020;  // 20 ms outgoing ramp — tight enough to prevent perceived "tail"
-const FADE_IN_S             = 0.020;  // 20 ms incoming ramp — fast enough not to be heard as a fade-up
-/** Hard-cut micro-ramp: prevents DC-offset click on instant cuts (5 ms). */
-const HARD_CUT_RAMP_S       = 0.005;  // 5 ms — inaudible ramp, zero-crossing protection
-
-// ── shared AudioContext singleton (created lazily after a user gesture) ───────
-let sharedCtx: AudioContext | null = null;
-function getAudioContext(): AudioContext | null {
-  try {
-    if (!sharedCtx || sharedCtx.state === "closed") {
-      sharedCtx = new AudioContext();
-    }
-    if (sharedCtx.state === "suspended") void sharedCtx.resume();
-    return sharedCtx;
-  } catch {
-    return null;
-  }
-}
-
-// ── per-element Web Audio routing ─────────────────────────────────────────────
-interface AudioRoute {
-  element: HTMLAudioElement;
-  gainNode: GainNode;
-  sourceNode: MediaElementAudioSourceNode;
-}
-
-const routeMap = new WeakMap<AudioContext, Map<HTMLAudioElement, AudioRoute>>();
-
-function getOrCreateRoute(
-  ctx: AudioContext,
-  element: HTMLAudioElement
-): AudioRoute | null {
-  try {
-    if (!routeMap.has(ctx)) routeMap.set(ctx, new Map());
-    const ctxRoutes = routeMap.get(ctx)!;
-    if (ctxRoutes.has(element)) return ctxRoutes.get(element)!;
-
-    const sourceNode = ctx.createMediaElementSource(element);
-    const gainNode   = ctx.createGain();
-    sourceNode.connect(gainNode);
-    gainNode.connect(ctx.destination);
-    const route: AudioRoute = { element, gainNode, sourceNode };
-    ctxRoutes.set(element, route);
-    return route;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Schedule a sample-accurate LINEAR gain ramp using the AudioContext clock.
- * Use for fade-out (linear taper sounds natural on attenuation).
- */
-function rampGain(
-  route: AudioRoute,
-  ctx: AudioContext,
-  fromVal: number,
-  toVal: number,
-  durationSecs: number
-): void {
-  try {
-    const now = ctx.currentTime;
-    route.gainNode.gain.cancelScheduledValues(now);
-    route.gainNode.gain.setValueAtTime(fromVal, now);
-    route.gainNode.gain.linearRampToValueAtTime(toVal, now + durationSecs);
-  } catch {
-    route.gainNode.gain.value = toVal;
-  }
-}
-
-/**
- * Equal-power (constant-power) fade-in ramp.
- * Uses an exponential curve so that as the outgoing clip fades linearly,
- * the combined perceived loudness stays constant across the seam:
- *   out_gain(t) = cos(t * π/2),  in_gain(t) = sin(t * π/2)
- * where t goes 0→1.  We approximate this with setValueCurveAtTime
- * using a 32-point sine curve.
- */
-function rampGainEqualPower(
-  route: AudioRoute,
-  ctx: AudioContext,
-  durationSecs: number
-): void {
-  try {
-    const now    = ctx.currentTime;
-    const STEPS  = 32;
-    const curve  = new Float32Array(STEPS);
-    for (let i = 0; i < STEPS; i++) {
-      curve[i] = Math.sin((i / (STEPS - 1)) * (Math.PI / 2));
-    }
-    route.gainNode.gain.cancelScheduledValues(now);
-    route.gainNode.gain.setValueAtTime(0, now);
-    route.gainNode.gain.setValueCurveAtTime(curve, now, Math.max(0.001, durationSecs));
-  } catch {
-    // Fallback to linear if curve method unavailable
-    rampGain(route, ctx, 0, 1, durationSecs);
-  }
-}
-
-function setGainImmediate(route: AudioRoute, ctx: AudioContext, val: number): void {
-  try {
-    route.gainNode.gain.cancelScheduledValues(ctx.currentTime);
-    route.gainNode.gain.setValueAtTime(val, ctx.currentTime);
-  } catch {
-    route.gainNode.gain.value = val;
-  }
-}
-
-// ── element pool ──────────────────────────────────────────────────────────────
-const elementPool: HTMLAudioElement[] = [];
-
-function acquireElement(): HTMLAudioElement {
-  const pooled = elementPool.pop();
-  if (pooled) {
-    pooled.pause();
-    pooled.volume = 1;
-    return pooled;
-  }
-  const el = document.createElement("audio");
-  el.preload      = "auto";
-  el.crossOrigin  = "anonymous";
-  el.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
-  document.body.appendChild(el);
-  return el;
-}
-
-function releaseElement(el: HTMLAudioElement) {
-  el.pause();
-  el.currentTime = 0;
-  el.src         = "";
-  el.load();
-  elementPool.push(el);
-}
-
-// ── seek helper ───────────────────────────────────────────────────────────────
-async function seekTo(
-  element: HTMLAudioElement,
-  targetTime: number,
-  fps: number
-): Promise<void> {
-  const tolerance = framesToSeconds(SEEK_TOLERANCE_FRAMES, fps);
-  if (Math.abs(element.currentTime - targetTime) < tolerance) return;
-
-  return new Promise<void>((resolve) => {
-    const timer    = window.setTimeout(() => { cleanup(); resolve(); }, SEEK_TIMEOUT_MS);
-    const onSeeked = () => { cleanup(); resolve(); };
-    const cleanup  = () => {
-      window.clearTimeout(timer);
-      element.removeEventListener("seeked", onSeeked);
-    };
-    element.addEventListener("seeked", onSeeked, { once: true });
-    element.currentTime = targetTime;
-  });
-}
-
-// ── load helper ───────────────────────────────────────────────────────────────
-async function loadSrc(element: HTMLAudioElement, url: string): Promise<void> {
-  // Skip if already loaded with enough data
-  if (
-    element.src === url &&
-    element.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA
-  ) {
-    return;
-  }
-  return new Promise<void>((resolve, reject) => {
-    const timer     = window.setTimeout(() => { cleanup(); resolve(); }, 5000);
-    const onCanPlay = () => { cleanup(); resolve(); };
-    const onError   = () => { cleanup(); reject(new Error(`Audio load failed: ${url}`)); };
-    const cleanup   = () => {
-      window.clearTimeout(timer);
-      element.removeEventListener("canplay",  onCanPlay);
-      element.removeEventListener("error",    onError);
-    };
-    element.pause();
-    element.addEventListener("canplay", onCanPlay, { once: true });
-    element.addEventListener("error",   onError,   { once: true });
-    element.src  = url;
-    element.load();
-  });
-}
-
-// ── slot (one active audio segment → one element) ─────────────────────────────
-interface Slot {
-  segment: TimelineSegment;
-  element: HTMLAudioElement;
-  /** True once this slot's fade-in ramp has fired for the current play start */
-  fadeInDone: boolean;
-  /** True if this element is already playing muted (pre-play mode) */
-  isPrePlaying: boolean;
-  /** True when this slot was adopted from the previous clip via seamless-continue.
-   *  The element is already running at the correct position — NEVER seek it. */
-  isSeamlessContinue?: boolean;
-}
-
-// ── prefetch / pre-play cache ─────────────────────────────────────────────────
-interface PrefetchEntry {
-  element: HTMLAudioElement;
-  segment: TimelineSegment;
-  /** True once element.play() has been called in muted/pre-play mode */
-  prePlaying: boolean;
-  /** True while an async operation (load/seek/play) is in progress — blocks
-   *  concurrent calls from stepping on each other. */
-  busy: boolean;
-  /** True once claimPrefetched() has taken ownership of this entry.
-   *  In-flight async coroutines check this flag and bail out immediately
-   *  to prevent double-play when reconcileSlots claims the element while
-   *  a tickPrefetch coroutine is still running. */
-  claimed: boolean;
-}
-
-const prefetchMap = new Map<string, PrefetchEntry>();
-
-/**
- * Manage the prefetch/pre-play lifecycle for a segment.
- * Called on every RAF tick while isPlaying — must be concurrency-safe.
- *
- *  Two-phase strategy
- *  ──────────────────
- *  Phase 1 — LOAD+PARK  (framesUntilStart > PRE_PLAY_FRAMES):
- *    Load the source once (async, guarded by `busy` flag so concurrent calls
- *    are no-ops).  Once loaded, park the element PAUSED at sourceInSeconds.
- *    No CPU overhead, no position drift.
- *
- *  Phase 2 — PRE-PLAY  (framesUntilStart <= PRE_PLAY_FRAMES):
- *    Seek the element to the exact pre-start position (sourceInSeconds minus
- *    the remaining frames expressed in seconds) and start playing at gain=0.
- *    The element runs for ≤ PRE_PLAY_FRAMES before the seam, so when
- *    reconcileSlots claims it the drift is negligible — no seek needed.
- */
-function tickPrefetch(
-  seg: TimelineSegment,
-  currentPlayheadFrame: number,
-  fps: number
-): void {
-  const url = seg.asset.previewUrl;
-  if (!url) return;
-
-  let entry = prefetchMap.get(seg.clip.id);
-  if (!entry) {
-    const el = acquireElement();
-    entry = { element: el, segment: seg, prePlaying: false, busy: false, claimed: false };
-    prefetchMap.set(seg.clip.id, entry);
-  }
-
-  // If an async op is running, skip this tick — don't start another
-  if (entry.busy) return;
-
-  const framesUntilStart = seg.startFrame - currentPlayheadFrame;
-  const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
-  const { element } = entry;
-
-  // ── Phase 1: LOAD + PARK ──────────────────────────────────────────────────
-  if (!entry.prePlaying) {
-    const isLoaded = element.src === url && element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
-
-    if (!isLoaded) {
-      // Kick off async load — guarded so we only start once
-      entry.busy = true;
-      void (async () => {
-        try {
-          await loadSrc(element, url);
-          if (!entry || entry.claimed) return; // bail if reconcileSlots claimed us during load
-          // Park at in-point once loaded
-          if (entry && prefetchMap.has(seg.clip.id)) {
-            const parkTime = seg.sourceInSeconds;
-            if (Math.abs(element.currentTime - parkTime) > 0.05) {
-              element.currentTime = parkTime;
-              await new Promise<void>((resolve) => {
-                const t = window.setTimeout(resolve, 500);
-                element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
-              });
-            }
-            if (!entry || entry.claimed) return; // bail if claimed during park seek
-            if (!element.paused) element.pause();
-          }
-        } catch {
-          if (entry) {
-            prefetchMap.delete(seg.clip.id);
-            releaseElement(element);
-          }
-        } finally {
-          if (entry) entry.busy = false;
-        }
-      })();
-      return; // don't proceed to phase 2 until loaded
-    }
-
-    // Already loaded but not yet pre-playing.
-    // Ensure element is parked at the correct position while we wait.
-    const parkTime = seg.sourceInSeconds;
-    if (Math.abs(element.currentTime - parkTime) > 0.05 && framesUntilStart > PRE_PLAY_FRAMES) {
-      // Only re-seek during park phase; in pre-play window let phase 2 handle it.
-      entry.busy = true;
-      void (async () => {
-        try {
-          element.currentTime = parkTime;
-          await new Promise<void>((resolve) => {
-            const t = window.setTimeout(resolve, 300);
-            element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
-          });
-          if (!entry || entry.claimed) return; // bail if claimed during re-park seek
-          if (!element.paused) element.pause();
-        } finally {
-          if (entry) entry.busy = false;
-        }
-      })();
-      return;
-    }
-    if (!element.paused) element.pause();
-  }
-
-  // ── Phase 2: PRE-PLAY — only when within PRE_PLAY_FRAMES of the seam ─────
-  if (framesUntilStart > PRE_PLAY_FRAMES) return; // still in park phase
-
-  if (!entry.prePlaying) {
-    // Compute the exact position so the element arrives at sourceInSeconds
-    // at the moment the seam hits.
-    const preOffsetSecs = framesToSeconds(Math.max(0, framesUntilStart), fps) * clipSpeed;
-    const preStartTime  = Math.max(0, seg.sourceInSeconds - preOffsetSecs);
-
-    entry.busy = true;
-    entry.prePlaying = true; // set BEFORE async so subsequent ticks skip this block
-    void (async () => {
-      try {
-        if (Math.abs(element.currentTime - preStartTime) > 0.02) {
-          element.currentTime = preStartTime;
-          await new Promise<void>((resolve) => {
-            const t = window.setTimeout(resolve, 300);
-            element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
-          });
-        }
-        if (!entry || entry.claimed) return; // bail if reconcileSlots claimed us during seek
-
-        const ctx = getAudioContext();
-        if (ctx) {
-          const route = getOrCreateRoute(ctx, element);
-          if (route) {
-            setGainImmediate(route, ctx, 0);
-            element.volume = 1;
-          } else {
-            element.volume = 0;
-          }
-        } else {
-          element.volume = 0;
-        }
-        element.playbackRate = clipSpeed;
-        try { await element.play(); } catch { /* autoplay policy — reconcileSlots will retry */ }
-      } finally {
-        if (entry) entry.busy = false;
-      }
-    })();
-  }
-  // Already pre-playing — nothing to do. The element has been running for at
-  // most PRE_PLAY_FRAMES (~1.5 s) so drift at the seam is within tolerance.
-}
-
-/** Claim a prefetched/pre-playing element for a segment. */
-function claimPrefetched(clipId: string): { element: HTMLAudioElement; wasPrePlaying: boolean } | null {
-  const entry = prefetchMap.get(clipId);
-  if (!entry) return null;
-  prefetchMap.delete(clipId);
-  entry.claimed = true; // signal to any in-flight async coroutine that we took ownership
-  return { element: entry.element, wasPrePlaying: entry.prePlaying };
-}
+/** Lookahead window: segments starting within this many frames get preloaded. */
+const LOOKAHEAD_FRAMES = 150; // ~5 s at 30 fps
 
 // ── hook interface ─────────────────────────────────────────────────────────────
 export interface MultiTrackAudioOptions {
-  /** All enabled audio segments that currently overlap the playhead */
+  /** All enabled audio segments that currently overlap the playhead. */
   activeAudioSegments: TimelineSegment[];
-  /** All segments in the sequence (for lookahead prefetch) */
+  /** All segments in the sequence (for lookahead preload). */
   allSegments?: TimelineSegment[];
   isPlaying: boolean;
   playheadFrame: number;
@@ -465,486 +61,125 @@ export function useMultiTrackAudio({
   stopAudio: () => void;
   pauseAudio: () => void;
 } {
-  const slotsRef  = useRef<Slot[]>([]);
-  const stateRef  = useRef({ activeAudioSegments, allSegments, isPlaying, playheadFrame, sequenceFps });
+  // One AudioEngine instance, never recreated.
+  const engineRef = useRef<AudioEngine | null>(null);
 
+  function getEngine(): AudioEngine {
+    if (!engineRef.current) {
+      engineRef.current = new AudioEngine();
+    }
+    return engineRef.current;
+  }
+
+  // Keep a ref of latest props so effects / callbacks always see current values
+  // without creating stale-closure bugs.
+  const stateRef = useRef({ activeAudioSegments, allSegments, isPlaying, playheadFrame, sequenceFps });
   useEffect(() => {
     stateRef.current = { activeAudioSegments, allSegments, isPlaying, playheadFrame, sequenceFps };
   });
 
-  // ── reconcile ─────────────────────────────────────────────────────────────
-  async function reconcileSlots(
-    targetSegments: TimelineSegment[],
-    shouldPlay: boolean,
-    frame: number,
-    fps: number
-  ) {
-    const ctx      = shouldPlay ? getAudioContext() : null;
-    const wantedIds = new Set(targetSegments.map((s) => s.clip.id));
+  // ── Public API ──────────────────────────────────────────────────────────────
 
-    // ── Detect "seamless continue" pairs ─────────────────────────────────
-    // When outgoing clip A and incoming clip B:
-    //   1. Share the same previewUrl (same source file)
-    //   2. Are on the same track
-    //   3. A.endFrame === B.startFrame  (adjacent — a split seam)
-    //   4. A.sourceOutSeconds ≈ B.sourceInSeconds (continuous in source)
-    // Then we can transfer A's running element directly to B — zero gap,
-    // zero seek, zero fade. This is exactly what happens after a split.
-    // Map: incoming clip.id → outgoing slot whose element we'll reuse
-    //
-    // NOTE: We compare against currentIds (slots currently playing), NOT
-    // wantedIds.  Every entry in targetSegments is in wantedIds by definition,
-    // so the old guard `wantedIds.has(incoming.clip.id)` always fired and the
-    // loop body never executed — the seamless detection was completely dead.
-    const currentIds = new Set(slotsRef.current.map((s) => s.segment.clip.id));
-    const seamlessContinueMap = new Map<string, Slot>();
-    for (const incoming of targetSegments) {
-      if (currentIds.has(incoming.clip.id)) continue; // already playing — no seam to cross
-      for (const slot of slotsRef.current) {
-        if (wantedIds.has(slot.segment.clip.id)) continue; // still wanted — not outgoing
-        const sameTrack   = slot.segment.track.id === incoming.track.id;
-        const adjacent    = slot.segment.endFrame === incoming.startFrame;
-        const sameUrl     = slot.segment.asset.previewUrl === incoming.asset.previewUrl;
-        // Allow up to 1 frame of float imprecision in source time comparison
-        const seamTime    = Math.abs(slot.segment.sourceOutSeconds - incoming.sourceInSeconds);
-        const frameSecs   = framesToSeconds(1, fps);
-        if (sameTrack && adjacent && sameUrl && seamTime < frameSecs * 2) {
-          seamlessContinueMap.set(incoming.clip.id, slot);
-          break;
-        }
-      }
-    }
-
-    // Outgoing slots that are being donated to a seamless continue — don't stop them
-    const donatedSlots = new Set(seamlessContinueMap.values());
-
-    // ── Outgoing slots: ramp gain to 0, then release ──────────────────────
-    const nextSlots: Slot[]           = [];
-    const outgoingReleases: Promise<void>[] = [];
-
-    for (const slot of slotsRef.current) {
-      if (wantedIds.has(slot.segment.clip.id)) {
-        nextSlots.push(slot);
-      } else if (donatedSlots.has(slot)) {
-        // This element is being handed off to the next clip — don't touch it
-        // (the incoming slot setup below will adopt it)
-      } else {
-        // Check if this outgoing clip is adjacent to any incoming clip on the
-        // SAME track (hard cut — no fade bleed at seams between consecutive clips).
-        const isAdjacentHardCut = targetSegments.some(
-          (incoming) =>
-            incoming.track.id === slot.segment.track.id &&
-            slot.segment.endFrame === incoming.startFrame
-        );
-
-        if (shouldPlay && ctx) {
-          const route = getOrCreateRoute(ctx, slot.element);
-          if (route) {
-            // Always ramp gain to 0 — even on hard cuts use a 5ms micro-ramp
-            // to prevent the DC-offset click from a waveform that isn't at
-            // zero at the cut point.  5 ms is completely inaudible.
-            const rampDur = isAdjacentHardCut ? HARD_CUT_RAMP_S : FADE_OUT_S;
-            rampGain(route, ctx, route.gainNode.gain.value, 0, rampDur);
-            const el = slot.element;
-            outgoingReleases.push(new Promise<void>((resolve) => {
-              window.setTimeout(() => {
-                el.pause();
-                releaseElement(el);
-                resolve();
-              }, Math.ceil(rampDur * 1000) + 5);
-            }));
-          } else {
-            slot.element.pause();
-            releaseElement(slot.element);
-          }
-        } else {
-          // Not playing — stop immediately (no audible issue when paused)
-          if (ctx) {
-            const route = getOrCreateRoute(ctx, slot.element);
-            if (route) setGainImmediate(route, ctx, 0);
-          }
-          slot.element.pause();
-          releaseElement(slot.element);
-        }
-      }
-    }
-
-    // ── Incoming slots: prefer pre-playing prefetch element ───────────────
-    const existingIds = new Set(nextSlots.map((s) => s.segment.clip.id));
-    // Identify clips that are hard-cut adjacent to a just-outgoing clip on the same track.
-    // For these we skip the fade-in to avoid the "fade up from silence" artifact.
-    const hardCutIncomingIds = new Set(
-      targetSegments
-        .filter((incoming) =>
-          slotsRef.current.some(
-            (outgoing) =>
-              !wantedIds.has(outgoing.segment.clip.id) &&
-              outgoing.segment.track.id === incoming.track.id &&
-              outgoing.segment.endFrame === incoming.startFrame
-          )
-        )
-        .map((s) => s.clip.id)
-    );
-
-    for (const seg of targetSegments) {
-      if (existingIds.has(seg.clip.id)) continue;
-
-      // ── Seamless continue: adopt the outgoing element unchanged ──────────
-      const donorSlot = seamlessContinueMap.get(seg.clip.id);
-      if (donorSlot) {
-        // The element is already playing at exactly the right position.
-        // Just update the segment reference so volume/trim checks use the
-        // new clip's parameters, and mark fadeInDone=true (no ramp needed).
-        // isSeamlessContinue=true prevents any seek in the ready-slot handler.
-        nextSlots.push({
-          segment:           seg,
-          element:           donorSlot.element,
-          fadeInDone:        true,   // already at correct gain — skip ramp
-          isPrePlaying:      false,
-          isSeamlessContinue: true,  // element is running — do NOT seek
-        });
-        continue;
-      }
-
-      const claimed   = claimPrefetched(seg.clip.id);
-      const element   = claimed?.element ?? acquireElement();
-      const wasPrePlaying = claimed?.wasPrePlaying ?? false;
-      // Mark as fadeInDone so the sync loop sets gain immediately (no ramp):
-      //   • Hard-cut incoming: skip the equal-power ramp (use HARD_CUT_RAMP_S instead)
-      //   • Pre-playing incoming: element is already running at ~correct position —
-      //     skip ALL ramps and set gain immediately to avoid any perceived fade-up.
-      //     A pre-playing element has no click risk because it was already at gain=0.
-      const isHardCut = hardCutIncomingIds.has(seg.clip.id);
-
-      nextSlots.push({ segment: seg, element, fadeInDone: isHardCut || wasPrePlaying, isPrePlaying: wasPrePlaying });
-    }
-
-    slotsRef.current = nextSlots;
-
-    // ── Sync each slot ────────────────────────────────────────────────────
-    // We split slots into two groups:
-    //   A) "ready" — src already loaded (HAVE_ENOUGH_DATA or HAVE_FUTURE_DATA),
-    //      or pre-playing.  These get full synchronous handling so they play
-    //      in lock-step with video.
-    //   B) "needs-load" — src not yet decoded.  We fire the load in the
-    //      background (fire-and-forget) so we NEVER block video playback start.
-    //      Once loaded they will pick up at the correct position via the next
-    //      reconcile cycle triggered by the audioSegKey effect.
-
-    const readySlots:   Slot[] = [];
-    const pendingSlots: Slot[] = [];
-
-    for (const slot of nextSlots) {
-      const url = slot.segment.asset.previewUrl;
-      const alreadyLoaded =
-        slot.isPrePlaying ||
-        slot.isSeamlessContinue ||   // element is actively playing — never "needs load"
-        (slot.element.src === url &&
-          slot.element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA);
-      if (alreadyLoaded) {
-        readySlots.push(slot);
-      } else {
-        pendingSlots.push(slot);
-      }
-    }
-
-    // ── handle "needs-load" slots in background (non-blocking) ───────────
-    // KEY DESIGN: To eliminate the serial load→seek→play latency chain (which
-    // caused an audible gap when overlapping clips entered), we use a parallel
-    // strategy:
-    //   1. Set src + load() to start fetching
-    //   2. Set currentTime IMMEDIATELY (browser queues seek internally)
-    //   3. Route through Web Audio gain at 0 (silent)
-    //   4. Call play() immediately (browser decodes from sought position)
-    //   5. Ramp gain UP once play() resolves — gap is now sub-millisecond
-    //      because play() returns quickly once decode starts, even before
-    //      the seeked event fires.
-    // The old serial await loadSrc→await seekTo→play() was 30–150 ms of silence.
-    for (const slot of pendingSlots) {
-      const { element, segment } = slot;
-      const url = segment.asset.previewUrl;
-      void (async () => {
-        const trackMuted   = segment.track.muted ?? false;
-        const clipSpeed    = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
-        const clipVol      = Math.max(0, segment.clip.volume ?? 1);
-        const effectiveVol = trackMuted ? 0 : clipVol;
-
-        // Compute target time immediately (use current stateRef for live playhead)
-        const segOffsetFrames = Math.max(0, stateRef.current.playheadFrame - segment.startFrame);
-        const targetTime = segment.sourceInSeconds +
-                           framesToSeconds(segOffsetFrames, fps) * clipSpeed;
-        const clampedTime = Math.min(
-          Math.max(targetTime, segment.sourceInSeconds),
-          Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, fps))
-        );
-
-        // ── Phase 1: set src and start loading ────────────────────────────
-        // Only change src if needed (avoids re-loading already-partially-loaded data)
-        if (element.src !== url) {
-          element.pause();
-          element.src = url;
-          element.load();
-        }
-
-        // ── Phase 2: park currentTime immediately (browser queues internally)
-        // This works even before canplay — the browser accepts the assignment and
-        // seeks as soon as enough data is buffered.
-        element.currentTime = clampedTime;
-        element.playbackRate = clipSpeed;
-
-        // ── Phase 3: wire up Web Audio gain at 0 (silent) before play() ──
-        const liveCtx = stateRef.current.isPlaying ? getAudioContext() : null;
-        let route = null;
-        if (liveCtx) {
-          route = getOrCreateRoute(liveCtx, element);
-          if (route) {
-            setGainImmediate(route, liveCtx, 0);
-            element.volume = 1;
-          } else {
-            element.volume = 0; // fallback: mute via element volume
-          }
-        } else {
-          element.volume = 0;
-        }
-
-        // ── Phase 4: play() immediately — don't await canplay/seeked first.
-        // The browser starts decoding from the queued currentTime.  play()
-        // itself resolves as soon as decode begins (not after seeked).
-        if (stateRef.current.isPlaying && !trackMuted) {
-          try {
-            await element.play();
-          } catch {
-            // Autoplay policy or decode error — gain stays at 0, no audible artifact
-            return;
-          }
-        } else {
-          // Not playing — keep element paused but positioned correctly.
-          // No gain ramp needed; reconcileSlots will re-run when play starts.
-          return;
-        }
-
-        // ── Phase 5: ramp gain up — play() has resolved so audio is flowing ─
-        // Re-read liveCtx in case AudioContext was created/resumed between phases
-        const playCtx = getAudioContext();
-        if (playCtx && stateRef.current.isPlaying && !trackMuted) {
-          // Re-fetch route (might have been created in Phase 3 or now)
-          const liveRoute = route ?? getOrCreateRoute(playCtx, element);
-          if (liveRoute) {
-            const targetGain = Math.max(0, Math.min(MAX_GAIN, effectiveVol));
-            rampGain(liveRoute, playCtx, 0, targetGain, FADE_IN_S);
-            element.volume = 1;
-          } else {
-            element.volume = Math.min(1, effectiveVol);
-          }
-        } else if (!stateRef.current.isPlaying) {
-          // Playback stopped while we were loading — silence and pause
-          if (liveCtx && route) setGainImmediate(route, liveCtx, 0);
-          element.pause();
-        }
-      })();
-    }
-
-    // ── handle "ready" slots synchronously ───────────────────────────────
-    const syncTasks = readySlots.map(async (slot) => {
-      const { element, segment } = slot;
-
-      // Compute target playback position
-      const segOffsetFrames = Math.max(0, frame - segment.startFrame);
-      const clipSpeed       = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
-      const targetTime      = segment.sourceInSeconds +
-                              framesToSeconds(segOffsetFrames, fps) * clipSpeed;
-      const clampedTime     = Math.min(
-        Math.max(targetTime, segment.sourceInSeconds),
-        Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, fps))
-      );
-
-      // ── SEEK DECISION ──────────────────────────────────────────────────
-      // Seamless-continue slots: the element is already running at the exact
-      // right position (the outgoing clip handed it off mid-stream).  Any seek
-      // would cause a hiccup — skip entirely, just update gain/playbackRate.
-      if (slot.isSeamlessContinue) {
-        // No seek — element is already playing. Just clear the flag so future
-        // reconcile cycles treat this slot normally.
-        slot.isSeamlessContinue = false;
-      } else if (slot.isPrePlaying && shouldPlay) {
-        // Pre-playing (muted) element: the element has been running silently for at
-        // most PRE_PLAY_FRAMES (~1.5 s) so drift from the target position is at most
-        // ~1.5 s * playbackRate which decays to well under PRE_PLAY_SEEK_TOLERANCE_S
-        // by the seam frame.  ANY seek here — even a synchronous currentTime
-        // assignment — causes a momentary silence because the browser must re-buffer
-        // from the new position.  Skip correction entirely: the accumulated drift is
-        // inaudible (sub-frame at the seam) and no seek means no gap.
-        // Element is already running — no action needed.
-      } else {
-        // Already loaded, but not pre-playing — seek normally (fast, no network wait)
-        await seekTo(element, clampedTime, fps);
-      }
-
-      // Apply volume / gain
-      const trackMuted   = segment.track.muted ?? false;
-      const clipVol      = Math.max(0, segment.clip.volume ?? 1);
-      const effectiveVol = trackMuted ? 0 : clipVol;
-      const targetGain   = Math.max(0, Math.min(MAX_GAIN, effectiveVol));
-
-      element.playbackRate = clipSpeed;
-
-      if (ctx) {
-        const route = getOrCreateRoute(ctx, element);
-        if (route) {
-          if (shouldPlay && !slot.fadeInDone) {
-            // Equal-power fade-in: use sine curve for incoming clip so that
-            // outgoing (linear fade-out) + incoming (sine fade-in) ≈ constant
-            // perceived loudness across the seam.  Scale the unit curve to
-            // targetGain so volume-adjusted clips ramp to the correct level.
-            if (targetGain > 0) {
-              // Build a scaled equal-power curve: sin(0..π/2) * targetGain
-              const STEPS = 32;
-              const curve = new Float32Array(STEPS);
-              for (let i = 0; i < STEPS; i++) {
-                curve[i] = Math.sin((i / (STEPS - 1)) * (Math.PI / 2)) * targetGain;
-              }
-              try {
-                const now = ctx.currentTime;
-                route.gainNode.gain.cancelScheduledValues(now);
-                route.gainNode.gain.setValueAtTime(0, now);
-                route.gainNode.gain.setValueCurveAtTime(curve, now, Math.max(0.001, FADE_IN_S));
-              } catch {
-                rampGain(route, ctx, 0, targetGain, FADE_IN_S);
-              }
-            } else {
-              setGainImmediate(route, ctx, 0);
-            }
-            slot.fadeInDone    = true;
-            slot.isPrePlaying  = false; // now officially audible
-          } else if (shouldPlay && slot.fadeInDone && slot.isPrePlaying) {
-            // Hard-cut incoming slot that was pre-playing at gain=0.
-            // Use a short micro-ramp so we don't jump from silence to full
-            // volume instantly (which would cause a click/pop).
-            rampGain(route, ctx, 0, targetGain, HARD_CUT_RAMP_S);
-            slot.isPrePlaying = false;
-          } else {
-            setGainImmediate(route, ctx, targetGain);
-          }
-          element.volume = 1;
-        } else {
-          element.volume = Math.min(1, effectiveVol);
-        }
-      } else {
-        element.volume = Math.min(1, effectiveVol);
-      }
-
-      // Play or pause
-      if (shouldPlay && !trackMuted) {
-        // If already playing (pre-play), play() is a no-op — no latency
-        try { await element.play(); } catch { /* autoplay policy */ }
-      } else {
-        element.pause();
-      }
-    });
-
-    await Promise.allSettled(syncTasks);
-    // Outgoing fades run fire-and-forget
-    void Promise.allSettled(outgoingReleases);
-  }
-
-  // ── pauseAudio ─────────────────────────────────────────────────────────────
-  function pauseAudio() {
-    const ctx = getAudioContext();
-    for (const slot of slotsRef.current) {
-      if (ctx) {
-        const route = getOrCreateRoute(ctx, slot.element);
-        if (route) route.gainNode.gain.cancelScheduledValues(ctx.currentTime);
-      }
-      slot.element.pause();
-    }
-  }
-
-  function stopAudio() { pauseAudio(); }
-
-  // ── startAudio ─────────────────────────────────────────────────────────────
-  async function startAudio(frame: number) {
+  /** Called by usePlaybackController when the user hits play. */
+  async function startAudio(frame: number): Promise<void> {
     const { activeAudioSegments: segs, sequenceFps: fps } = stateRef.current;
-    for (const slot of slotsRef.current) {
-      slot.fadeInDone   = false;
-      slot.isPrePlaying = false;
-    }
-    await reconcileSlots(segs, true, frame, fps);
+    const engine = getEngine();
+
+    // Preload any segments not yet decoded (fast-path: already in cache = no-op)
+    await engine.preload(segs);
+
+    engine.play({ segments: segs, playheadFrame: frame, fps, seamResume: false });
   }
 
-  // ── Lookahead prefetch + pre-play effect ────────────────────────────────────
-  // Triggered every frame while playing. When a segment is within
-  // LOOKAHEAD_FRAMES we load its element. When it is within PRE_PLAY_FRAMES
-  // we start it playing at gain=0 so it's already running at the seam.
+  /** Called on pause — stops all nodes with micro-fade. */
+  function pauseAudio(): void {
+    getEngine().pause();
+  }
+
+  /** Called on stop (alias for pause in this engine). */
+  function stopAudio(): void {
+    getEngine().stop();
+  }
+
+  // ── Lookahead preload effect ────────────────────────────────────────────────
+  // Fires every frame while playing. Decodes upcoming segments in the
+  // background so buffers are hot before the seam arrives.
   useEffect(() => {
     if (!isPlaying) return;
+
     const segs = allSegments ?? stateRef.current.allSegments ?? [];
-    const fps  = sequenceFps;
+    const engine = getEngine();
 
-    for (const seg of segs) {
-      if (
-        seg.track.kind !== "audio" ||
-        !seg.clip.isEnabled         ||
-        seg.track.muted
-      ) continue;
-
-      // Already active — nothing to prefetch
-      if (playheadFrame >= seg.startFrame && playheadFrame < seg.endFrame) continue;
+    const upcoming = segs.filter((seg) => {
+      if (seg.track.kind !== "audio") return false;
+      if (!seg.clip.isEnabled || seg.track.muted) return false;
+      // Already past or active — skip
+      if (playheadFrame >= seg.endFrame) return false;
+      // Already active — no need to "lookahead" preload (play() handles it)
+      if (playheadFrame >= seg.startFrame) return false;
 
       const framesUntilStart = seg.startFrame - playheadFrame;
+      return framesUntilStart > 0 && framesUntilStart <= LOOKAHEAD_FRAMES;
+    });
 
-      if (framesUntilStart > 0 && framesUntilStart <= LOOKAHEAD_FRAMES) {
-        // Within lookahead window — manage prefetch + pre-play lifecycle
-        tickPrefetch(seg, playheadFrame, fps);
-      }
+    if (upcoming.length > 0) {
+      void engine.preload(upcoming);
     }
-
-    // Housekeeping: drop stale prefetch entries
-    for (const [clipId, entry] of prefetchMap.entries()) {
-      const seg = segs.find((s) => s.clip.id === clipId);
-      if (!seg || seg.endFrame <= playheadFrame) {
-        prefetchMap.delete(clipId);
-        entry.element.pause();
-        releaseElement(entry.element);
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying, playheadFrame, sequenceFps]);
 
-  // ── effect: sync when playing state / segments / volume / speed change ──────
-  // audioSegKey includes startFrame so that when a new overlapping clip enters
-  // the active window (its startFrame <= playheadFrame), reconcileSlots fires
-  // immediately to bring the new clip's element online without waiting for the
-  // prefetch system to detect it.
+  // ── Seam / segment-change effect ────────────────────────────────────────────
+  // `audioSegKey` encodes the identity + parameters of every active audio
+  // segment.  When it changes while playing (clip seam crossed, or a clip
+  // parameter changed), we stop the old nodes and immediately re-schedule
+  // new ones — no seek latency because buffers are already in cache.
   const audioSegKey = activeAudioSegments
-    .map((s) => `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
+    .map(
+      (s) =>
+        `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`
+    )
     .join(",");
+
   useEffect(() => {
-    const { activeAudioSegments: segs, playheadFrame: frame, sequenceFps: fps } = stateRef.current;
-    void reconcileSlots(segs, isPlaying, frame, fps);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    const {
+      activeAudioSegments: segs,
+      playheadFrame: frame,
+      sequenceFps: fps,
+      isPlaying: playing,
+    } = stateRef.current;
+
+    if (!playing) return;
+
+    const engine = getEngine();
+
+    // Preload synchronously (returns immediately if already cached) then play.
+    // We do NOT await here — if a buffer somehow isn't cached yet, play() will
+    // silently skip that segment and the lookahead will catch up.
+    void engine.preload(segs).then(() => {
+      if (!stateRef.current.isPlaying) return; // stopped while preloading
+      engine.play({
+        segments: segs,
+        playheadFrame: frame,
+        fps,
+        seamResume: true, // 0 ms latency — buffers are hot
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying, audioSegKey]);
 
-  // ── effect: scrub sync (when NOT playing) ─────────────────────────────────
+  // ── Scrub sync (when NOT playing) ──────────────────────────────────────────
+  // When the user scrubs while paused, stop any residual nodes.
   useEffect(() => {
     if (isPlaying) return;
-    const { activeAudioSegments: segs, sequenceFps: fps } = stateRef.current;
-    void reconcileSlots(segs, false, playheadFrame, fps);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    getEngine().stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying, playheadFrame]);
 
-  // ── cleanup on unmount ─────────────────────────────────────────────────────
+  // ── Cleanup on unmount ──────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      for (const slot of slotsRef.current) {
-        slot.element.pause();
-        releaseElement(slot.element);
-      }
-      slotsRef.current = [];
-      for (const entry of prefetchMap.values()) {
-        entry.element.pause();
-        releaseElement(entry.element);
-      }
-      prefetchMap.clear();
+      engineRef.current?.dispose();
+      engineRef.current = null;
     };
   }, []);
 
