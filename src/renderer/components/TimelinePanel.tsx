@@ -220,6 +220,7 @@ export function TimelinePanel({
   onUpdateMarker,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
+  const [editorScrollLeft, setEditorScrollLeft] = useState(0);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
   // Always-current playhead frame for use in closures (avoids stale capture)
   const playheadFrameRef  = useRef<number>(playheadFrame);
@@ -418,10 +419,11 @@ export function TimelinePanel({
   useEffect(() => {
     if (!isScrubbingPlayhead) return;
     const onMove = (e: MouseEvent) => {
-      const ruler = timelineRulerRef.current;
-      if (!ruler) return;
-      const r = ruler.getBoundingClientRect();
-      const scrollLeft = timelineEditorRef.current?.scrollLeft ?? 0;
+      // Use editor container rect (stable) not ruler rect (drifts when scrolled horizontally)
+      const editor = timelineEditorRef.current;
+      if (!editor) return;
+      const r = editor.getBoundingClientRect();
+      const scrollLeft = editor.scrollLeft;
       const px = e.clientX - r.left - LABEL_W + scrollLeft;
       const frame = Math.max(0, Math.min(Math.round(px / ppfRef.current), timelineFrames));
       propsRef.current.onSetPlayheadFrame(frame);
@@ -1373,6 +1375,10 @@ export function TimelinePanel({
             el.addEventListener("wheel", handler, { passive: false });
           }
           (timelineEditorRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+          if (el) {
+            const onScroll = () => setEditorScrollLeft(el.scrollLeft);
+            el.addEventListener('scroll', onScroll, { passive: true });
+          }
         }}
         className="timeline-editor"
       >
@@ -1383,8 +1389,12 @@ export function TimelinePanel({
           style={{ minWidth: canvasWidth + LABEL_W }}
           onMouseDown={(event) => {
             if (event.button !== 0) return;
-            const r = event.currentTarget.getBoundingClientRect();
-            const scrollLeft = timelineEditorRef.current?.scrollLeft ?? 0;
+            // Use the editor container as reference — the ruler scrolls horizontally
+            // so ruler.getBoundingClientRect().left drifts when scrolled right
+            const editorEl = timelineEditorRef.current;
+            if (!editorEl) return;
+            const r = editorEl.getBoundingClientRect();
+            const scrollLeft = editorEl.scrollLeft;
             const px = event.clientX - r.left - LABEL_W + scrollLeft;
             const frame = Math.max(0, Math.min(Math.round(px / pixelsPerFrame), timelineFrames));
             onSetPlayheadFrame(frame);
@@ -1791,6 +1801,27 @@ export function TimelinePanel({
                     const fadeInPx      = fadeInFrames  * pixelsPerFrame;
                     const fadeOutPx     = fadeOutFrames * pixelsPerFrame;
 
+                    // Fade-out handle: always pinned to visible right edge of clip
+                    // clipLeft is the clip's left in timeline-space pixels
+                    // editorScrollLeft is how far the editor has scrolled
+                    // editorWidth is the visible width of the editor (minus label)
+                    const editorWidth   = (timelineEditorRef.current?.clientWidth ?? 800) - LABEL_W;
+                    // Visible right edge of this clip within the clip's own coordinate space
+                    const visibleClipRight = Math.min(
+                      clipWidth,                                          // clip's own right edge
+                      editorScrollLeft + editorWidth - clipLeft           // viewport right edge relative to clip
+                    );
+                    const fadeOutHandleLeft = Math.max(
+                      0,
+                      Math.min(
+                        clipWidth - 18,                                   // never past clip's own right edge
+                        Math.max(
+                          visibleClipRight - 18,                          // pin to visible right
+                          clipWidth - 18 - Math.min(fadeOutPx, clipWidth - 18) // or fade endpoint
+                        )
+                      )
+                    );
+
                     // FIX 3: lasso highlight
                     const isLassoSelected = lassoSelectedIds.has(segment.clip.id);
 
@@ -2050,7 +2081,7 @@ export function TimelinePanel({
                         <div
                           className={`fade-handle fade-handle-out${fadeOutFrames > 0 ? " has-fade" : ""}`}
                           title={`Fade out: ${(fadeOutFrames / sequenceFps).toFixed(2)}s — drag to adjust`}
-                          style={{ left: Math.max(0, clipWidth - 18 - Math.min(fadeOutPx, clipWidth - 18)) }}
+                          style={{ left: fadeOutHandleLeft }}
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();
