@@ -220,7 +220,6 @@ export function TimelinePanel({
   onUpdateMarker,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
-  const [editorScrollLeft, setEditorScrollLeft] = useState(0);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
   // Always-current playhead frame for use in closures (avoids stale capture)
   const playheadFrameRef  = useRef<number>(playheadFrame);
@@ -1375,10 +1374,6 @@ export function TimelinePanel({
             el.addEventListener("wheel", handler, { passive: false });
           }
           (timelineEditorRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
-          if (el) {
-            const onScroll = () => setEditorScrollLeft(el.scrollLeft);
-            el.addEventListener('scroll', onScroll, { passive: true });
-          }
         }}
         className="timeline-editor"
       >
@@ -1801,26 +1796,7 @@ export function TimelinePanel({
                     const fadeInPx      = fadeInFrames  * pixelsPerFrame;
                     const fadeOutPx     = fadeOutFrames * pixelsPerFrame;
 
-                    // Fade-out handle: always pinned to visible right edge of clip
-                    // clipLeft is the clip's left in timeline-space pixels
-                    // editorScrollLeft is how far the editor has scrolled
-                    // editorWidth is the visible width of the editor (minus label)
-                    const editorWidth   = (timelineEditorRef.current?.clientWidth ?? 800) - LABEL_W;
-                    // Visible right edge of this clip within the clip's own coordinate space
-                    const visibleClipRight = Math.min(
-                      clipWidth,                                          // clip's own right edge
-                      editorScrollLeft + editorWidth - clipLeft           // viewport right edge relative to clip
-                    );
-                    const fadeOutHandleLeft = Math.max(
-                      0,
-                      Math.min(
-                        clipWidth - 18,                                   // never past clip's own right edge
-                        Math.max(
-                          visibleClipRight - 18,                          // pin to visible right
-                          clipWidth - 18 - Math.min(fadeOutPx, clipWidth - 18) // or fade endpoint
-                        )
-                      )
-                    );
+
 
                     // FIX 3: lasso highlight
                     const isLassoSelected = lassoSelectedIds.has(segment.clip.id);
@@ -2081,7 +2057,7 @@ export function TimelinePanel({
                         <div
                           className={`fade-handle fade-handle-out${fadeOutFrames > 0 ? " has-fade" : ""}`}
                           title={`Fade out: ${(fadeOutFrames / sequenceFps).toFixed(2)}s — drag to adjust`}
-                          style={{ left: fadeOutHandleLeft }}
+                          style={{ right: 0, left: 'auto' }}
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();

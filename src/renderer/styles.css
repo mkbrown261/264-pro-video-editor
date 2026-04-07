@@ -4930,7 +4930,13 @@ kbd {
   background: rgba(255,200,50,0.18);
 }
 .fade-handle-in  { border-radius: 0 0 4px 0; }
-.fade-handle-out { border-radius: 0 0 0 4px; }
+.fade-handle-out {
+  border-radius: 0 0 0 4px;
+  /* Stick to the visible right edge of the scrolling timeline */
+  position: sticky;
+  right: 0;
+  left: auto;
+}
 /* Yellow bar — fade-in bar sits at top-left of handle */
 .fade-handle-in::after {
   content: "";
