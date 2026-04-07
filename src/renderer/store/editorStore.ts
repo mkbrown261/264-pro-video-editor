@@ -116,6 +116,11 @@ interface EditorStore {
   setClipSpeed: (clipId: string, speed: number) => void;
   setClipTransform: (clipId: string, updates: Partial<import("../../shared/models").ClipTransform>) => void;
 
+  // ── Keyframes ──
+  addKeyframe: (clipId: string, property: "opacity" | "volume" | "posX" | "posY" | "scaleX" | "scaleY" | "rotation", frame: number, value: number) => void;
+  removeKeyframe: (clipId: string, property: "opacity" | "volume" | "posX" | "posY" | "scaleX" | "scaleY" | "rotation", frame: number) => void;
+  updateKeyframe: (clipId: string, property: "opacity" | "volume" | "posX" | "posY" | "scaleX" | "scaleY" | "rotation", frame: number, value: number) => void;
+
   // ── Masks ──
   addMaskToClip: (clipId: string, mask: ClipMask) => void;
   updateMask: (clipId: string, maskId: string, updates: Partial<ClipMask>) => void;
@@ -1666,6 +1671,57 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     } else {
       set(withUndo("Clear Beat Sync", (state) => updateClipInState(state, clipId, (c) => ({ ...c, beatSync: null }))));
     }
+  },
+
+  // ── Keyframes ─────────────────────────────────────────────────────────────
+
+  addKeyframe: (clipId, property, frame, value) => {
+    set(withUndo("Add Keyframe", (state) => updateClipInState(state, clipId, (c) => {
+      const kfs = c.keyframes ?? {};
+      const existing = kfs[property] ?? { property, keyframes: [] };
+      // Remove any existing keyframe at this frame first, then add
+      const filtered = existing.keyframes.filter((k) => k.frame !== frame);
+      return {
+        ...c,
+        keyframes: {
+          ...kfs,
+          [property]: { property, keyframes: [...filtered, { frame, value }].sort((a, b) => a.frame - b.frame) }
+        }
+      };
+    })));
+  },
+
+  removeKeyframe: (clipId, property, frame) => {
+    set(withUndo("Remove Keyframe", (state) => updateClipInState(state, clipId, (c) => {
+      const kfs = c.keyframes ?? {};
+      const existing = kfs[property];
+      if (!existing) return c;
+      return {
+        ...c,
+        keyframes: {
+          ...kfs,
+          [property]: { ...existing, keyframes: existing.keyframes.filter((k) => k.frame !== frame) }
+        }
+      };
+    })));
+  },
+
+  updateKeyframe: (clipId, property, frame, value) => {
+    set(withUndo("Update Keyframe", (state) => updateClipInState(state, clipId, (c) => {
+      const kfs = c.keyframes ?? {};
+      const existing = kfs[property];
+      if (!existing) return c;
+      return {
+        ...c,
+        keyframes: {
+          ...kfs,
+          [property]: {
+            ...existing,
+            keyframes: existing.keyframes.map((k) => k.frame === frame ? { ...k, value } : k)
+          }
+        }
+      };
+    })));
   },
 
   // ── Tracks ────────────────────────────────────────────────────────────────

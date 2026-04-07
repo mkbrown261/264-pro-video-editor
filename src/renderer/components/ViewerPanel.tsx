@@ -18,6 +18,7 @@ import type {
 } from "../../shared/models";
 import {
   getClipTransitionDurationFrames,
+  interpolateKeyframe,
   type TimelineSegment
 } from "../../shared/timeline";
 import { formatTimecode } from "../lib/format";
@@ -504,22 +505,42 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const currentMasks    = activeSegment?.clip.masks ?? [];
 
     // ── Clip transform (position, scale, rotation, opacity from Inspector) ─────
+    // Keyframes override static transform values when present
     const clipTransform = activeSegment?.clip.transform ?? null;
-    const clipTransformStyle: CSSProperties = clipTransform ? {
+    const kfs = activeSegment?.clip.keyframes;
+    const kfPosX     = kfs?.posX     ? interpolateKeyframe(kfs.posX,     playheadFrame) : null;
+    const kfPosY     = kfs?.posY     ? interpolateKeyframe(kfs.posY,     playheadFrame) : null;
+    const kfScaleX   = kfs?.scaleX   ? interpolateKeyframe(kfs.scaleX,   playheadFrame) : null;
+    const kfScaleY   = kfs?.scaleY   ? interpolateKeyframe(kfs.scaleY,   playheadFrame) : null;
+    const kfRotation = kfs?.rotation ? interpolateKeyframe(kfs.rotation, playheadFrame) : null;
+    const kfOpacity  = kfs?.opacity  ? interpolateKeyframe(kfs.opacity,  playheadFrame) : null;
+
+    const effectivePosX     = kfPosX     ?? clipTransform?.posX     ?? 0;
+    const effectivePosY     = kfPosY     ?? clipTransform?.posY     ?? 0;
+    const effectiveScaleX   = kfScaleX   ?? clipTransform?.scaleX   ?? 1;
+    const effectiveScaleY   = kfScaleY   ?? clipTransform?.scaleY   ?? 1;
+    const effectiveRotation = kfRotation ?? clipTransform?.rotation ?? 0;
+    const effectiveOpacity  = kfOpacity  ?? clipTransform?.opacity  ?? 1;
+    const hasTransform = effectivePosX !== 0 || effectivePosY !== 0 ||
+      effectiveScaleX !== 1 || effectiveScaleY !== 1 ||
+      effectiveRotation !== 0 || effectiveOpacity !== 1 || !!kfs;
+
+    const clipTransformStyle: CSSProperties = (clipTransform || kfs) ? {
       transform: [
-        clipTransform.posX !== 0 || clipTransform.posY !== 0
-          ? `translate(${clipTransform.posX * 100}%, ${clipTransform.posY * 100}%)`
+        effectivePosX !== 0 || effectivePosY !== 0
+          ? `translate(${effectivePosX * 100}%, ${effectivePosY * 100}%)`
           : "",
-        clipTransform.scaleX !== 1 || clipTransform.scaleY !== 1
-          ? `scale(${clipTransform.scaleX}, ${clipTransform.scaleY})`
+        effectiveScaleX !== 1 || effectiveScaleY !== 1
+          ? `scale(${effectiveScaleX}, ${effectiveScaleY})`
           : "",
-        clipTransform.rotation !== 0
-          ? `rotate(${clipTransform.rotation}deg)`
+        effectiveRotation !== 0
+          ? `rotate(${effectiveRotation}deg)`
           : "",
       ].filter(Boolean).join(" ") || undefined,
-      transformOrigin: `${(clipTransform.anchorX ?? 0.5) * 100}% ${(clipTransform.anchorY ?? 0.5) * 100}%`,
-      opacity: clipTransform.opacity,
+      transformOrigin: `${(clipTransform?.anchorX ?? 0.5) * 100}% ${(clipTransform?.anchorY ?? 0.5) * 100}%`,
+      opacity: effectiveOpacity,
     } : {};
+    void hasTransform; // used implicitly
 
     // Merge clip transform into wrapperStyle (clip transform applied first, then transition transform on top)
     const wrapperStyle: CSSProperties = { ...clipTransformStyle, ...transWrapperStyle };

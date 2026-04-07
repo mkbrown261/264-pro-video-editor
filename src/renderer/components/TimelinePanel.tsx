@@ -164,6 +164,8 @@ interface TimelinePanelProps {
   onAddMarker?: (frame: number) => void;
   onRemoveMarker?: (markerId: string) => void;
   onUpdateMarker?: (markerId: string, updates: Partial<TimelineMarker>) => void;
+  /** Add a keyframe to the selected clip at the current playhead position */
+  onAddKeyframe?: (clipId: string, property: "opacity" | "volume" | "posX" | "posY" | "scaleX" | "scaleY" | "rotation", frame: number, value: number) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -218,6 +220,7 @@ export function TimelinePanel({
   onAddMarker,
   onRemoveMarker,
   onUpdateMarker,
+  onAddKeyframe,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -1981,6 +1984,56 @@ export function TimelinePanel({
                             </svg>
                           );
                         })() : null}
+
+                        {/* ── Keyframe row (shown when clip is selected and has keyframes) ── */}
+                        {isSelected && segment.clip.keyframes && (() => {
+                          const kfs = segment.clip.keyframes;
+                          const allKfs: Array<{ frame: number; property: string }> = [];
+                          for (const [prop, track] of Object.entries(kfs)) {
+                            if (track) {
+                              for (const kf of (track as { keyframes: Array<{ frame: number }> }).keyframes) {
+                                allKfs.push({ frame: kf.frame, property: prop });
+                              }
+                            }
+                          }
+                          if (!allKfs.length) return null;
+                          return (
+                            <div
+                              className="clip-keyframe-row"
+                              style={{
+                                position: "absolute",
+                                bottom: 2,
+                                left: 0,
+                                width: clipWidth,
+                                height: 8,
+                                pointerEvents: "none",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {allKfs.map(({ frame, property }) => {
+                                const relFrame = frame - segment.startFrame;
+                                const x = relFrame * pixelsPerFrame;
+                                return (
+                                  <div
+                                    key={`${frame}-${property}`}
+                                    title={`${property} @ frame ${frame}`}
+                                    style={{
+                                      position: "absolute",
+                                      left: x - 4,
+                                      top: 0,
+                                      width: 8,
+                                      height: 8,
+                                      background: "#f7c948",
+                                      transform: "rotate(45deg)",
+                                      borderRadius: 1,
+                                      pointerEvents: "none",
+                                    }}
+                                  />
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
 
                         {/* Transition in pill */}
                         {segment.clip.transitionIn && (

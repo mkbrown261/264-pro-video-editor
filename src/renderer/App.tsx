@@ -519,6 +519,7 @@ export default function App() {
   const addMarker = useEditorStore((s) => s.addMarker);
   const removeMarker = useEditorStore((s) => s.removeMarker);
   const updateMarker = useEditorStore((s) => s.updateMarker);
+  const addKeyframe = useEditorStore((s) => s.addKeyframe);
   const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
   const setAssetFilmstrip = useEditorStore((s) => s.setAssetFilmstrip);
 
@@ -2691,6 +2692,7 @@ export default function App() {
               onAddMarker={(frame) => addMarker({ frame, label: "", color: "#f7c948" })}
               onRemoveMarker={(id) => removeMarker(id)}
               onUpdateMarker={(id, updates) => updateMarker(id, updates)}
+              onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
             />
             </div>{/* /timeline-area-wrapper */}
           </>
@@ -2832,6 +2834,7 @@ export default function App() {
               onAddMarker={(frame) => addMarker({ frame, label: "", color: "#f7c948" })}
               onRemoveMarker={(id) => removeMarker(id)}
               onUpdateMarker={(id, updates) => updateMarker(id, updates)}
+              onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
               />
             </div>
           </>
