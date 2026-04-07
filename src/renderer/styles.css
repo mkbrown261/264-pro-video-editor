@@ -4933,8 +4933,7 @@ kbd {
 .fade-handle-out {
   border-radius: 0 0 0 4px;
   position: absolute !important;
-  right: 0 !important;
-  left: auto !important;
+  left: auto !important;  /* cancel base left:0; inline style sets right:fadeOutPx */
 }
 /* Yellow bar — fade-in bar sits at top-left of handle */
 .fade-handle-in::after {
