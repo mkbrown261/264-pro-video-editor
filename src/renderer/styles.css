@@ -5574,8 +5574,8 @@ kbd {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: #4a9eff;
-  box-shadow: 0 0 6px rgba(74, 158, 255, 0.85), 0 0 12px rgba(74, 158, 255, 0.4);
+  background: #f7c948;
+  box-shadow: 0 0 6px rgba(247, 201, 72, 0.85), 0 0 12px rgba(247, 201, 72, 0.4);
   pointer-events: none;
   z-index: 60;
   transform: translateX(-1px);
@@ -5587,8 +5587,8 @@ kbd {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: #4a9eff;
-  box-shadow: 0 0 8px rgba(74, 158, 255, 0.9), 0 0 20px rgba(74, 158, 255, 0.35);
+  background: #f7c948;
+  box-shadow: 0 0 8px rgba(247, 201, 72, 0.9), 0 0 20px rgba(247, 201, 72, 0.35);
   pointer-events: none;
   z-index: 100;
   transform: translateX(-1px);
@@ -5597,8 +5597,8 @@ kbd {
 }
 
 @keyframes snap-pulse {
-  from { opacity: 1; box-shadow: 0 0 8px rgba(74,158,255,0.9), 0 0 20px rgba(74,158,255,0.35); }
-  to   { opacity: 0.7; box-shadow: 0 0 4px rgba(74,158,255,0.7), 0 0 10px rgba(74,158,255,0.2); }
+  from { opacity: 1; box-shadow: 0 0 8px rgba(247,201,72,0.9), 0 0 20px rgba(247,201,72,0.35); }
+  to   { opacity: 0.7; box-shadow: 0 0 4px rgba(247,201,72,0.7), 0 0 10px rgba(247,201,72,0.2); }
 }
 
 /* Diamond snap indicator marker at the top of the line (like DaVinci Resolve) */
@@ -5733,17 +5733,17 @@ kbd {
   pointer-events: none;
 }
 
-/* ── FIX 9: Snap indicator line — blue, precise alignment only ───────────── */
+/* ── Snap indicator line — yellow for clarity ────────────────────────────── */
 .snap-indicator-line {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
-  background: #4f8ef7;
+  background: #f7c948;
   opacity: 0.9;
   pointer-events: none;
   z-index: 40;
-  box-shadow: 0 0 4px rgba(79,142,247,0.6);
+  box-shadow: 0 0 4px rgba(247,201,72,0.6);
 }
 
 /* ── FIX 11: Motion tracking controls in MaskInspector ──────────────────── */

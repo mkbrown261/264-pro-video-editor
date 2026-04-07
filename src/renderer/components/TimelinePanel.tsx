@@ -234,7 +234,7 @@ export function TimelinePanel({
     onUpdateTrack, onSetTransitionDuration, onDropTransition,
     toolMode, sequenceFps,
     onAddTrack, onAddTracksAndMoveClip, onAddTracksAndDropAsset, onReorderTrack,
-    assets,
+    assets, markers,
   });
   useEffect(() => {
     propsRef.current = {
@@ -243,7 +243,7 @@ export function TimelinePanel({
       onUpdateTrack, onSetTransitionDuration, onDropTransition,
       toolMode, sequenceFps,
       onAddTrack, onAddTracksAndMoveClip, onAddTracksAndDropAsset, onReorderTrack,
-      assets,
+      assets, markers,
     };
   });
 
@@ -441,15 +441,17 @@ export function TimelinePanel({
     if (!trimState) return;
     const onMove = (e: MouseEvent) => {
       const rawDelta = Math.round((e.clientX - trimState.anchorX) / ppfRef.current);
+      // Shift key disables snap for precision trimming
       const { snapEnabled: se, snapDivIdx: sdi } = snapRef.current;
+      const snapActive = se && !e.shiftKey;
       // Apply snap to the absolute trim value, not to the delta
       if (trimState.edge === "start") {
         const rawTrim = trimState.trimStartFrames + rawDelta;
-        const snappedTrim = snapFrame(rawTrim, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+        const snappedTrim = snapFrame(rawTrim, snapActive, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
         propsRef.current.onTrimClipStart(trimState.clipId, snappedTrim);
       } else {
         const rawTrim = trimState.trimEndFrames - rawDelta;
-        const snappedTrim = snapFrame(rawTrim, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+        const snappedTrim = snapFrame(rawTrim, snapActive, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
         propsRef.current.onTrimClipEnd(trimState.clipId, snappedTrim);
       }
     };
@@ -664,18 +666,17 @@ export function TimelinePanel({
     const onMove = (e: MouseEvent) => {
       const g = resolveGhostAt(e.clientX, e.clientY, ds.trackKind, ds.offsetX);
 
-      // ── Magnetic snap-to-edges + snap-to-playhead ─────────────────────────
-      // Applies to all drag intents when snap is enabled
-      if (g && snapRef.current.snapEnabled) {
+      // ── Magnetic snap-to-edges + snap-to-playhead + snap-to-markers ──────
+      // Applies to all drag intents when snap is enabled.
+      // Hold Shift to temporarily override snap.
+      if (g && snapRef.current.snapEnabled && !e.shiftKey) {
         const ppf = ppfRef.current;
 
-        // FIX 9: Collect ONLY clip edges (not playhead) for the blue snap indicator.
-        // Skip the clip being dragged to avoid snapping to itself.
+        // Collect clip edges (skip the clip being dragged)
         const clipEdges: number[] = [];
         const allCandidates: number[] = [];
 
         document.querySelectorAll<HTMLElement>(".timeline-clip").forEach((el) => {
-          // Skip the clip being dragged
           if (el.dataset.clipId === ds.clipId) return;
           const left  = parseFloat(el.style.left  ?? "0");
           const width = parseFloat(el.style.width ?? "0");
@@ -691,13 +692,16 @@ export function TimelinePanel({
           }
         });
 
-        // Playhead snapping (no blue indicator for playhead snaps)
+        // Playhead
         allCandidates.push(playheadFrameRef.current);
+
+        // Timeline markers
+        const markerFrames = (propsRef.current.markers ?? []).map((m) => m.frame);
+        for (const mf of markerFrames) allCandidates.push(mf);
 
         // Threshold in frames
         const threshFrames = MAGNETIC_SNAP_PX / ppf;
 
-        // Find closest candidate within threshold
         let bestFrame: number | null = null;
         let bestDist = threshFrames;
         let bestIsClipEdge = false;
@@ -712,8 +716,8 @@ export function TimelinePanel({
 
         if (bestFrame !== null) {
           g.frame = bestFrame;
-          // FIX 9: Blue snap line ONLY appears when snapping to another clip's edge
-          setSnapIndicatorFrame(bestIsClipEdge ? bestFrame : null);
+          // Show snap line for clip edge, playhead, and marker snaps
+          setSnapIndicatorFrame(bestFrame);
         } else {
           setSnapIndicatorFrame(null);
         }
@@ -1285,10 +1289,10 @@ export function TimelinePanel({
           <button
             className={`tl-snap-btn${snapEnabled ? " active" : ""}`}
             onClick={() => setSnapEnabled((v) => !v)}
-            title={snapEnabled ? "Snap ON — click to disable" : "Snap OFF — click to enable"}
+            title={snapEnabled ? "Snap ON — click to disable (hold Shift during drag to override)" : "Snap OFF — click to enable"}
             type="button"
           >
-            <span className="tl-snap-icon">⊞</span>
+            <span className="tl-snap-icon">🧲</span>
             {snapEnabled ? "Snap" : "Free"}
           </button>
           {snapEnabled && (
