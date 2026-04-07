@@ -13,7 +13,7 @@
     "dev:main": "npx tsc -p tsconfig.node.json --watch --preserveWatchOutput",
     "dev:preload": "npx tsc -p tsconfig.preload.json --watch --preserveWatchOutput",
     "dev:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/dev-electron.mjs",
-    "copy:html": "node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('dist-electron/electron',{recursive:true});cpSync('electron/gate.html','dist-electron/electron/gate.html');\"",
+    "copy:html": "node scripts/copy-html.mjs",
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "npx tsc -p tsconfig.node.json && npx tsc -p tsconfig.preload.json && npm run copy:html",
@@ -26,7 +26,7 @@
     "dist:mac": "npm run build && electron-builder --mac --universal",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:all": "npm run build && electron-builder --mac --win",
-    "clean": "node -e \"const{rmSync}=require(\"fs\");[\"dist\",\"dist-electron\"].forEach(p=>{try{rmSync(p,{recursive:true,force:true})}catch{}});console.log(\"Cleaned dist + dist-electron\")\""
+    "clean": "node scripts/clean.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
