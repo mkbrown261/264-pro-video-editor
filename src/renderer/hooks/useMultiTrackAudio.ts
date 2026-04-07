@@ -174,7 +174,7 @@ export function useMultiTrackAudio({
     if (isPlaying) return;
     getEngine().stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playheadFrame]);
+  }, [isPlaying, playheadFrame]);
 
   // --------------------------------------------------------------------------
   // Cleanup on unmount

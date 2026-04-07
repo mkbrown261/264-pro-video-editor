@@ -352,7 +352,7 @@ export class AudioEngine {
   stop(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    this._stopAll(ctx, STOP_FADE_S);
+    this._stopAll(ctx, 0); // immediate — user explicitly stopped playback
   }
 
   // ── Pause (alias for stop — AudioBufferSourceNode has no pause) ─────────────
@@ -397,16 +397,22 @@ export class AudioEngine {
   // ── Internal helpers ───────────────────────────────────────────────────────
   private _stopAll(ctx: AudioContext, fadeSecs: number): void {
     const now = ctx.currentTime;
-    for (const [, { source, gainNode }] of this.activeSources) {
+    const snapshot = new Map(this.activeSources);
+    this.activeSources.clear(); // clear immediately so new play() won't race
+    for (const [, { source, gainNode }] of snapshot) {
       try {
         gainNode.gain.cancelScheduledValues(now);
         gainNode.gain.setValueAtTime(gainNode.gain.value, now);
-        gainNode.gain.linearRampToValueAtTime(0, now + fadeSecs);
-        source.stop(now + fadeSecs + 0.001);
+        if (fadeSecs > 0) {
+          gainNode.gain.linearRampToValueAtTime(0, now + fadeSecs);
+          source.stop(now + fadeSecs + 0.001);
+        } else {
+          gainNode.gain.setValueAtTime(0, now);
+          source.stop(now); // immediate, no future-scheduled stop
+        }
       } catch {
         // Already stopped — ignore
       }
     }
-    this.activeSources.clear();
   }
 }
