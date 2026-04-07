@@ -48,6 +48,9 @@ export function useMultiTrackAudio({
   pauseAudio: () => void;
 } {
   const engineRef = useRef<AudioEngine | null>(null);
+  // Throttle lookahead: only run preload every N frames to avoid hammering
+  // the media:// protocol handler with repeated fetch calls every RAF tick.
+  const lastLookaheadFrameRef = useRef<number>(-999);
 
   // The audioSegKey that was most recently scheduled via startAudio or the seam
   // effect. Used to prevent double-play when both change on the same render.
@@ -113,8 +116,12 @@ export function useMultiTrackAudio({
   // are hot before the seam arrives.
   // --------------------------------------------------------------------------
   useEffect(() => {
-    // Preload while playing (lookahead) AND while paused/scrubbing
-    // so that buffers are hot before the user hits play.
+    // Throttle: only run every 30 frames to avoid hammering the media://
+    // protocol handler. The pendingFetches guard in AudioEngine also prevents
+    // duplicate fetches, but throttling here reduces unnecessary iterations.
+    if (Math.abs(playheadFrame - lastLookaheadFrameRef.current) < 30) return;
+    lastLookaheadFrameRef.current = playheadFrame;
+
     const segs = allSegments ?? stateRef.current.allSegments ?? [];
     const engine = getEngine();
 

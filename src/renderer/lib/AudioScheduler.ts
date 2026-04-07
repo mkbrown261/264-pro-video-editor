@@ -209,6 +209,9 @@ export class AudioEngine {
   /** URL → decoded AudioBuffer. Persistent across play/pause/seek cycles. */
   private bufferCache = new Map<string, AudioBuffer>();
 
+  /** URLs currently being fetched/decoded — prevents duplicate in-flight fetches. */
+  private pendingFetches = new Set<string>();
+
   /** Currently scheduled AudioBufferSourceNodes, keyed by clip ID. */
   private activeSources = new Map<string, ActiveSource>();
 
@@ -247,18 +250,27 @@ export class AudioEngine {
   }
 
   // ── Preload ────────────────────────────────────────────────────────────────
-  /** Decode all segments not yet in the buffer cache, in parallel. */
+  /** Decode all segments not yet in the buffer cache, in parallel.
+   *  In-flight deduplication: if a URL is already being fetched, skip it
+   *  rather than starting a second concurrent download of the same file.
+   *  Large video files (hundreds of MB) must not be downloaded multiple times
+   *  as that starves the media:// protocol handler used by <video> and <img>.
+   */
   async preload(segments: TimelineSegment[]): Promise<void> {
     const ctx = this.getCtx();
     await Promise.all(
       segments
         .filter((seg) => {
           const url = seg.asset?.previewUrl;
-          return url && !this.bufferCache.has(url);
+          if (!url) return false;
+          if (this.bufferCache.has(url)) return false;  // already decoded
+          if (this.pendingFetches.has(url)) return false; // already in flight
+          return true;
         })
         .map(async (seg) => {
           const url = seg.asset?.previewUrl;
           if (!url) return;
+          this.pendingFetches.add(url);
           try {
             const response = await fetch(url);
             if (!response.ok) return;
@@ -267,6 +279,8 @@ export class AudioEngine {
             this.bufferCache.set(url, audioBuffer);
           } catch {
             // Silently skip — no audio track or decode error
+          } finally {
+            this.pendingFetches.delete(url);
           }
         })
     );
@@ -392,6 +406,7 @@ export class AudioEngine {
     this.trackGains.clear();
     this.bufferCache.clear();
     this.activeSources.clear();
+    this.pendingFetches.clear();
   }
 
   // ── Internal helpers ───────────────────────────────────────────────────────
