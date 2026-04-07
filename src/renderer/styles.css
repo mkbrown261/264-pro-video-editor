@@ -4916,38 +4916,37 @@ kbd {
 .fade-handle {
   position: absolute;
   top: 0;
-  bottom: 0;           /* Full clip height = large hit target */
+  bottom: 0;       /* Full clip height = large hit target */
   width: 18px;
   cursor: col-resize;
   z-index: 15;
-  /* No flexbox — ::after is absolutely positioned to top */
-  opacity: 0.3;
-  transition: opacity 0.08s ease 0s;
-  left: 0;
+  /* Subtle tinted background so handle area is always visible */
+  background: rgba(255,200,50,0.08);
+  transition: background 0.08s;
+  left: 0;         /* overridden by inline style */
 }
-.fade-handle:hover { opacity: 1; transition-duration: 0.04s; }
-.timeline-clip:hover .fade-handle { opacity: 0.65; }
-.timeline-clip:hover .fade-handle:hover { opacity: 1; transition-duration: 0.04s; }
-.fade-handle.has-fade { opacity: 1; }
-.fade-handle-in  { border-radius: 0 0 3px 0; }
-.fade-handle-out { border-radius: 0 0 0 3px; }
-/* Yellow bar — absolutely pinned to TOP of the handle, always */
-.fade-handle::after {
+.fade-handle:hover,
+.fade-handle.has-fade {
+  background: rgba(255,200,50,0.18);
+}
+.fade-handle-in  { border-radius: 0 0 4px 0; }
+.fade-handle-out { border-radius: 0 0 0 4px; }
+/* Yellow bar — hardcoded to top-left of handle (2px from top, 2px from edge) */
+.fade-handle-in::after,
+.fade-handle-out::after {
   content: "";
   position: absolute;
   top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 2px;
   width: 5px;
-  height: 16px;
-  background: rgba(255,200,50,0.9);
+  height: 18px;
   border-radius: 2px;
-  box-shadow: 0 0 5px rgba(255,200,50,0.7);
+  background: #ffc832;
+  box-shadow: 0 0 6px rgba(255,200,50,0.9);
 }
 .fade-handle:hover::after,
 .fade-handle.has-fade::after {
-  background: #ffc832;
-  box-shadow: 0 0 10px rgba(255,200,50,1);
+  box-shadow: 0 0 10px rgba(255,200,50,1), 0 0 20px rgba(255,200,50,0.5);
 }
 
 .clip-fade-overlay {
