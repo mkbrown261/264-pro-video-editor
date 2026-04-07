@@ -16,7 +16,8 @@
 import {
   useEffect,
   useRef,
-  type RefObject
+  type RefObject,
+  type MutableRefObject
 } from "react";
 import {
   findNextSegmentAtOrAfterFrame,
@@ -28,6 +29,7 @@ import {
   useMultiTrackAudio,
   findAllActiveAudioSegments
 } from "./useMultiTrackAudio";
+import type { AudioEngine } from "../lib/AudioScheduler";
 import { AudioScheduler } from "../lib/AudioScheduler";
 
 interface PlaybackControllerOptions {
@@ -51,6 +53,7 @@ interface PlaybackControllerResult {
   togglePlayback: () => Promise<void>;
   pausePlayback: () => void;
   stopPlayback: () => void;
+  audioEngineRef: MutableRefObject<AudioEngine | null>;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -263,7 +266,7 @@ export function usePlaybackController({
   // Compute all active audio segments (across ALL tracks) at the current frame
   const activeAudioSegments = findAllActiveAudioSegments(segments, playheadFrame);
 
-  const { startAudio, stopAudio, pauseAudio } = useMultiTrackAudio({
+  const { startAudio, stopAudio, pauseAudio, engineRef: audioEngineRef } = useMultiTrackAudio({
     activeAudioSegments,
     allSegments: segments,   // pass ALL segments for lookahead prefetch
     isPlaying,
@@ -836,5 +839,5 @@ export function usePlaybackController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { togglePlayback, pausePlayback, stopPlayback };
+  return { togglePlayback, pausePlayback, stopPlayback, audioEngineRef };
 }

@@ -353,7 +353,10 @@ export class AudioEngine {
 
       const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
       const clipVol = Math.max(0, seg.clip.volume ?? 1);
+      const trackVol = Math.max(0, seg.track.volume ?? 1);
       const effectiveGain = Math.min(2, (seg.track.muted ?? false) ? 0 : clipVol);
+      // Sync track gain node with track.volume from store
+      this.setTrackVolume(seg.track.id, seg.track.muted ? 0 : trackVol);
 
       const playheadOffset = Math.max(0, playheadFrame - seg.startFrame);
       const sourceOffset = seg.sourceInSeconds + (playheadOffset / fps) * clipSpeed;

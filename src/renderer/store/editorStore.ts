@@ -198,7 +198,7 @@ interface EditorStore {
   getCurrentProjectSnapshot: () => EditorProjectState;
 
   // ── Sequence settings ──
-  updateSequenceSettings: (settings: Partial<{ width: number; height: number; fps: number; aspectRatio: string; audioSampleRate: number }>) => void;
+  updateSequenceSettings: (settings: Partial<{ width: number; height: number; fps: number; aspectRatio: string; audioSampleRate: number; masterVolume: number }>) => void;
 
   // ── Fusion / Compositing ──
   fusionClipId: string | null;

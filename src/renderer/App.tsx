@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, type CSSProperties } f
 import { FlowStatePanel } from "./components/FlowStatePanel";
 import { AIToolsPanel } from "./components/AIToolsPanel";
 import { InspectorPanel } from "./components/InspectorPanel";
+import { AudioMixerPanel } from "./components/AudioMixerPanel";
 import { MediaPool } from "./components/MediaPool";
 import { TimelinePanel } from "./components/TimelinePanel";
 import {
@@ -583,6 +584,12 @@ export default function App() {
   const [inspectorOpen, setInspectorOpen] = useState(() => {
     try { return localStorage.getItem("264pro_inspector_open") !== "false"; } catch { return true; }
   });
+  const [mixerOpen, setMixerOpen] = useState(() => {
+    try { return localStorage.getItem("264pro_mixer_open") === "true"; } catch { return false; }
+  });
+
+  // Audio engine ref (populated by ViewerPanel's onAudioEngineRef callback)
+  const audioEngineRef = useRef<import("./lib/AudioScheduler").AudioEngine | null>(null);
 
   // Imp 9: Layout preset
   const [, setLayoutPreset] = useState<LayoutPreset>("edit");
@@ -2193,6 +2200,20 @@ export default function App() {
           >
             Inspector ▦
           </button>
+          <button
+            className={`panel-toggle-btn${mixerOpen ? " on" : ""}`}
+            onClick={() => {
+              setMixerOpen((v) => {
+                const next = !v;
+                try { localStorage.setItem("264pro_mixer_open", String(next)); } catch {}
+                return next;
+              });
+            }}
+            title="Toggle Audio Mixer"
+            type="button"
+          >
+            🎚 Mixer
+          </button>
 
           {/* FlowState Panel toggle */}
           <button
@@ -2364,6 +2385,7 @@ export default function App() {
                 onSplitAtPlayhead={splitSelectedClipAtPlayhead}
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
+                onAudioEngineRef={(engine) => { audioEngineRef.current = engine; }}
               />
             </div>
 
@@ -2694,6 +2716,21 @@ export default function App() {
               onUpdateMarker={(id, updates) => updateMarker(id, updates)}
               onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
             />
+
+            {/* Audio Mixer Panel */}
+            {mixerOpen && (
+              <AudioMixerPanel
+                tracks={project.sequence.tracks}
+                masterVolume={project.sequence.settings.masterVolume ?? 1}
+                audioEngineRef={audioEngineRef}
+                onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
+                onUpdateMasterVolume={(vol) => updateSequenceSettings({ masterVolume: vol })}
+                onClose={() => {
+                  setMixerOpen(false);
+                  try { localStorage.setItem("264pro_mixer_open", "false"); } catch {}
+                }}
+              />
+            )}
             </div>{/* /timeline-area-wrapper */}
           </>
         )}

@@ -22,7 +22,7 @@
  *                    stateRef to avoid the effect re-firing on play/pause.
  */
 
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import type { TimelineSegment } from "../../shared/timeline";
 import { AudioEngine } from "../lib/AudioScheduler";
 
@@ -46,6 +46,8 @@ export function useMultiTrackAudio({
   startAudio: (frame: number) => Promise<void>;
   stopAudio: () => void;
   pauseAudio: () => void;
+  /** Ref to the underlying AudioEngine — use for setTrackVolume / setMasterVolume */
+  engineRef: React.MutableRefObject<AudioEngine | null>;
 } {
   const engineRef = useRef<AudioEngine | null>(null);
   // Throttle lookahead: only run preload every N frames to avoid hammering
@@ -86,7 +88,7 @@ export function useMultiTrackAudio({
     const stopGen = stopGenRef.current;
 
     const key = segs
-      .map((s) => `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
+      .map((s) => `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}:${(s.track.volume ?? 1).toFixed(3)}`)
       .join(",");
     lastPlayedKeyRef.current = key;
 
@@ -150,7 +152,7 @@ export function useMultiTrackAudio({
   const audioSegKey = activeAudioSegments
     .map(
       (s) =>
-        `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`
+        `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}:${(s.track.volume ?? 1).toFixed(3)}`
     )
     .join(",");
 
@@ -204,7 +206,7 @@ export function useMultiTrackAudio({
     };
   }, []);
 
-  return { startAudio, stopAudio, pauseAudio };
+  return { startAudio, stopAudio, pauseAudio, engineRef };
 }
 
 /**

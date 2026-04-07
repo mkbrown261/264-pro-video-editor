@@ -64,6 +64,8 @@ interface ViewerPanelProps {
   onSplitAtPlayhead: () => void;
   onSetPlayheadFrame: (frame: number) => void;
   onStepFrames: (deltaFrames: number) => void;
+  /** Called once with a ref to the AudioEngine so parent can control volume */
+  onAudioEngineRef?: (ref: import("../lib/AudioScheduler").AudioEngine | null) => void;
 }
 
 // ─── Transition helpers ───────────────────────────────────────────────────────
@@ -362,6 +364,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onSplitAtPlayhead,
     onSetPlayheadFrame,
     onStepFrames,
+    onAudioEngineRef,
   }, ref) {
 
     const panelRef       = useRef<HTMLElement | null>(null);
@@ -408,7 +411,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     // ── Playback controller ───────────────────────────────────────────────────
     // activeAudioSegment is kept in props for API compat but audio is now
     // managed by useMultiTrackAudio inside usePlaybackController.
-    const { togglePlayback, pausePlayback, stopPlayback } = usePlaybackController({
+    const { togglePlayback, pausePlayback, stopPlayback, audioEngineRef } = usePlaybackController({
       videoRef,
       audioRef,
       activeSegment: patchedActiveSegment,
@@ -422,6 +425,12 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       setPlaybackPlaying:  onSetPlaybackPlaying,
       onPlaybackMessage:   setPlaybackMessage,
     });
+
+    // Expose audioEngineRef to parent (for AudioMixerPanel volume control)
+    useEffect(() => {
+      if (onAudioEngineRef) onAudioEngineRef(audioEngineRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [onAudioEngineRef]);
 
     async function toggleFullscreen() {
       const panel = panelRef.current;
