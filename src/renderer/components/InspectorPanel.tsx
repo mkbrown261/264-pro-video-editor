@@ -107,6 +107,7 @@ interface InspectorPanelProps {
 
   // Export
   onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string }) => void;
   exportProgress?: number;
 
   // Color grade (for effects page display)
@@ -576,6 +577,7 @@ function ExportPresetPanel({
   exportProgress,
   environment,
   onExport,
+  onAddToQueue,
 }: {
   sequenceSettings: { width: number; height: number; fps: number; audioSampleRate: number };
   exportBusy: boolean;
@@ -583,6 +585,7 @@ function ExportPresetPanel({
   exportProgress?: number;
   environment: EnvironmentStatus | null;
   onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string }) => void;
 }) {
   const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
   const [selectedCodec, setSelectedCodec] = useState<ExportCodec>("libx264");
@@ -673,6 +676,22 @@ function ExportPresetPanel({
         >
           {exportBusy ? "⏳ Rendering…" : `▶ Export ${containerLabel}`}
         </button>
+        {onAddToQueue && (
+          <button
+            className="panel-action export-btn"
+            style={{ marginTop: 4, background: "rgba(59,138,247,0.12)", borderColor: "rgba(59,138,247,0.35)", color: "#3b8af7" }}
+            disabled={exportBusy}
+            onClick={() => {
+              const codecLabel = CODEC_OPTIONS.find((c) => c.value === selectedCodec)?.label ?? selectedCodec;
+              const resLabel = resPre.width > 0 ? `${resPre.width}×${resPre.height}` : "Original";
+              onAddToQueue({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height, label: `${preset.label} · ${codecLabel} · ${resLabel}` });
+            }}
+            type="button"
+            title="Add this render configuration to the render queue"
+          >
+            + Add to Queue
+          </button>
+        )}
         {exportBusy && (
           <div className="export-progress-row">
             <div className="export-progress-bar">
@@ -759,6 +778,7 @@ export function InspectorPanel({
   onSetVoiceBpm,
   onSetVoiceGridFrames,
   onExport,
+  onAddToQueue,
   videoRef,
 }: InspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("clip");
@@ -1224,6 +1244,7 @@ export function InspectorPanel({
             exportProgress={exportProgress}
             environment={environment}
             onExport={onExport}
+            onAddToQueue={onAddToQueue}
           />
         )}
       </div>

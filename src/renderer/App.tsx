@@ -3,6 +3,7 @@ import { FlowStatePanel } from "./components/FlowStatePanel";
 import { AIToolsPanel } from "./components/AIToolsPanel";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { AudioMixerPanel } from "./components/AudioMixerPanel";
+import { RenderQueuePanel, type RenderJob } from "./components/RenderQueuePanel";
 import { MediaPool } from "./components/MediaPool";
 import { TimelinePanel } from "./components/TimelinePanel";
 import {
@@ -590,6 +591,11 @@ export default function App() {
 
   // Audio engine ref (populated by ViewerPanel's onAudioEngineRef callback)
   const audioEngineRef = useRef<import("./lib/AudioScheduler").AudioEngine | null>(null);
+
+  // Render queue
+  const [renderQueueOpen, setRenderQueueOpen] = useState(false);
+  const [renderJobs, setRenderJobs] = useState<RenderJob[]>([]);
+  const renderQueueProcessingRef = useRef(false);
 
   // Imp 9: Layout preset
   const [, setLayoutPreset] = useState<LayoutPreset>("edit");
@@ -1461,6 +1467,78 @@ export default function App() {
     }
   }
 
+  // ── Render Queue ───────────────────────────────────────────────────────────
+  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string }) {
+    const job: RenderJob = {
+      id: `rj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      label: opts.label,
+      codec: opts.codec,
+      outputWidth: opts.outputWidth,
+      outputHeight: opts.outputHeight,
+      status: "queued",
+      progress: 0,
+      createdAt: Date.now(),
+    };
+    setRenderJobs((prev) => [...prev, job]);
+    setRenderQueueOpen(true);
+  }
+
+  // Process render queue sequentially — called whenever jobs change
+  useEffect(() => {
+    async function processQueue() {
+      if (renderQueueProcessingRef.current) return;
+      if (!window.editorApi) return;
+      const pendingJob = renderJobs.find((j) => j.status === "queued");
+      if (!pendingJob) return;
+
+      renderQueueProcessingRef.current = true;
+
+      // Prompt for output path
+      const ext = pendingJob.codec === "libvpx-vp9" ? "webm" : pendingJob.codec === "prores_ks" ? "mov" : "mp4";
+      let outputPath: string | null = null;
+      try {
+        outputPath = await window.editorApi.chooseExportFile(`${project.sequence.name}.${ext}`);
+      } catch {
+        outputPath = null;
+      }
+
+      if (!outputPath) {
+        // User cancelled — remove the job
+        setRenderJobs((prev) => prev.filter((j) => j.id !== pendingJob.id));
+        renderQueueProcessingRef.current = false;
+        return;
+      }
+
+      // Mark as rendering
+      setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "rendering" as const, progress: 0 } : j));
+
+      // Subscribe to progress
+      const unsubProgress = window.editorApi.onExportProgress?.((pct) => {
+        setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, progress: pct } : j));
+      });
+
+      try {
+        const result = await window.editorApi.exportSequence({
+          outputPath,
+          project,
+          codec: pendingJob.codec,
+          outputWidth: pendingJob.outputWidth,
+          outputHeight: pendingJob.outputHeight,
+        });
+        setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "done" as const, progress: 100, outputPath: result.outputPath } : j));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Render failed.";
+        setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "error" as const, errorMessage: msg } : j));
+      } finally {
+        unsubProgress?.();
+        renderQueueProcessingRef.current = false;
+      }
+    }
+
+    void processQueue();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderJobs]);
+
   // ── Save Confirmation Modal handler ───────────────────────────────────────
   async function handleSaveConfirmChoice(choice: "save" | "discard" | "cancel") {
     const action = pendingActionRef.current;
@@ -2005,6 +2083,19 @@ export default function App() {
       {/* ── Toast notification system ── */}
       <ToastContainer />
 
+      {/* ── Render Queue Panel (floating) ── */}
+      {renderQueueOpen && (
+        <div style={{ position: "fixed", bottom: 60, right: 16, zIndex: 5000, width: 340 }}>
+          <RenderQueuePanel
+            jobs={renderJobs}
+            onRemoveJob={(id) => setRenderJobs((prev) => prev.filter((j) => j.id !== id))}
+            onRetryJob={(id) => setRenderJobs((prev) => prev.map((j) => j.id === id ? { ...j, status: "queued" as const, progress: 0, errorMessage: undefined } : j))}
+            onRevealOutput={(outputPath) => { void window.editorApi?.showInFolder?.(outputPath); }}
+            onClose={() => setRenderQueueOpen(false)}
+          />
+        </div>
+      )}
+
       {/* ── Command Palette ── */}
       <CommandPalette
         isOpen={commandPaletteOpen}
@@ -2213,6 +2304,26 @@ export default function App() {
             type="button"
           >
             🎚 Mixer
+          </button>
+          <button
+            className={`panel-toggle-btn${renderQueueOpen ? " on" : ""}`}
+            onClick={() => setRenderQueueOpen((v) => !v)}
+            title="Render Queue"
+            type="button"
+            style={{ position: "relative" }}
+          >
+            ⚙️ Queue
+            {renderJobs.filter((j) => j.status === "queued" || j.status === "rendering").length > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                width: 14, height: 14, borderRadius: "50%",
+                background: "#f7c948", color: "#000",
+                fontSize: "0.55rem", fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                {renderJobs.filter((j) => j.status === "queued" || j.status === "rendering").length}
+              </span>
+            )}
           </button>
 
           {/* FlowState Panel toggle */}
@@ -2472,6 +2583,7 @@ export default function App() {
               onSetVoiceBpm={(bpm) => { const v = Math.max(40, Math.min(240, Math.round(bpm))); setVoiceBpm(v); voiceChopRef.current?.setBpm(v); }}
               onSetVoiceGridFrames={(g) => { const v = Math.max(1, Math.round(g)); setVoiceGridFrames(v); voiceChopRef.current?.setGridFrames(v); }}
               onExport={handleExport}
+              onAddToQueue={handleAddToQueue}
               />
             </div>{/* /inspector-collapse */}
 

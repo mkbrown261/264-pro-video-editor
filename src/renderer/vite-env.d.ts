@@ -50,6 +50,8 @@ declare global {
       onBeforeClose: (callback: () => void) => () => void;
       /** Signal to the main process that the renderer is mounted and ready */
       notifyAppReady?: () => void;
+      /** Reveal a file in Finder/Explorer (optional — may not be implemented) */
+      showInFolder?: (filePath: string) => void;
     };
   }
 }
