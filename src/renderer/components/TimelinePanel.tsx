@@ -2039,13 +2039,14 @@ export function TimelinePanel({
                           }}
                         />
 
-                        {/* ── Fade-out overlay + handle ── */}
+                        {/* ── Fade-out overlay (only when fade is set) ── */}
                         {fadeOutFrames > 0 && (
                           <div
                             className="clip-fade-overlay fade-out-overlay"
                             style={{ width: Math.min(fadeOutPx, clipWidth * 0.5), right: 0, left: "auto" }}
                           />
                         )}
+                        {/* ── Fade-out handle ── ALWAYS rendered so user can drag from zero ── */}
                         <div
                           className={`fade-handle fade-handle-out${fadeOutFrames > 0 ? " has-fade" : ""}`}
                           title={`Fade out: ${(fadeOutFrames / sequenceFps).toFixed(2)}s — drag to adjust`}
