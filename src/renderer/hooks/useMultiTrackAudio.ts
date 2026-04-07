@@ -72,16 +72,21 @@ export function useMultiTrackAudio({
     const { activeAudioSegments: segs, sequenceFps: fps } = stateRef.current;
     const engine = getEngine();
 
-    // Decode any uncached buffers before scheduling (fast-path if already cached).
-    await engine.preload(segs);
-
-    if (!stateRef.current.isPlaying) return; // stopped while preloading
-
-    // Mark this key as handled so the seam effect below does not re-fire.
+    // Mark this key BEFORE the async decode so the seam effect never
+    // double-fires even if the decode takes a while.
     const key = segs
       .map((s) => `${s.clip.id}:${s.startFrame}:${(s.clip.volume ?? 1).toFixed(3)}:${(s.clip.speed ?? 1).toFixed(3)}:${s.track.muted ? 1 : 0}`)
       .join(",");
     lastPlayedKeyRef.current = key;
+
+    // Decode any uncached buffers (fast-path if already cached by lookahead).
+    await engine.preload(segs);
+
+    // NOTE: do NOT check isPlaying here. usePlaybackController calls startAudio
+    // and then sets isPlaying=true — so isPlaying is still false at this point
+    // by design. Just check that the key hasn't been invalidated (e.g. user
+    // paused AND scrubbed to a different position while we were decoding).
+    if (key !== lastPlayedKeyRef.current) return;
 
     engine.play({ segments: segs, playheadFrame: frame, fps, seamResume: false });
   }
@@ -100,8 +105,8 @@ export function useMultiTrackAudio({
   // are hot before the seam arrives.
   // --------------------------------------------------------------------------
   useEffect(() => {
-    if (!isPlaying) return;
-
+    // Preload while playing (lookahead) AND while paused/scrubbing
+    // so that buffers are hot before the user hits play.
     const segs = allSegments ?? stateRef.current.allSegments ?? [];
     const engine = getEngine();
 
@@ -109,7 +114,8 @@ export function useMultiTrackAudio({
       if (seg.track.kind !== "audio") return false;
       if (!seg.clip.isEnabled || seg.track.muted) return false;
       if (playheadFrame >= seg.endFrame) return false;
-      if (playheadFrame >= seg.startFrame) return false; // already active
+      // Include active segments too — keeps cache warm for startAudio
+      if (playheadFrame >= seg.startFrame) return true;
       const framesUntil = seg.startFrame - playheadFrame;
       return framesUntil > 0 && framesUntil <= LOOKAHEAD_FRAMES;
     });
@@ -160,13 +166,15 @@ export function useMultiTrackAudio({
 
   // --------------------------------------------------------------------------
   // Scrub sync (NOT playing)
-  // Stop any residual nodes when the user scrubs while paused.
+  // Stop residual nodes when the user scrubs while paused.
+  // Only fires on playheadFrame changes, not on every isPlaying toggle,
+  // so it does not kill audio that startAudio just scheduled.
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (isPlaying) return;
     getEngine().stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, playheadFrame]);
+  }, [playheadFrame]);
 
   // --------------------------------------------------------------------------
   // Cleanup on unmount
