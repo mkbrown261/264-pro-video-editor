@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import ReactDOM from "react-dom";
 import type { ClipTransitionType, MediaAsset } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 import { formatDuration, formatFileSize } from "../lib/format";
@@ -23,6 +24,71 @@ interface MediaPoolProps {
   onApplyTransition: (edge: "in" | "out") => void;
   /** New: apply any transition type with explicit duration */
   onApplyTransitionType?: (type: ClipTransitionType, edge: "in" | "out", durationFrames: number) => void;
+  /** FlowState subscription tier — gates Image-to-Video */
+  fsTier?: string;
+  /** Whether user is linked to FlowState */
+  fsLinked?: boolean;
+  /** Callback when Image-to-Video is requested for an image asset */
+  onImageToVideo?: (asset: MediaAsset) => void;
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  asset: MediaAsset;
+}
+
+function MediaContextMenu({
+  menu,
+  onAppend,
+  onImageToVideo,
+  isSubscribed,
+  onClose,
+}: {
+  menu: ContextMenuState;
+  onAppend: () => void;
+  onImageToVideo?: (() => void) | null;
+  isSubscribed: boolean;
+  onClose: () => void;
+}) {
+  const isImage = menu.asset.durationSeconds === 0 && !menu.asset.hasAudio;
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const menuEl = (
+    <div
+      className="media-context-menu"
+      style={{ left: menu.x, top: menu.y }}
+      onMouseDown={e => e.stopPropagation()}
+    >
+      <button
+        className="media-context-item"
+        onMouseDown={() => { onAppend(); onClose(); }}
+      >
+        ▶ Add to Timeline
+      </button>
+      {isImage && isSubscribed && (
+        <>
+          <div className="media-context-sep" />
+          <button
+            className="media-context-item"
+            onMouseDown={() => { onImageToVideo?.(); onClose(); }}
+          >
+            🎬 Image to Video
+          </button>
+        </>
+      )}
+    </div>
+  );
+
+  return ReactDOM.createPortal(menuEl, document.body);
 }
 
 // ── Hover-scrub card ──────────────────────────────────────────────────────────
@@ -38,20 +104,39 @@ function MediaCard({
   viewMode,
   onSelect,
   onAppend,
+  isSubscribed,
+  onImageToVideo,
 }: {
   asset: MediaAsset;
   selected: boolean;
   viewMode: "grid" | "list";
   onSelect: () => void;
   onAppend: () => void;
+  isSubscribed: boolean;
+  onImageToVideo?: (asset: MediaAsset) => void;
 }) {
   const [scrub, setScrub] = useState<ScrubState | null>(null);
   const [scrubThumb, setScrubThumb] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cardRef = useRef<HTMLButtonElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const isVideo = asset.durationSeconds > 0 && asset.previewUrl;
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = (e: MouseEvent) => {
+      // Close if click is not inside a context menu element
+      const target = e.target as HTMLElement;
+      if (!target.closest(".media-context-menu")) {
+        setContextMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [contextMenu]);
 
   // Create hidden video element for scrubbing
   useEffect(() => {
@@ -111,102 +196,132 @@ function MediaCard({
 
   if (viewMode === "list") {
     return (
-      <button
-        ref={cardRef}
-        className={`media-card media-card-list${selected ? " selected" : ""}`}
-        onClick={onSelect}
-        onDoubleClick={onAppend}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData("application/x-asset-id", asset.id);
-          e.dataTransfer.effectAllowed = "copy";
-        }}
-        type="button"
-        title={`${asset.name} — double-click to add`}
-      >
-        {thumbSrc ? (
-          <div
-            className="media-card-list-thumb"
-            style={{ backgroundImage: `url(${thumbSrc})`, backgroundSize: "cover", backgroundPosition: "center" }}
-          />
-        ) : (
-          <div className="media-card-list-thumb media-card-list-thumb--empty" />
-        )}
-        <div className="media-card-list-info">
-          <strong className="media-card-list-name">{asset.name}</strong>
-          <span className="media-card-list-meta">
-            {formatDuration(asset.durationSeconds)} · {asset.width}×{asset.height} · {asset.nativeFps.toFixed(2)} fps
-            {asset.videoCodec ? ` · ${asset.videoCodec.toUpperCase()}` : ""}
-            {asset.fileSize ? ` · ${formatFileSize(asset.fileSize)}` : ""}
-            {asset.hasAudio ? " · 🔊" : ""}
-            {asset.isHDR ? " · HDR" : ""}
-          </span>
-        </div>
-        {scrub && (
-          <div className="media-card-scrub-bar">
-            <div className="media-card-scrub-fill" style={{ width: `${scrub.progress * 100}%` }} />
+      <>
+        <button
+          ref={cardRef}
+          className={`media-card media-card-list${selected ? " selected" : ""}`}
+          onClick={onSelect}
+          onDoubleClick={onAppend}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY });
+          }}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("application/x-asset-id", asset.id);
+            e.dataTransfer.effectAllowed = "copy";
+          }}
+          type="button"
+          title={`${asset.name} — double-click to add`}
+        >
+          {thumbSrc ? (
+            <div
+              className="media-card-list-thumb"
+              style={{ backgroundImage: `url(${thumbSrc})`, backgroundSize: "cover", backgroundPosition: "center" }}
+            />
+          ) : (
+            <div className="media-card-list-thumb media-card-list-thumb--empty" />
+          )}
+          <div className="media-card-list-info">
+            <strong className="media-card-list-name">{asset.name}</strong>
+            <span className="media-card-list-meta">
+              {formatDuration(asset.durationSeconds)} · {asset.width}×{asset.height} · {asset.nativeFps.toFixed(2)} fps
+              {asset.videoCodec ? ` · ${asset.videoCodec.toUpperCase()}` : ""}
+              {asset.fileSize ? ` · ${formatFileSize(asset.fileSize)}` : ""}
+              {asset.hasAudio ? " · 🔊" : ""}
+              {asset.isHDR ? " · HDR" : ""}
+            </span>
           </div>
+          {scrub && (
+            <div className="media-card-scrub-bar">
+              <div className="media-card-scrub-fill" style={{ width: `${scrub.progress * 100}%` }} />
+            </div>
+          )}
+        </button>
+        {contextMenu && (
+          <MediaContextMenu
+            menu={{ ...contextMenu, asset }}
+            onAppend={onAppend}
+            onImageToVideo={onImageToVideo ? () => onImageToVideo(asset) : null}
+            isSubscribed={isSubscribed}
+            onClose={() => setContextMenu(null)}
+          />
         )}
-      </button>
+      </>
     );
   }
 
   // Grid mode
   return (
-    <button
-      ref={cardRef}
-      className={`media-card${selected ? " selected" : ""}${scrub ? " scrubbing" : ""}`}
-      onClick={onSelect}
-      onDoubleClick={onAppend}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("application/x-asset-id", asset.id);
-        e.dataTransfer.effectAllowed = "copy";
-        setDraggedAssetId(asset.id);
-      }}
-      onDragEnd={() => setDraggedAssetId(null)}
-      type="button"
-      title={`${asset.name} — double-click to add`}
-    >
-      {thumbSrc ? (
-        <div
-          className="media-card-preview"
-          style={{
-            backgroundImage: `linear-gradient(180deg, rgba(8,17,26,0.06), rgba(8,17,26,0.45)), url(${thumbSrc})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-          }}
+    <>
+      <button
+        ref={cardRef}
+        className={`media-card${selected ? " selected" : ""}${scrub ? " scrubbing" : ""}`}
+        onClick={onSelect}
+        onDoubleClick={onAppend}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY });
+        }}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("application/x-asset-id", asset.id);
+          e.dataTransfer.effectAllowed = "copy";
+          setDraggedAssetId(asset.id);
+        }}
+        onDragEnd={() => setDraggedAssetId(null)}
+        type="button"
+        title={`${asset.name} — double-click to add`}
+      >
+        {thumbSrc ? (
+          <div
+            className="media-card-preview"
+            style={{
+              backgroundImage: `linear-gradient(180deg, rgba(8,17,26,0.06), rgba(8,17,26,0.45)), url(${thumbSrc})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+            }}
+          />
+        ) : (
+          <div className="media-card-preview media-card-preview--empty">
+            <span className="media-card-no-thumb">🎬</span>
+          </div>
+        )}
+
+        {/* Scrub progress bar at bottom of preview */}
+        {scrub && (
+          <div className="media-card-scrub-bar">
+            <div className="media-card-scrub-fill" style={{ width: `${scrub.progress * 100}%` }} />
+          </div>
+        )}
+
+        <div className="media-card-meta">
+          <strong>{asset.name}</strong>
+          <span>{formatDuration(asset.durationSeconds)}</span>
+        </div>
+        <div className="media-card-detail">
+          <span>{asset.width}×{asset.height}</span>
+          <span>{asset.nativeFps.toFixed(2)} fps</span>
+        </div>
+        <div className="media-card-detail">
+          <span>{asset.hasAudio ? "🔊 Audio" : "Video only"}</span>
+          <span className="media-card-hint">dbl-click to add</span>
+        </div>
+      </button>
+      {contextMenu && (
+        <MediaContextMenu
+          menu={{ ...contextMenu, asset }}
+          onAppend={onAppend}
+          onImageToVideo={onImageToVideo ? () => onImageToVideo(asset) : null}
+          isSubscribed={isSubscribed}
+          onClose={() => setContextMenu(null)}
         />
-      ) : (
-        <div className="media-card-preview media-card-preview--empty">
-          <span className="media-card-no-thumb">🎬</span>
-        </div>
       )}
-
-      {/* Scrub progress bar at bottom of preview */}
-      {scrub && (
-        <div className="media-card-scrub-bar">
-          <div className="media-card-scrub-fill" style={{ width: `${scrub.progress * 100}%` }} />
-        </div>
-      )}
-
-      <div className="media-card-meta">
-        <strong>{asset.name}</strong>
-        <span>{formatDuration(asset.durationSeconds)}</span>
-      </div>
-      <div className="media-card-detail">
-        <span>{asset.width}×{asset.height}</span>
-        <span>{asset.nativeFps.toFixed(2)} fps</span>
-      </div>
-      <div className="media-card-detail">
-        <span>{asset.hasAudio ? "🔊 Audio" : "Video only"}</span>
-        <span className="media-card-hint">dbl-click to add</span>
-      </div>
-    </button>
+    </>
   );
 }
 
@@ -237,7 +352,11 @@ export function MediaPool({
   onAppendAsset,
   onApplyTransition,
   onApplyTransitionType,
+  fsTier,
+  fsLinked,
+  onImageToVideo,
 }: MediaPoolProps) {
+  const isSubscribed = (fsLinked === true) && (fsTier !== undefined) && (fsTier !== "free");
   const [activeTab, setActiveTab] = useState<"media" | "transitions">("media");
   const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
     try { return (localStorage.getItem("264pro_media_view") as "grid" | "list") ?? "grid"; } catch { return "grid"; }
@@ -401,6 +520,8 @@ export function MediaPool({
                 viewMode={viewMode}
                 onSelect={() => onSelectAsset(asset.id)}
                 onAppend={() => onAppendAsset(asset.id)}
+                isSubscribed={isSubscribed}
+                onImageToVideo={onImageToVideo}
               />
             ))}
 

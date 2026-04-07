@@ -175,11 +175,35 @@ const learningEngine = new LearningEngine();
 interface FlowStatePanelProps {
   isOpen: boolean;
   onClose: () => void;
+  onAddImageToMediaPool?: (imageUrl: string, name: string) => void;
 }
 
-type Tab = "assistant" | "projects" | "session" | "learn";
+type Tab = "assistant" | "projects" | "session" | "learn" | "generate";
 
-export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
+// ── Generate tab types ────────────────────────────────────────────────────────
+interface GeneratedImage {
+  id: string;
+  url: string;
+  prompt: string;
+  model: string;
+  aspectRatio: string;
+  ts: number;
+}
+
+const IMAGE_MODELS = [
+  { value: "dall-e-3",          label: "DALL·E 3" },
+  { value: "stable-diffusion",  label: "Stable Diffusion" },
+  { value: "flux",              label: "Flux" },
+];
+
+const ASPECT_RATIOS = [
+  { value: "1:1",  label: "1:1" },
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+  { value: "4:3",  label: "4:3" },
+];
+
+export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowStatePanelProps) {
   const [user, setUser] = useState<FSUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("assistant");
@@ -202,6 +226,14 @@ export function FlowStatePanel({ isOpen, onClose }: FlowStatePanelProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeResource, setActiveResource] = useState<GeneratedResource | null>(null);
   const [, forceUpdate] = React.useReducer(x => x + 1, 0);
+
+  // Generate tab state
+  const [genPrompt, setGenPrompt] = useState("");
+  const [genModel, setGenModel] = useState("dall-e-3");
+  const [genAspect, setGenAspect] = useState("1:1");
+  const [genBusy, setGenBusy] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [genImages, setGenImages] = useState<GeneratedImage[]>([]);
 
   const project = useEditorStore((s) => s.project);
 
@@ -563,25 +595,25 @@ Be specific, not generic. Surprising insights only.`;
               flexShrink: 0,
             }}
           >
-            {(["assistant", "projects", "session", "learn"] as Tab[]).map((t) => (
+            {(["assistant", "projects", "session", "learn", "generate"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
                 style={{
                   flex: 1,
-                  padding: "9px 4px",
+                  padding: "9px 2px",
                   background: "none",
                   border: "none",
                   borderBottom: `2px solid ${tab === t ? "#a855f7" : "transparent"}`,
                   color: tab === t ? "#d0a0ff" : "rgba(255,255,255,0.4)",
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: 600,
                   cursor: "pointer",
                   transition: "color 0.15s",
                   textTransform: "capitalize",
                 }}
               >
-                {t === "assistant" ? "🤖 AI" : t === "projects" ? "📁 Projects" : t === "session" ? "⚡ Session" : "📚 Learn"}
+                {t === "assistant" ? "🤖 AI" : t === "projects" ? "📁" : t === "session" ? "⚡" : t === "learn" ? "📚" : "🖼 Gen"}
               </button>
             ))}
           </div>
@@ -853,6 +885,222 @@ Be specific, not generic. Surprising insights only.`;
                 >
                   {sessionMsg}
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tab: Generate ── */}
+          {tab === "generate" && (
+            <div className="fs-gen-tab">
+              {user.tier === "free" ? (
+                <div className="fs-gen-locked">
+                  <div style={{ fontSize: 32 }}>🔒</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginTop: 10 }}>
+                    Pro Feature
+                  </div>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.6, marginTop: 8, textAlign: "center" }}>
+                    AI Image Generation is available for Pro, Team, and Enterprise subscribers.
+                  </div>
+                  <a
+                    href={`${FS_BASE}/upgrade?ref=264pro-imagegen`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      marginTop: 16,
+                      padding: "9px 20px",
+                      borderRadius: 9,
+                      background: "linear-gradient(135deg,#e07820,#a855f7)",
+                      color: "#fff",
+                      fontWeight: 700,
+                      fontSize: 13,
+                      textDecoration: "none",
+                      display: "inline-block",
+                    }}
+                  >
+                    Upgrade to Pro
+                  </a>
+                </div>
+              ) : (
+                <>
+                  {/* Prompt */}
+                  <div style={{ padding: "12px 12px 8px" }}>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 6, fontWeight: 600 }}>PROMPT</div>
+                    <textarea
+                      className="fs-gen-prompt"
+                      value={genPrompt}
+                      onChange={e => setGenPrompt(e.target.value)}
+                      placeholder="Describe the image you want to generate…"
+                      rows={3}
+                    />
+                  </div>
+
+                  {/* Options */}
+                  <div className="fs-gen-opts">
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 4, fontWeight: 600 }}>MODEL</div>
+                      <select
+                        value={genModel}
+                        onChange={e => setGenModel(e.target.value)}
+                        style={{
+                          width: "100%",
+                          background: "rgba(255,255,255,0.06)",
+                          border: "1px solid rgba(255,255,255,0.12)",
+                          borderRadius: 6,
+                          color: "#e8e8e8",
+                          fontSize: 11,
+                          padding: "5px 7px",
+                        }}
+                      >
+                        {IMAGE_MODELS.map(m => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 4, fontWeight: 600 }}>RATIO</div>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {ASPECT_RATIOS.map(ar => (
+                          <button
+                            key={ar.value}
+                            onClick={() => setGenAspect(ar.value)}
+                            style={{
+                              padding: "4px 7px",
+                              borderRadius: 5,
+                              border: `1px solid ${genAspect === ar.value ? "rgba(168,85,247,0.6)" : "rgba(255,255,255,0.12)"}`,
+                              background: genAspect === ar.value ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.05)",
+                              color: genAspect === ar.value ? "#d0a0ff" : "rgba(255,255,255,0.55)",
+                              fontSize: 10,
+                              fontWeight: 600,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {ar.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Generate button */}
+                  <div style={{ padding: "0 12px 12px" }}>
+                    <button
+                      onClick={async () => {
+                        const prompt = genPrompt.trim();
+                        if (!prompt || genBusy) return;
+                        setGenBusy(true);
+                        setGenError(null);
+                        try {
+                          const res = await fsApi.apiCall("/api/264pro/generate-image", "POST", {
+                            prompt,
+                            model: genModel,
+                            aspectRatio: genAspect,
+                          }) as { imageUrl?: string; error?: string };
+                          if (res?.error) throw new Error(res.error);
+                          const url = res?.imageUrl;
+                          if (!url) throw new Error("No image returned");
+                          setGenImages(prev => [{
+                            id: `gi_${Date.now()}`,
+                            url,
+                            prompt,
+                            model: genModel,
+                            aspectRatio: genAspect,
+                            ts: Date.now(),
+                          }, ...prev]);
+                        } catch (err) {
+                          setGenError(err instanceof Error ? err.message : "Generation failed");
+                        } finally {
+                          setGenBusy(false);
+                        }
+                      }}
+                      disabled={genBusy || !genPrompt.trim()}
+                      style={{
+                        width: "100%",
+                        padding: "9px",
+                        borderRadius: 9,
+                        background: genBusy || !genPrompt.trim()
+                          ? "rgba(168,85,247,0.2)"
+                          : "linear-gradient(135deg,#7c3aed,#a855f7)",
+                        border: "none",
+                        color: "#fff",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        cursor: genBusy || !genPrompt.trim() ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 7,
+                      }}
+                    >
+                      {genBusy ? (
+                        <><span className="import-spinner" style={{ width: 12, height: 12 }} /> Generating…</>
+                      ) : "✨ Generate Image"}
+                    </button>
+                    {genError && (
+                      <div style={{ marginTop: 8, fontSize: 11, color: "#f87171", textAlign: "center" }}>{genError}</div>
+                    )}
+                    <div style={{ marginTop: 6, fontSize: 10, color: "rgba(255,255,255,0.3)", textAlign: "center" }}>
+                      Powered by FlowState · Uses subscription tokens
+                    </div>
+                  </div>
+
+                  {/* Results grid */}
+                  {genImages.length > 0 && (
+                    <div className="fs-gen-results">
+                      {genImages.map(img => (
+                        <div key={img.id} className="fs-gen-thumb">
+                          <img
+                            src={img.url}
+                            alt={img.prompt}
+                            style={{ width: "100%", display: "block", borderRadius: "6px 6px 0 0" }}
+                          />
+                          <div style={{ padding: "6px 8px", background: "rgba(0,0,0,0.5)", borderRadius: "0 0 6px 6px" }}>
+                            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 5 }}>
+                              {img.model} · {img.aspectRatio} · {new Date(img.ts).toLocaleTimeString()}
+                            </div>
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button
+                                onClick={() => onAddImageToMediaPool?.(img.url, `AI_${img.model}_${Date.now()}.png`)}
+                                style={{
+                                  flex: 1,
+                                  padding: "4px 6px",
+                                  borderRadius: 5,
+                                  background: "rgba(168,85,247,0.2)",
+                                  border: "1px solid rgba(168,85,247,0.4)",
+                                  color: "#d0a0ff",
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                + Media Pool
+                              </button>
+                              <a
+                                href={img.url}
+                                download={`ai_image_${img.ts}.png`}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  padding: "4px 8px",
+                                  borderRadius: 5,
+                                  background: "rgba(255,255,255,0.07)",
+                                  border: "1px solid rgba(255,255,255,0.12)",
+                                  color: "rgba(255,255,255,0.7)",
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  textDecoration: "none",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                }}
+                              >
+                                ⬇
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
