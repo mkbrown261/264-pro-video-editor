@@ -380,6 +380,29 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
     const [isFullscreen,    setIsFullscreen]    = useState(false);
     const [stageSize,       setStageSize]       = useState({ w: 960, h: 540 });
+    // Proxy / Original toggle: when proxyMode=true use asset.previewUrl (proxy),
+    // when false use the original source via media:// protocol
+    const [proxyMode, setProxyMode] = useState(true);
+
+    // Build a patched version of activeSegment that overrides previewUrl
+    // based on proxyMode. When using original, we construct the media:// URL
+    // from the asset's sourcePath (same pattern as probeMediaFile returns).
+    const patchedActiveSegment = useMemo(() => {
+      if (!activeSegment) return null;
+      if (proxyMode) return activeSegment;
+      const originalUrl = `media://asset?path=${encodeURIComponent(activeSegment.asset.sourcePath)}`;
+      return {
+        ...activeSegment,
+        asset: { ...activeSegment.asset, previewUrl: originalUrl },
+      };
+    }, [activeSegment, proxyMode]);
+
+    const patchedSelectedAsset = useMemo(() => {
+      if (!selectedAsset) return null;
+      if (proxyMode) return selectedAsset;
+      const originalUrl = `media://asset?path=${encodeURIComponent(selectedAsset.sourcePath)}`;
+      return { ...selectedAsset, previewUrl: originalUrl };
+    }, [selectedAsset, proxyMode]);
 
     // ── Playback controller ───────────────────────────────────────────────────
     // activeAudioSegment is kept in props for API compat but audio is now
@@ -387,7 +410,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const { togglePlayback, pausePlayback, stopPlayback } = usePlaybackController({
       videoRef,
       audioRef,
-      activeSegment,
+      activeSegment: patchedActiveSegment,
       activeAudioSegment: activeAudioSegment,
       segments,
       isPlaying,
@@ -460,18 +483,18 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     // ── Fallback: load preview asset when no timeline clip is active ──────────
     useEffect(() => {
       const video = videoRef.current;
-      if (!video || activeSegment) return;
-      if (!selectedAsset) { video.removeAttribute("src"); video.load(); return; }
-      if (video.currentSrc !== selectedAsset.previewUrl) {
-        video.src = selectedAsset.previewUrl;
+      if (!video || patchedActiveSegment) return;
+      if (!patchedSelectedAsset) { video.removeAttribute("src"); video.load(); return; }
+      if (video.currentSrc !== patchedSelectedAsset.previewUrl) {
+        video.src = patchedSelectedAsset.previewUrl;
         video.load();
       }
-    }, [activeSegment, selectedAsset?.id, selectedAsset?.previewUrl]);
+    }, [patchedActiveSegment, patchedSelectedAsset?.id, patchedSelectedAsset?.previewUrl]);
 
     // ── Derived display state ─────────────────────────────────────────────────
     // IMPORTANT: These must be computed BEFORE any useEffect that references them
     // to avoid the "Cannot access before initialization" TDZ error.
-    const previewAsset    = activeSegment?.asset ?? selectedAsset ?? null;
+    const previewAsset    = patchedActiveSegment?.asset ?? patchedSelectedAsset ?? null;
     const timelineReady   = totalFrames > 0;
     const previewOpacity  = getPreviewOpacity(activeSegment, playheadFrame);
     const transitionState = getActiveTransitionState(activeSegment, playheadFrame);
@@ -616,6 +639,16 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             FX
           </div>
         )}
+        {/* Proxy badge */}
+        {proxyMode && previewAsset && (
+          <div
+            className="viewer-effects-badge"
+            aria-label="Playing proxy"
+            style={{ left: "auto", right: effectsFilter ? 36 : 8, background: "rgba(80,160,255,0.85)", color: "#fff" }}
+          >
+            P
+          </div>
+        )}
 
         {/* ── Stage ── */}
         <div ref={stageRef} className="viewer-stage">
@@ -743,6 +776,16 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           </div>
 
           <div className="transport-right">
+            {/* Proxy / Original quality toggle */}
+            <button
+              className={`transport-btn${proxyMode ? " active" : ""}`}
+              onClick={() => setProxyMode((m) => !m)}
+              title={proxyMode ? "Playing proxy — click for Original quality" : "Playing Original — click for Proxy"}
+              type="button"
+              style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.05em" }}
+            >
+              {proxyMode ? "PROXY" : "ORIG"}
+            </button>
             {hasGrade && (
               <span className="viewer-grade-badge" title="Color grade active">● GRADE</span>
             )}
