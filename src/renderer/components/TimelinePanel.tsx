@@ -272,6 +272,7 @@ export function TimelinePanel({
   // ── Interaction state ─────────────────────────────────────────────────────
   const [trimState, setTrimState]                   = useState<TrimState | null>(null);
   const [fadeHandleState, setFadeHandleState]       = useState<FadeHandleState | null>(null);
+  const fadeHandleStateRef                          = useRef<FadeHandleState | null>(null);
   const [isScrubbingPlayhead, setIsScrubbingPlayhead] = useState(false);
   const [dragState, setDragState]                   = useState<DragState | null>(null);
   // ── Media-pool drag state ─────────────────────────────────────────────────
@@ -467,10 +468,16 @@ export function TimelinePanel({
       const dur = snapFrame(rawDur, se, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
       propsRef.current.onSetTransitionDuration(fhs.clipId, fhs.edge, Math.max(0, dur));
     };
-    const onUp = () => setFadeHandleState(null);
+    const onUp = () => { fadeHandleStateRef.current = null; setFadeHandleState(null); };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    // Safety: also release if window loses focus mid-drag
+    window.addEventListener("blur", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("blur", onUp);
+    };
   }, [fadeHandleState]);
 
   // ── Track height resize ───────────────────────────────────────────────────
@@ -1714,6 +1721,8 @@ export function TimelinePanel({
                   onMouseDown={(e) => {
                     // FIX 3: Start lasso when dragging on empty lane area (no clip under cursor)
                     if (e.button !== 0 || toolMode !== "select" || isLocked) return;
+                    // Don't start lasso if a fade-handle drag is in progress (stuck drag guard)
+                    if (fadeHandleStateRef.current) return;
                     if ((e.target as HTMLElement).closest("[data-clip-id],.timeline-clip-handle,.fade-handle")) return;
                     // Use clientX/Y consistently with the move handler (viewport coords)
                     const lb = { startX: e.clientX, startY: e.clientY, curX: e.clientX, curY: e.clientY };
@@ -1907,13 +1916,9 @@ export function TimelinePanel({
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();
                             propsRef.current.onSelectClip(segment.clip.id);
-                            setFadeHandleState({
-                              clipId: segment.clip.id,
-                              edge: "in",
-                              anchorX: e.clientX,
-                              originalDurationFrames: fadeInFrames,
-                              maxFrames: Math.floor(segment.durationFrames * 0.5)
-                            });
+                            const fhs = { clipId: segment.clip.id, edge: "in" as const, anchorX: e.clientX, originalDurationFrames: fadeInFrames, maxFrames: Math.floor(segment.durationFrames * 0.5) };
+                            fadeHandleStateRef.current = fhs;
+                            setFadeHandleState(fhs);
                           }}
                         />
 
@@ -2044,18 +2049,14 @@ export function TimelinePanel({
                         <div
                           className={`fade-handle fade-handle-out${fadeOutFrames > 0 ? " has-fade" : ""}`}
                           title={`Fade out: ${(fadeOutFrames / sequenceFps).toFixed(2)}s — drag to adjust`}
-                          style={{ right: Math.min(fadeOutPx, clipWidth - 16), left: "auto" }}
+                          style={{ left: Math.max(0, clipWidth - 16 - Math.min(fadeOutPx, clipWidth - 16)) }}
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();
                             propsRef.current.onSelectClip(segment.clip.id);
-                            setFadeHandleState({
-                              clipId: segment.clip.id,
-                              edge: "out",
-                              anchorX: e.clientX,
-                              originalDurationFrames: fadeOutFrames,
-                              maxFrames: Math.floor(segment.durationFrames * 0.5)
-                            });
+                            const fhs = { clipId: segment.clip.id, edge: "out" as const, anchorX: e.clientX, originalDurationFrames: fadeOutFrames, maxFrames: Math.floor(segment.durationFrames * 0.5) };
+                            fadeHandleStateRef.current = fhs;
+                            setFadeHandleState(fhs);
                           }}
                         />
                       </div>

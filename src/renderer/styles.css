@@ -3772,8 +3772,7 @@ kbd {
   right: 0; left: auto;
   background: linear-gradient(to left, rgba(0,0,0,0.55) 0%, transparent 100%);
 }
-/* fade-handle position — driven by inline style from JSX; these are fallbacks */
-.fade-handle.fade-handle-out { left: auto !important; }
+/* fade-handle-out: left is set via inline style (clipWidth - 16 - fadeOutPx) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GHOST CLIP PREVIEW
@@ -4932,10 +4931,10 @@ kbd {
 .fade-handle:hover, .fade-handle.has-fade { opacity: 1; }
 .timeline-clip:hover .fade-handle { opacity: 0.6; }
 .timeline-clip:hover .fade-handle:hover { opacity: 1; }
-/* fade-handle-in: positioned via inline style left=fadeInPx */
+/* Both handles use left-based positioning driven by inline style from JSX */
 .fade-handle-in  { border-radius: 0 0 3px 0; }
-/* fade-handle-out: inline style sets right=fadeOutPx; must cancel left */
-.fade-handle-out { left: auto !important; border-radius: 0 0 0 3px; }
+/* fade-handle-out starts at right edge: left = clipWidth - handleWidth - fadeOutPx */
+.fade-handle-out { border-radius: 0 0 0 3px; }
 .fade-handle::after {
   content: "";
   width: 5px;
