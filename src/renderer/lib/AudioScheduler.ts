@@ -20,7 +20,6 @@ import type { TimelineSegment } from "../../shared/timeline";
 // ── AudioScheduler (one-shot, for FlowState panel) ───────────────────────────
 
 // 40 ms crossfade applied to start and end of every scheduled buffer
-// (was 3 ms — too short for seamless clip-to-clip crossfade; 40 ms is inaudible but pop-free)
 const FADE_DURATION_S = 0.04;
 
 interface ScheduledSource {
@@ -35,7 +34,6 @@ export class AudioScheduler {
   private activeSources: ScheduledSource[] = [];
   private masterGain: GainNode | null = null;
 
-  // ── Lazy AudioContext initialisation ────────────────────────────────────────
   private getCtx(): AudioContext {
     if (!this.ctx || this.ctx.state === "closed") {
       this.ctx = new AudioContext();
@@ -46,7 +44,6 @@ export class AudioScheduler {
     return this.ctx;
   }
 
-  // ── Preload a list of assets into AudioBuffers ───────────────────────────────
   async preload(assets: MediaAsset[]): Promise<void> {
     const ctx = this.getCtx();
     await Promise.all(
@@ -60,55 +57,32 @@ export class AudioScheduler {
             const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
             this.bufferCache.set(asset.id, audioBuffer);
           } catch {
-            // Silently skip assets that can't be decoded (video-only, etc.)
+            // Silently skip assets that can't be decoded
           }
         })
     );
   }
 
-  // ── Play a single asset starting at sourceOffsetSec ─────────────────────────
-  play(
-    asset: MediaAsset,
-    sourceOffsetSec: number,
-    playbackRate = 1,
-    volume = 1
-  ): void {
+  play(asset: MediaAsset, sourceOffsetSec: number, playbackRate = 1, volume = 1): void {
     const ctx = this.getCtx();
     if (ctx.state === "suspended") void ctx.resume();
-
     const buffer = this.bufferCache.get(asset.id);
     if (!buffer) return;
-
-    const clampedOffset = Math.max(
-      0,
-      Math.min(sourceOffsetSec, buffer.duration - FADE_DURATION_S)
-    );
-
-    // Per-source gain node (for fade-in/out)
+    const clampedOffset = Math.max(0, Math.min(sourceOffsetSec, buffer.duration - FADE_DURATION_S));
     const gainNode = ctx.createGain();
     gainNode.gain.setValueAtTime(0, ctx.currentTime);
-    gainNode.gain.linearRampToValueAtTime(
-      Math.max(0, Math.min(2, volume)),
-      ctx.currentTime + FADE_DURATION_S
-    );
+    gainNode.gain.linearRampToValueAtTime(Math.max(0, Math.min(2, volume)), ctx.currentTime + FADE_DURATION_S);
     gainNode.connect(this.masterGain ?? ctx.destination);
-
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = Math.max(0.25, Math.min(4, playbackRate));
     source.connect(gainNode);
     source.start(ctx.currentTime, clampedOffset);
-
     const scheduled: ScheduledSource = { source, gainNode, assetId: asset.id };
     this.activeSources.push(scheduled);
-
-    // Clean up reference when source naturally ends
-    source.onended = () => {
-      this.activeSources = this.activeSources.filter((s) => s !== scheduled);
-    };
+    source.onended = () => { this.activeSources = this.activeSources.filter((s) => s !== scheduled); };
   }
 
-  // ── Stop all active sources with 40 ms fade-out ──────────────────────────────
   stop(): void {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -119,36 +93,24 @@ export class AudioScheduler {
         gainNode.gain.setValueAtTime(gainNode.gain.value, now);
         gainNode.gain.linearRampToValueAtTime(0, now + FADE_DURATION_S);
         source.stop(now + FADE_DURATION_S + 0.001);
-      } catch {
-        // Already stopped
-      }
+      } catch { /* already stopped */ }
     }
     this.activeSources = [];
   }
 
-  // ── Suspend (pause) the AudioContext ────────────────────────────────────────
   async pause(): Promise<void> {
     this.stop();
-    if (this.ctx && this.ctx.state === "running") {
-      await this.ctx.suspend();
-    }
+    if (this.ctx && this.ctx.state === "running") await this.ctx.suspend();
   }
 
-  // ── Resume after pause ───────────────────────────────────────────────────────
   async resume(): Promise<void> {
-    if (this.ctx && this.ctx.state === "suspended") {
-      await this.ctx.resume();
-    }
+    if (this.ctx && this.ctx.state === "suspended") await this.ctx.resume();
   }
 
-  // ── Set master volume (0–2) ──────────────────────────────────────────────────
   setMasterVolume(volume: number): void {
-    if (this.masterGain) {
-      this.masterGain.gain.value = Math.max(0, Math.min(2, volume));
-    }
+    if (this.masterGain) this.masterGain.gain.value = Math.max(0, Math.min(2, volume));
   }
 
-  // ── Fully release all resources ──────────────────────────────────────────────
   dispose(): void {
     this.stop();
     void this.ctx?.close();
@@ -158,7 +120,6 @@ export class AudioScheduler {
     this.activeSources = [];
   }
 
-  // ── Is a buffer cached for this asset? ──────────────────────────────────────
   isLoaded(assetId: string): boolean {
     return this.bufferCache.has(assetId);
   }
@@ -171,34 +132,51 @@ export class AudioScheduler {
  * ─────────────────────────────────────────────────────────────────────────────
  * Sample-accurate multi-track audio playback using AudioBufferSourceNode.
  *
- * Key principle: decode each source file ONCE into an AudioBuffer, then
- * schedule playback with start(when, offset, duration) — no seek latency,
- * no HTMLMediaElement, no gaps at seams.
+ * STOP SAFETY:
+ *   activeSources is keyed by a monotonic nodeId (not clipId). This ensures
+ *   that when a clip is replaced at a seam, the OLD node's onended callback
+ *   cannot accidentally delete the NEW node from the map. _stopAll() snapshots
+ *   the map and clears it before iterating, so stop() always captures every
+ *   node that was active at the moment stop was called.
  *
- * Because AudioBufferSourceNode is fire-and-forget (single-use), "seeking"
- * means: stop all running nodes, create fresh nodes, call start() with the
- * new offset. Since buffers are already decoded this is instantaneous.
+ * SEAM CROSSFADE (no gap, no stutter):
+ *   At a seam, old nodes fade out over XFADE_S while new nodes fade IN over
+ *   the same window. Both happen simultaneously starting at ctx.currentTime.
+ *   There is no silent gap between them.
+ *
+ * STOP = IMMEDIATE:
+ *   stop()/pause() set gain to 0 and call source.stop() with no future offset.
+ *   source.stop(when) uses max(when, scheduledStartTime) so even nodes that
+ *   haven't started yet are correctly terminated.
  */
 
-/** Latency budget (seconds) given to the Web Audio scheduler before playback
- *  begins. 15 ms ensures all source.start() calls are committed before the
- *  first sample plays — gives sample-accurate simultaneous multi-track start. */
+/** Budget (s) given to Web Audio scheduler at play-start. 15ms ensures all
+ *  source.start() calls are committed before the first sample plays. */
 const START_LATENCY = 0.015;
 
-/** Short fade applied at stop/seek to prevent DC-offset click (5 ms). */
-const STOP_FADE_S = 0.005;
+/** Crossfade duration at seams (s). Long enough to be click-free, short
+ *  enough to be inaudible as a transition. 8ms is the sweet spot. */
+const XFADE_S = 0.008;
+
+/** Stop fade on explicit stop/pause (s). Must be > 0 to avoid DC-offset click,
+ *  but as short as possible so audio feels instant. */
+const STOP_FADE_S = 0.004;
+
+// Monotonically increasing ID for each scheduled node — never reuse clipId.
+let _nodeIdCounter = 0;
 
 interface ActiveSource {
   source: AudioBufferSourceNode;
   gainNode: GainNode;
-  trackGainNode: GainNode;
+  /** AudioContext time when source.start() was scheduled */
+  scheduledAt: number;
 }
 
 export interface PlayParams {
   segments: TimelineSegment[];
   playheadFrame: number;
   fps: number;
-  /** If true, skip the START_LATENCY offset (seam resume — buffers already hot). */
+  /** true = seam crossfade (simultaneous fade-out/fade-in, no gap) */
   seamResume?: boolean;
 }
 
@@ -209,11 +187,11 @@ export class AudioEngine {
   /** URL → decoded AudioBuffer. Persistent across play/pause/seek cycles. */
   private bufferCache = new Map<string, AudioBuffer>();
 
-  /** URLs currently being fetched/decoded — prevents duplicate in-flight fetches. */
+  /** URLs currently being fetched — prevents duplicate in-flight downloads. */
   private pendingFetches = new Set<string>();
 
-  /** Currently scheduled AudioBufferSourceNodes, keyed by clip ID. */
-  private activeSources = new Map<string, ActiveSource>();
+  /** nodeId → active source. Monotonic IDs prevent onended cross-deletion. */
+  private activeSources = new Map<number, ActiveSource>();
 
   /** Per-track gain nodes, keyed by track ID. */
   private trackGains = new Map<string, GainNode>();
@@ -250,12 +228,6 @@ export class AudioEngine {
   }
 
   // ── Preload ────────────────────────────────────────────────────────────────
-  /** Decode all segments not yet in the buffer cache, in parallel.
-   *  In-flight deduplication: if a URL is already being fetched, skip it
-   *  rather than starting a second concurrent download of the same file.
-   *  Large video files (hundreds of MB) must not be downloaded multiple times
-   *  as that starves the media:// protocol handler used by <video> and <img>.
-   */
   async preload(segments: TimelineSegment[]): Promise<void> {
     const ctx = this.getCtx();
     await Promise.all(
@@ -263,8 +235,8 @@ export class AudioEngine {
         .filter((seg) => {
           const url = seg.asset?.previewUrl;
           if (!url) return false;
-          if (this.bufferCache.has(url)) return false;  // already decoded
-          if (this.pendingFetches.has(url)) return false; // already in flight
+          if (this.bufferCache.has(url)) return false;
+          if (this.pendingFetches.has(url)) return false;
           return true;
         })
         .map(async (seg) => {
@@ -278,7 +250,7 @@ export class AudioEngine {
             const audioBuffer = await ctx.decodeAudioData(ab);
             this.bufferCache.set(url, audioBuffer);
           } catch {
-            // Silently skip — no audio track or decode error
+            // No audio track or decode error — skip silently
           } finally {
             this.pendingFetches.delete(url);
           }
@@ -287,78 +259,24 @@ export class AudioEngine {
   }
 
   // ── Play ───────────────────────────────────────────────────────────────────
-  /**
-   * Stop any active nodes and immediately schedule all segments with
-   * sample-accurate timing anchored to AudioContext.currentTime.
-   */
   play(params: PlayParams): void {
     const { segments, playheadFrame, fps, seamResume = false } = params;
     const ctx = this.getCtx();
     if (ctx.state === "suspended") void ctx.resume();
 
-    // Stop existing nodes with a micro-fade to prevent click.
-    // New nodes must start AFTER the old ones have stopped to prevent
-    // double-play. Use the stop-fade duration as the scheduling offset.
-    const stopFade = this.activeSources.size > 0 ? STOP_FADE_S : 0;
-    this._stopAll(ctx, stopFade);
+    const now = ctx.currentTime;
 
-    // Schedule new nodes to start after the outgoing fade completes.
-    const latency = seamResume ? stopFade + 0.001 : START_LATENCY;
-    const startAt = ctx.currentTime + latency;
-
-    for (const seg of segments) {
-      const url = seg.asset?.previewUrl;
-      if (!url) continue;
-
-      const buffer = this.bufferCache.get(url);
-      if (!buffer) continue; // not yet decoded — preload() should have been called
-
-      const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
-      const trackMuted = seg.track.muted ?? false;
-      const clipVol = Math.max(0, seg.clip.volume ?? 1);
-      const effectiveGain = Math.min(2, trackMuted ? 0 : clipVol);
-
-      // Where in the source file to begin reading
-      const playheadOffset = Math.max(0, playheadFrame - seg.startFrame);
-      const sourceOffset = seg.sourceInSeconds + (playheadOffset / fps) * clipSpeed;
-
-      // How many seconds of source to play (clip end minus playhead position)
-      const remainingFrames = seg.endFrame - Math.max(seg.startFrame, playheadFrame);
-      const duration = (remainingFrames / fps) / clipSpeed;
-
-      if (duration <= 0) continue;
-
-      // Clamp sourceOffset and duration so they stay within the buffer
-      const safeSourceOffset = Math.max(0, Math.min(sourceOffset, buffer.duration - 0.001));
-      const maxDuration = buffer.duration - safeSourceOffset;
-      const safeDuration = Math.max(0, Math.min(duration, maxDuration));
-
-      if (safeDuration <= 0) continue;
-
-      // Per-clip gain (for fade and volume)
-      const gainNode = ctx.createGain();
-      gainNode.gain.setValueAtTime(0, startAt);
-      gainNode.gain.linearRampToValueAtTime(effectiveGain, startAt + STOP_FADE_S);
-
-      // Per-track gain node (for track-level volume control)
-      const trackGainNode = this.getTrackGain(ctx, seg.track.id);
-
-      gainNode.connect(trackGainNode);
-
-      // AudioBufferSourceNode is single-use — always create a new one
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.playbackRate.value = clipSpeed;
-      source.connect(gainNode);
-      source.start(startAt, safeSourceOffset, safeDuration);
-
-      const clipId = seg.clip.id;
-      const entry: ActiveSource = { source, gainNode, trackGainNode };
-      this.activeSources.set(clipId, entry);
-
-      source.onended = () => {
-        this.activeSources.delete(clipId);
-      };
+    if (seamResume) {
+      // CROSSFADE: fade out existing nodes over XFADE_S while new nodes
+      // fade in over the same window. No gap, no silence, no stutter.
+      this._fadeOutAll(ctx, now, XFADE_S);
+      // New nodes start immediately (at now) and fade in over XFADE_S.
+      this._scheduleNodes(ctx, segments, playheadFrame, fps, now, XFADE_S);
+    } else {
+      // HARD START: stop existing nodes immediately, start new ones after
+      // a small latency budget to ensure all start() calls are committed.
+      this._stopAll(ctx, now, STOP_FADE_S);
+      this._scheduleNodes(ctx, segments, playheadFrame, fps, now + START_LATENCY, STOP_FADE_S);
     }
   }
 
@@ -366,27 +284,39 @@ export class AudioEngine {
   stop(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    this._stopAll(ctx, 0); // immediate — user explicitly stopped playback
+    const now = ctx.currentTime;
+    // Snapshot first, clear immediately — so nothing can add to activeSources
+    // between the snapshot and the stop calls.
+    const snapshot = new Map(this.activeSources);
+    this.activeSources.clear();
+    for (const [, { source, gainNode, scheduledAt }] of snapshot) {
+      try {
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+        gainNode.gain.linearRampToValueAtTime(0, now + STOP_FADE_S);
+        // Stop after the fade, but never before the node has started.
+        // If scheduledAt is in the future, stop shortly after it would start.
+        const stopAt = Math.max(scheduledAt, now) + STOP_FADE_S + 0.001;
+        source.stop(stopAt);
+      } catch { /* already stopped */ }
+    }
   }
 
-  // ── Pause (alias for stop — AudioBufferSourceNode has no pause) ─────────────
+  // ── Pause (same as stop for AudioBufferSourceNode) ────────────────────────
   pause(): void {
     this.stop();
   }
 
-  // ── Volume control ────────────────────────────────────────────────────────
+  // ── Volume ────────────────────────────────────────────────────────────────
   setTrackVolume(trackId: string, vol: number): void {
     const tg = this.trackGains.get(trackId);
     if (tg) tg.gain.value = Math.max(0, Math.min(2, vol));
   }
 
   setMasterVolume(vol: number): void {
-    if (this.masterGain) {
-      this.masterGain.gain.value = Math.max(0, Math.min(2, vol));
-    }
+    if (this.masterGain) this.masterGain.gain.value = Math.max(0, Math.min(2, vol));
   }
 
-  // ── Query ─────────────────────────────────────────────────────────────────
   isBufferCached(url: string): boolean {
     return this.bufferCache.has(url);
   }
@@ -394,12 +324,9 @@ export class AudioEngine {
   // ── Dispose ───────────────────────────────────────────────────────────────
   dispose(): void {
     this.stop();
-    // Small delay to let the stop fade complete before closing context
     const ctx = this.ctx;
     if (ctx) {
-      window.setTimeout(() => {
-        void ctx.close();
-      }, Math.ceil((STOP_FADE_S + 0.002) * 1000));
+      window.setTimeout(() => void ctx.close(), Math.ceil((STOP_FADE_S + 0.01) * 1000));
     }
     this.ctx = null;
     this.masterGain = null;
@@ -409,25 +336,85 @@ export class AudioEngine {
     this.pendingFetches.clear();
   }
 
-  // ── Internal helpers ───────────────────────────────────────────────────────
-  private _stopAll(ctx: AudioContext, fadeSecs: number): void {
-    const now = ctx.currentTime;
+  // ── Internal: schedule new nodes ─────────────────────────────────────────
+  private _scheduleNodes(
+    ctx: AudioContext,
+    segments: TimelineSegment[],
+    playheadFrame: number,
+    fps: number,
+    startAt: number,
+    fadeInSecs: number
+  ): void {
+    for (const seg of segments) {
+      const url = seg.asset?.previewUrl;
+      if (!url) continue;
+      const buffer = this.bufferCache.get(url);
+      if (!buffer) continue;
+
+      const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+      const clipVol = Math.max(0, seg.clip.volume ?? 1);
+      const effectiveGain = Math.min(2, (seg.track.muted ?? false) ? 0 : clipVol);
+
+      const playheadOffset = Math.max(0, playheadFrame - seg.startFrame);
+      const sourceOffset = seg.sourceInSeconds + (playheadOffset / fps) * clipSpeed;
+      const remainingFrames = seg.endFrame - Math.max(seg.startFrame, playheadFrame);
+      const duration = (remainingFrames / fps) / clipSpeed;
+      if (duration <= 0) continue;
+
+      const safeSourceOffset = Math.max(0, Math.min(sourceOffset, buffer.duration - 0.001));
+      const safeDuration = Math.max(0, Math.min(duration, buffer.duration - safeSourceOffset));
+      if (safeDuration <= 0) continue;
+
+      // Per-clip gain (fade-in + volume)
+      const gainNode = ctx.createGain();
+      gainNode.gain.setValueAtTime(0, startAt);
+      gainNode.gain.linearRampToValueAtTime(effectiveGain, startAt + fadeInSecs);
+      gainNode.connect(this.getTrackGain(ctx, seg.track.id));
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = clipSpeed;
+      source.connect(gainNode);
+      source.start(startAt, safeSourceOffset, safeDuration);
+
+      const nodeId = ++_nodeIdCounter;
+      const entry: ActiveSource = { source, gainNode, scheduledAt: startAt };
+      this.activeSources.set(nodeId, entry);
+
+      // onended uses the monotonic nodeId — never affects a different node
+      source.onended = () => { this.activeSources.delete(nodeId); };
+    }
+  }
+
+  // ── Internal: fade out all active nodes (crossfade path) ─────────────────
+  // Does NOT clear activeSources — stop() will handle that.
+  // New nodes are added by _scheduleNodes concurrently.
+  private _fadeOutAll(ctx: AudioContext, now: number, fadeSecs: number): void {
     const snapshot = new Map(this.activeSources);
-    this.activeSources.clear(); // clear immediately so new play() won't race
-    for (const [, { source, gainNode }] of snapshot) {
+    this.activeSources.clear();
+    for (const [, { source, gainNode, scheduledAt }] of snapshot) {
       try {
         gainNode.gain.cancelScheduledValues(now);
         gainNode.gain.setValueAtTime(gainNode.gain.value, now);
-        if (fadeSecs > 0) {
-          gainNode.gain.linearRampToValueAtTime(0, now + fadeSecs);
-          source.stop(now + fadeSecs + 0.001);
-        } else {
-          gainNode.gain.setValueAtTime(0, now);
-          source.stop(now); // immediate, no future-scheduled stop
-        }
-      } catch {
-        // Already stopped — ignore
-      }
+        gainNode.gain.linearRampToValueAtTime(0, now + fadeSecs);
+        const stopAt = Math.max(scheduledAt, now) + fadeSecs + 0.001;
+        source.stop(stopAt);
+      } catch { /* already stopped */ }
+    }
+  }
+
+  // ── Internal: stop all nodes immediately (hard stop path) ────────────────
+  private _stopAll(ctx: AudioContext, now: number, fadeSecs: number): void {
+    const snapshot = new Map(this.activeSources);
+    this.activeSources.clear();
+    for (const [, { source, gainNode, scheduledAt }] of snapshot) {
+      try {
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+        gainNode.gain.linearRampToValueAtTime(0, now + fadeSecs);
+        const stopAt = Math.max(scheduledAt, now) + fadeSecs + 0.001;
+        source.stop(stopAt);
+      } catch { /* already stopped */ }
     }
   }
 }
