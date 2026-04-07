@@ -1902,6 +1902,7 @@ export function TimelinePanel({
                         <div
                           className={`fade-handle fade-handle-in${fadeInFrames > 0 ? " has-fade" : ""}`}
                           title={`Fade in: ${(fadeInFrames / sequenceFps).toFixed(2)}s — drag to adjust`}
+                          style={{ left: Math.min(fadeInPx, clipWidth - 16) }}
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();
@@ -2043,6 +2044,7 @@ export function TimelinePanel({
                         <div
                           className={`fade-handle fade-handle-out${fadeOutFrames > 0 ? " has-fade" : ""}`}
                           title={`Fade out: ${(fadeOutFrames / sequenceFps).toFixed(2)}s — drag to adjust`}
+                          style={{ right: Math.min(fadeOutPx, clipWidth - 16), left: "auto" }}
                           onMouseDown={(e) => {
                             if (isLocked) return;
                             e.stopPropagation(); e.preventDefault();

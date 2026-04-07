@@ -3772,9 +3772,8 @@ kbd {
   right: 0; left: auto;
   background: linear-gradient(to left, rgba(0,0,0,0.55) 0%, transparent 100%);
 }
-/* First fade-handle block (kept in sync with second block below) */
-.fade-handle.fade-handle-in { left: 0; }
-.fade-handle.fade-handle-out { right: 0; left: auto; }
+/* fade-handle position — driven by inline style from JSX; these are fallbacks */
+.fade-handle.fade-handle-out { left: auto !important; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GHOST CLIP PREVIEW
@@ -4917,29 +4916,30 @@ kbd {
    ══════════════════════════════════════════════════════════════════════════ */
 .fade-handle {
   position: absolute;
-  /* Occupy top 18px only — leaves trim handle area accessible below */
   top: 0;
   height: 18px;
   width: 16px;
   cursor: col-resize;
-  /* Above trim handles (z-index 10) */
   z-index: 15;
   display: flex;
   align-items: center;
   justify-content: center;
   opacity: 0;
   transition: opacity 0.15s;
-  border-radius: 0 0 3px 0;
+  /* default anchor — subclasses (and inline style) override */
+  left: 0;
 }
 .fade-handle:hover, .fade-handle.has-fade { opacity: 1; }
 .timeline-clip:hover .fade-handle { opacity: 0.6; }
 .timeline-clip:hover .fade-handle:hover { opacity: 1; }
-.fade-handle-in  { left: 0; border-radius: 0 0 3px 0; }
-.fade-handle-out { right: 0; left: auto; border-radius: 0 0 0 3px; }
+/* fade-handle-in: positioned via inline style left=fadeInPx */
+.fade-handle-in  { border-radius: 0 0 3px 0; }
+/* fade-handle-out: inline style sets right=fadeOutPx; must cancel left */
+.fade-handle-out { left: auto !important; border-radius: 0 0 0 3px; }
 .fade-handle::after {
   content: "";
-  width: 4px;
-  height: 12px;
+  width: 5px;
+  height: 14px;
   background: rgba(255,200,50,0.95);
   border-radius: 2px;
   box-shadow: 0 0 5px rgba(255,200,50,0.8);
