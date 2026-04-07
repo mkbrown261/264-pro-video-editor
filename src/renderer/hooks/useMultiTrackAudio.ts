@@ -281,6 +281,11 @@ interface PrefetchEntry {
   /** True while an async operation (load/seek/play) is in progress — blocks
    *  concurrent calls from stepping on each other. */
   busy: boolean;
+  /** True once claimPrefetched() has taken ownership of this entry.
+   *  In-flight async coroutines check this flag and bail out immediately
+   *  to prevent double-play when reconcileSlots claims the element while
+   *  a tickPrefetch coroutine is still running. */
+  claimed: boolean;
 }
 
 const prefetchMap = new Map<string, PrefetchEntry>();
@@ -313,7 +318,7 @@ function tickPrefetch(
   let entry = prefetchMap.get(seg.clip.id);
   if (!entry) {
     const el = acquireElement();
-    entry = { element: el, segment: seg, prePlaying: false, busy: false };
+    entry = { element: el, segment: seg, prePlaying: false, busy: false, claimed: false };
     prefetchMap.set(seg.clip.id, entry);
   }
 
@@ -334,6 +339,7 @@ function tickPrefetch(
       void (async () => {
         try {
           await loadSrc(element, url);
+          if (!entry || entry.claimed) return; // bail if reconcileSlots claimed us during load
           // Park at in-point once loaded
           if (entry && prefetchMap.has(seg.clip.id)) {
             const parkTime = seg.sourceInSeconds;
@@ -344,6 +350,7 @@ function tickPrefetch(
                 element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
               });
             }
+            if (!entry || entry.claimed) return; // bail if claimed during park seek
             if (!element.paused) element.pause();
           }
         } catch {
@@ -365,13 +372,17 @@ function tickPrefetch(
       // Only re-seek during park phase; in pre-play window let phase 2 handle it.
       entry.busy = true;
       void (async () => {
-        element.currentTime = parkTime;
-        await new Promise<void>((resolve) => {
-          const t = window.setTimeout(resolve, 300);
-          element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
-        });
-        if (!element.paused) element.pause();
-        if (entry) entry.busy = false;
+        try {
+          element.currentTime = parkTime;
+          await new Promise<void>((resolve) => {
+            const t = window.setTimeout(resolve, 300);
+            element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
+          });
+          if (!entry || entry.claimed) return; // bail if claimed during re-park seek
+          if (!element.paused) element.pause();
+        } finally {
+          if (entry) entry.busy = false;
+        }
       })();
       return;
     }
@@ -398,6 +409,7 @@ function tickPrefetch(
             element.addEventListener("seeked", () => { window.clearTimeout(t); resolve(); }, { once: true });
           });
         }
+        if (!entry || entry.claimed) return; // bail if reconcileSlots claimed us during seek
 
         const ctx = getAudioContext();
         if (ctx) {
@@ -427,6 +439,7 @@ function claimPrefetched(clipId: string): { element: HTMLAudioElement; wasPrePla
   const entry = prefetchMap.get(clipId);
   if (!entry) return null;
   prefetchMap.delete(clipId);
+  entry.claimed = true; // signal to any in-flight async coroutine that we took ownership
   return { element: entry.element, wasPrePlaying: entry.prePlaying };
 }
 
