@@ -1947,8 +1947,8 @@ export function TimelinePanel({
                           }}
                         />
 
-                        {/* ── Audio waveform (audio track clips only) ── */}
-                        {segment.track.kind === "audio" && segment.asset.waveformPeaks?.length ? (() => {
+                        {/* ── Audio waveform (audio track clips + video clips that have audio) ── */}
+                        {(segment.track.kind === "audio" || (segment.track.kind === "video" && segment.asset.hasAudio)) && segment.asset.waveformPeaks?.length ? (() => {
                           const peaks = segment.asset.waveformPeaks!;
                           const h = Math.max(20, trackH - 8);
                           const w = clipWidth;
@@ -1972,15 +1972,21 @@ export function TimelinePanel({
                             d += ` L${(i * step).toFixed(1)},${(half + amp).toFixed(1)}`;
                           }
                           d += " Z";
+                          // Green for audio tracks, blue-tinted for video clips with audio
+                          const waveColor = segment.track.kind === "audio"
+                            ? "rgba(47,199,122,0.35)"
+                            : "rgba(59,138,247,0.25)";
                           return (
                             <svg
                               className="clip-waveform"
                               width={w}
                               height={h}
-                              style={{ position: "absolute", top: 2, left: 0, pointerEvents: "none" }}
+                              viewBox={`0 0 ${w} ${h}`}
+                              preserveAspectRatio="none"
+                              style={{ position: "absolute", top: 2, left: 0, pointerEvents: "none", overflow: "hidden" }}
                               aria-hidden="true"
                             >
-                              <path d={d} fill="rgba(47,199,122,0.35)" />
+                              <path d={d} fill={waveColor} />
                             </svg>
                           );
                         })() : null}
