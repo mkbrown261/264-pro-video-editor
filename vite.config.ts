@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // In dev mode Electron loads the renderer from the Vite dev server
@@ -16,11 +16,5 @@ export default defineConfig({
   },
   build: {
     outDir: "dist"
-  },
-  test: {
-    globals: true,
-    environment: "jsdom",
-    setupFiles: [],
-    include: ["src/__tests__/**/*.test.ts", "src/__tests__/**/*.test.tsx"],
   },
 });
