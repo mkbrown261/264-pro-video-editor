@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthGate, AuthGateModal, AuthGateWrapper, type RequiredAccess } from "./AuthGateModal";
 import { useEditorStore } from "../store/editorStore";
+import { notifyToolUsed } from "../lib/projectMemoryBridge";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type PanelTab = "enhance" | "generate";
@@ -389,6 +390,9 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
     setResult(null);
     setProgress(0);
 
+    // Record in Clawbot memory so it knows which enhancement tools this user runs
+    notifyToolUsed(selectedTool);
+
     if (!window.flowstateAPI?.runAITool) {
       setStatus("error");
       setResult({ error: "Not running in Electron — AI tools require the desktop app." });
@@ -487,6 +491,9 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
     setVgStatus("running");
     setVgResult(null);
     setVgProgress(0);
+
+    // Record in Clawbot memory so it knows which video gen models this user runs
+    notifyToolUsed(vgModel);
 
     if (!window.flowstateAPI?.generateVideo) {
       setVgStatus("error");

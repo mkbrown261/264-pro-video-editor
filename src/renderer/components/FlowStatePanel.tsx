@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/editorStore";
+import {
+  projectMemory,
+  type DiagnosticIssue,
+  type SessionMemoryState,
+  ProjectMemoryEngine,
+} from "../lib/projectMemoryBridge";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface FSUser {
@@ -193,103 +199,9 @@ class LearningEngine {
 const learningEngine = new LearningEngine();
 
 // ── Project Memory Engine ─────────────────────────────────────────────────────
-// Tracks in-session edits, tools used, and detected issues for Clawbot context
-interface DiagnosticIssue {
-  type: "clipping" | "loudness" | "frequency" | "masking" | "gap" | "orphan";
-  message: string;
-  track?: string;
-  severity: "high" | "medium" | "low";
-}
-
-interface SessionMemoryState {
-  editsMade: number;
-  toolsUsed: string[];
-  clipCount: number;
-  diagnostics: DiagnosticIssue[];
-  lastDiagRun: number;
-}
-
-class ProjectMemoryEngine {
-  state: SessionMemoryState = {
-    editsMade: 0,
-    toolsUsed: [],
-    clipCount: 0,
-    diagnostics: [],
-    lastDiagRun: 0,
-  };
-
-  recordEdit(): void {
-    this.state.editsMade++;
-  }
-
-  recordTool(toolName: string): void {
-    if (!this.state.toolsUsed.includes(toolName)) {
-      this.state.toolsUsed = [...this.state.toolsUsed, toolName];
-    }
-  }
-
-  updateClipCount(count: number): void {
-    this.state.clipCount = count;
-  }
-
-  setDiagnostics(issues: DiagnosticIssue[]): void {
-    this.state.diagnostics = issues;
-    this.state.lastDiagRun = Date.now();
-  }
-
-  // Run lightweight local diagnostics (no AI cost)
-  runLocalDiagnostics(
-    tracks: any[],
-    clips: any[],
-    audioMetrics?: { peakDb?: number; lufs?: number; frequencyProfile?: { low: number; mid: number; high: number } }
-  ): DiagnosticIssue[] {
-    const issues: DiagnosticIssue[] = [];
-
-    // Check for gaps in timeline
-    if (clips.length > 1) {
-      const sorted = [...clips].sort((a, b) => (a.startFrame ?? 0) - (b.startFrame ?? 0));
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const endFrame = (sorted[i].startFrame ?? 0) + (sorted[i].durationFrames ?? 0);
-        const nextStart = sorted[i + 1].startFrame ?? 0;
-        if (nextStart - endFrame > 5) { // > 5 frames gap
-          issues.push({ type: "gap", message: `Timeline gap detected around clip "${sorted[i].name ?? 'Unknown'}"`, severity: "low" });
-          break; // report only first gap
-        }
-      }
-    }
-
-    // Check for very large track counts
-    if (tracks.length > 20) {
-      issues.push({ type: "masking", message: `${tracks.length} tracks — complex project. Consider grouping/nesting tracks for clarity`, severity: "low" });
-    }
-
-    // Audio metrics (if provided by editor)
-    if (audioMetrics) {
-      const { peakDb, lufs, frequencyProfile } = audioMetrics;
-      if (peakDb != null && peakDb > -1) {
-        issues.push({ type: "clipping", message: `Master peak ${peakDb.toFixed(1)} dBFS — reduce gain by ${Math.abs(peakDb + 3).toFixed(1)} dB`, severity: "high" });
-      }
-      if (lufs != null && lufs > -8) {
-        issues.push({ type: "loudness", message: `LUFS ${lufs.toFixed(1)} — too loud for streaming (target -14 LUFS)`, severity: "medium" });
-      }
-      if (frequencyProfile) {
-        const total = frequencyProfile.low + frequencyProfile.mid + frequencyProfile.high;
-        if (total > 0 && (frequencyProfile.low / total) > 0.55) {
-          issues.push({ type: "frequency", message: `Low-heavy mix — highpass at 80Hz, cut 200-400Hz by 2dB`, severity: "medium" });
-        }
-      }
-    }
-
-    this.setDiagnostics(issues);
-    return issues;
-  }
-
-  getSummary(): SessionMemoryState {
-    return { ...this.state };
-  }
-}
-
-const projectMemory = new ProjectMemoryEngine();
+// Imported from shared bridge so AIToolsPanel can also record tool usage.
+// Re-export types locally so existing code in this file still compiles.
+void ProjectMemoryEngine; // suppress unused-import warning — class used via bridge singleton
 
 // ── Main component ────────────────────────────────────────────────────────────
 interface FlowStatePanelProps {
@@ -360,7 +272,9 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
   const [genError, setGenError] = useState<string | null>(null);
   const [genImages, setGenImages] = useState<GeneratedImage[]>([]);
 
-  const project = useEditorStore((s) => s.project);
+  const project        = useEditorStore((s) => s.project);
+  const selectedClipId = useEditorStore((s) => s.selectedClipId);
+  const playheadFrame  = useEditorStore((s) => s.playback?.playheadFrame ?? 0);
 
   // ── Load user ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -436,15 +350,25 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
       const settings = project.sequence?.settings ?? {};
       const memSummary = projectMemory.getSummary();
 
+      // Resolve selected clip name for richer context
+      const selectedClip = selectedClipId
+        ? clips.find((c: any) => c.id === selectedClipId)
+        : null;
+      const selectedClipName = (selectedClip as any)?.name ?? (selectedClip as any)?.assetId ?? null;
+      const fps = settings.fps ?? 30;
+      const currentTimeSec = fps > 0 ? (playheadFrame / fps).toFixed(2) + "s" : null;
+
       const res = (await fsApi.apiCall("/api/264pro/ai-chat", "POST", {
         messages: history,
         // Live project context
         projectContext: {
-          projectName: project.name ?? "Untitled",
-          trackCount: tracks.length,
-          clipCount: clips.length,
-          fps: settings.fps ?? 30,
-          resolution: `${settings.width ?? 1920}×${settings.height ?? 1080}`,
+          projectName:   project.name ?? "Untitled",
+          trackCount:    tracks.length,
+          clipCount:     clips.length,
+          fps:           fps,
+          resolution:    `${settings.width ?? 1920}×${settings.height ?? 1080}`,
+          selectedClip:  selectedClipName,
+          currentTime:   currentTimeSec,
         },
         // In-session memory (tracked locally)
         sessionMemory: {
