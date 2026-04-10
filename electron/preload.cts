@@ -127,5 +127,11 @@ const flowstateAPI = {
     ipcRenderer.invoke("cloud:load", key),
   cloudDelete: (key: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke("cloud:delete", key),
+  // ── AI Tools: pick a local media file via native dialog ───────────────────
+  pickMediaFile: (): Promise<{ filePath: string; name: string } | null> =>
+    ipcRenderer.invoke("ai:pick-media-file"),
+  // ── Sign out of FlowState ─────────────────────────────────────────────────
+  signOut: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("flowstate:sign-out"),
 };
 contextBridge.exposeInMainWorld("flowstateAPI", flowstateAPI);

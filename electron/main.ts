@@ -381,9 +381,8 @@ async function verifyStoredToken(token: string): Promise<{
 }> {
   try {
     const res = await fetch(FS_VERIFY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` },
     });
     return res.json() as any;
   } catch {
@@ -410,38 +409,24 @@ function createGateWindow(): BrowserWindow {
 }
 
 async function launchWithGate(): Promise<void> {
-  // ── Try stored token first ────────────────────────────────────────────
-  // We read from a temp file since we can't access localStorage from main
-  let storedToken: string | null = null;
+  // ── 264 Pro opens freely — no gate blocking startup ───────────────────
+  // AI tools are gated at click-time inside the renderer via AuthGateModal.
+  // Sign-in is prompted only when the user actually tries to use a paid tool.
+  launchEditor();
+
+  // Silently verify token in background — warms auth state for instant
+  // response when user clicks an AI tool, no UI shown on failure.
   const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
   try {
-    storedToken = (await readFile(tokenPath, 'utf8')).trim();
-  } catch { /* no stored token */ }
-
-  if (storedToken) {
-    // Dev bypass — no network call needed
-    if (storedToken === DEV_BYPASS_KEY) {
-      launchEditor();
-      return;
+    const storedToken = (await readFile(tokenPath, 'utf8')).trim();
+    if (storedToken && storedToken !== DEV_BYPASS_KEY) {
+      const result = await verifyStoredToken(storedToken);
+      if (!result.valid) {
+        // Token expired — clear silently, renderer will handle prompt at tool-click
+        await writeFile(tokenPath, '').catch(() => {});
+      }
     }
-    // Verify with FlowState
-    const result = await verifyStoredToken(storedToken);
-    if (result.valid) {
-      launchEditor();
-      return;
-    }
-    // Token invalid — clear it
-    try { await writeFile(tokenPath, ''); } catch {}
-  }
-
-  // ── No valid token — show gate ────────────────────────────────────────
-  gateWindow = createGateWindow();
-  gateWindow.on('closed', () => {
-    // If gate closes and no main window, quit
-    if (BrowserWindow.getAllWindows().length === 0) {
-      app.quit();
-    }
-  });
+  } catch { /* no stored token — fine, user will sign in when needed */ }
 }
 
 function launchEditor(): void {
@@ -621,6 +606,35 @@ ipcMain.handle("media:open-files", async (event) => {
   });
 
   return assets;
+});
+
+// ── AI Tools: pick a single local media file ─────────────────────────────────
+// Returns { filePath, mediaUrl } where mediaUrl is the media:// protocol URL
+// the renderer can pass to the Replicate API via the FlowState backend proxy.
+ipcMain.handle("ai:pick-media-file", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = win
+    ? await dialog.showOpenDialog(win, {
+        title: "Select Media for AI Tool",
+        properties: ["openFile"],
+        filters: [
+          { name: "Video & Image Files", extensions: [...VIDEO_FILE_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      })
+    : await dialog.showOpenDialog({
+        title: "Select Media for AI Tool",
+        properties: ["openFile"],
+        filters: [
+          { name: "Video & Image Files", extensions: [...VIDEO_FILE_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+
+  if (result.canceled || !result.filePaths.length) return null;
+  const filePath = result.filePaths[0];
+  // Return local path — renderer will convert to media:// URL
+  return { filePath, name: require("path").basename(filePath) };
 });
 
 ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
@@ -834,6 +848,17 @@ ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) =>
     return res.json();
   } catch (e: any) {
     return { error: e.message };
+  }
+});
+
+// ── FlowState sign-out ────────────────────────────────────────────────────────
+ipcMain.handle("flowstate:sign-out", async () => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    await writeFile(tokenPath, '', 'utf8');
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
   }
 });
 

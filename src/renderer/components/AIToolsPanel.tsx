@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from "react";
 import { useAuthGate, AuthGateModal, AuthGateWrapper, type RequiredAccess } from "./AuthGateModal";
+import { useEditorStore } from "../store/editorStore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AITool =
@@ -146,8 +147,14 @@ interface AIToolsPanelProps {
 }
 
 export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
+  // Read selected clip from editor — auto-fills the media input
+  const selectedClipId = useEditorStore((s) => s.selectedClipId);
+  const selectedAssetId = useEditorStore((s) => s.selectedAssetId);
+  const project = useEditorStore((s) => s.project);
+
   const [selectedTool, setSelectedTool] = useState<AITool>("upscale");
   const [inputUrl, setInputUrl] = useState("");
+  const [inputFileName, setInputFileName] = useState<string | null>(null); // display name only
   const [paramValues, setParamValues] = useState<Record<string, number | boolean>>({});
   const [status, setStatus] = useState<ToolStatus>("idle");
   const [result, setResult] = useState<ToolResult | null>(null);
@@ -393,32 +400,107 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
               </div>
             </div>
 
-            {/* Input URL */}
+            {/* Media Input — auto-fill from timeline selection or browse local files */}
             <div>
               <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                {tool.inputType === "video" ? "Video URL" : tool.inputType === "both" ? "Image or Video URL" : "Image URL"}
+                {tool.inputType === "video" ? "Source Video" : tool.inputType === "both" ? "Source Media" : "Source Image"}
               </label>
-              <input
-                type="text"
-                value={inputUrl}
-                onChange={(e) => setInputUrl(e.target.value)}
-                placeholder={tool.inputType === "video" ? "https://... (MP4 URL)" : "https://... (image URL)"}
-                style={{
-                  width: "100%",
-                  padding: "10px 12px",
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  borderRadius: 9,
-                  color: "#e8e8e8",
-                  fontSize: 12,
-                  fontFamily: "inherit",
-                  outline: "none",
-                  boxSizing: "border-box",
+
+              {/* Auto-fill from timeline selected clip */}
+              {(() => {
+                // Find the asset for the selected clip
+                const clip = project.sequence.clips.find((c) => c.id === selectedClipId);
+                const asset = clip
+                  ? project.assets.find((a) => a.id === clip.assetId)
+                  : project.assets.find((a) => a.id === selectedAssetId);
+
+                if (asset && asset.sourcePath) {
+                  const assetMediaUrl = `media://localhost?path=${encodeURIComponent(asset.sourcePath)}`;
+                  const isCurrentlySet = inputUrl === assetMediaUrl;
+                  return (
+                    <div style={{
+                      background: isCurrentlySet ? "rgba(16,185,129,0.08)" : "rgba(168,85,247,0.06)",
+                      border: `1px solid ${isCurrentlySet ? "rgba(16,185,129,0.25)" : "rgba(168,85,247,0.2)"}`,
+                      borderRadius: 9, padding: "10px 12px", marginBottom: 8,
+                      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                    }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 10, color: isCurrentlySet ? "#10b981" : "#a855f7", fontWeight: 700, marginBottom: 2 }}>
+                          {isCurrentlySet ? "✓ LOADED" : "SELECTED CLIP"}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#e8e8e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {asset.name}
+                        </div>
+                      </div>
+                      {!isCurrentlySet && (
+                        <button
+                          onClick={() => { setInputUrl(assetMediaUrl); setInputFileName(asset.name); }}
+                          style={{
+                            padding: "5px 12px", borderRadius: 7, border: "none",
+                            background: "linear-gradient(135deg, #7c3aed, #a855f7)",
+                            color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", flexShrink: 0,
+                          }}
+                        >
+                          Use This
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {/* Currently loaded file display */}
+              {inputUrl && (
+                <div style={{
+                  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 9, padding: "8px 12px", marginBottom: 8,
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                }}>
+                  <div style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    📂 {inputFileName ?? inputUrl.split('?path=').pop() ?? inputUrl}
+                  </div>
+                  <button
+                    onClick={() => { setInputUrl(""); setInputFileName(null); }}
+                    style={{ padding: "3px 8px", borderRadius: 5, border: "1px solid rgba(255,255,255,0.1)", background: "transparent", color: "#6b7280", fontSize: 10, cursor: "pointer", flexShrink: 0 }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              {/* Browse button */}
+              <button
+                onClick={async () => {
+                  const result = await (window as any).flowstateAPI?.pickMediaFile?.();
+                  if (result?.filePath) {
+                    const url = `media://localhost?path=${encodeURIComponent(result.filePath)}`;
+                    setInputUrl(url);
+                    setInputFileName(result.name);
+                  }
                 }}
-              />
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginTop: 4, lineHeight: 1.5 }}>
-                Provide a publicly accessible URL. Export a frame/clip first, upload to a service like Cloudflare R2 or Imgur, then paste the URL here.
-              </div>
+                style={{
+                  width: "100%", padding: "10px", borderRadius: 9,
+                  border: "1px dashed rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.03)",
+                  color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer",
+                  transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}
+                onMouseOver={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(168,85,247,0.08)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(168,85,247,0.3)"; (e.currentTarget as HTMLButtonElement).style.color = "#a855f7"; }}
+                onMouseOut={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.03)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.15)"; (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.5)"; }}
+              >
+                <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                  <rect x="1" y="4" width="11" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.2"/>
+                  <path d="M4 4V3a2.5 2.5 0 015 0v1" stroke="currentColor" strokeWidth="1.2"/>
+                  <path d="M6.5 7v2.5M5 8.5h3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                Browse Files…
+              </button>
+
+              {!inputUrl && !selectedClipId && !selectedAssetId && (
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 6, lineHeight: 1.5, textAlign: "center" }}>
+                  Select a clip on the timeline to auto-fill, or browse your device
+                </div>
+              )}
             </div>
 
             {/* Parameters */}
