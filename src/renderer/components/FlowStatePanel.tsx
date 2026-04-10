@@ -32,6 +32,27 @@ declare global {
       apiCall: (path: string, method: string, body?: unknown) => Promise<unknown>;
       runAITool?: (tool: string, options: { imageUrl?: string; videoUrl?: string; params?: Record<string, unknown> }) => Promise<unknown>;
       pollAITool?: (predictionId: string) => Promise<unknown>;
+      // ── Video Generation ──────────────────────────────────────────────
+      generateVideo?: (params: {
+        model: string;
+        prompt: string;
+        imageUrl?: string;
+        duration?: number;
+        resolution?: string;
+        aspectRatio?: string;
+        quality?: string;
+        cameraMotion?: string;
+        style?: string;
+        negativePrompt?: string;
+      }) => Promise<unknown>;
+      pollVideoGen?: (requestId: string, provider: string) => Promise<unknown>;
+      // ── Media picker ─────────────────────────────────────────────────
+      pickMediaFile?: () => Promise<{ filePath: string; name: string } | null>;
+      signOut?: () => Promise<{ ok: boolean }>;
+      cloudSave?: (data: unknown) => Promise<unknown>;
+      cloudList?: () => Promise<unknown>;
+      cloudLoad?: (key: string) => Promise<unknown>;
+      cloudDelete?: (key: string) => Promise<unknown>;
     };
     // editorApi is declared in vite-env.d.ts with the full type
   }

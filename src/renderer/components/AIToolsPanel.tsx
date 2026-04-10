@@ -1,8 +1,10 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthGate, AuthGateModal, AuthGateWrapper, type RequiredAccess } from "./AuthGateModal";
 import { useEditorStore } from "../store/editorStore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+type PanelTab = "enhance" | "generate";
+
 type AITool =
   | "upscale"
   | "face_enhance"
@@ -13,6 +15,178 @@ type AITool =
   | "video_denoise"
   | "video_upscale"
   | "object_remove";
+
+type VideoGenModel =
+  | "seedance_t2v"
+  | "seedance_i2v"
+  | "higgsfield_t2v"
+  | "higgsfield_i2v"
+  | "nano_banana_2k"
+  | "nano_banana_4k"
+  | "wan_t2v"
+  | "wan_i2v";
+
+interface VideoGenModelDef {
+  id: VideoGenModel;
+  label: string;
+  provider: string;
+  providerColor: string;
+  badge: string;
+  badgeColor: string;
+  icon: string;
+  desc: string;
+  mode: "t2v" | "i2v";
+  maxDuration: number;
+  resolutions: string[];
+  aspectRatios: string[];
+  features: string[];
+}
+
+const VIDEO_GEN_MODELS: VideoGenModelDef[] = [
+  {
+    id: "seedance_t2v",
+    label: "Seedance 2.0",
+    provider: "ByteDance × fal.ai",
+    providerColor: "#06b6d4",
+    badge: "TEXT → VIDEO",
+    badgeColor: "#06b6d4",
+    icon: "🎬",
+    desc: "Director-level camera control, native audio, realistic physics. Up to 15s cinematic multi-shot video in one pass.",
+    mode: "t2v",
+    maxDuration: 15,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "4:3", "3:4", "1:1"],
+    features: ["Native Audio", "Multi-shot", "Physics Engine", "Lip Sync"],
+  },
+  {
+    id: "seedance_i2v",
+    label: "Seedance 2.0",
+    provider: "ByteDance × fal.ai",
+    providerColor: "#06b6d4",
+    badge: "IMAGE → VIDEO",
+    badgeColor: "#3b82f6",
+    icon: "🖼→🎬",
+    desc: "Animate any still image into cinematic motion. Preserves your composition, adds physics + audio.",
+    mode: "i2v",
+    maxDuration: 10,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "4:3", "1:1"],
+    features: ["Image Reference", "Motion Control", "Audio Sync", "Character Lock"],
+  },
+  {
+    id: "higgsfield_t2v",
+    label: "Higgsfield × Seedance",
+    provider: "Higgsfield AI",
+    providerColor: "#a855f7",
+    badge: "CINEMATIC",
+    badgeColor: "#a855f7",
+    icon: "🎥",
+    desc: "Higgsfield's production-grade pipeline — multi-camera storytelling, frame-level control, 40+ model library.",
+    mode: "t2v",
+    maxDuration: 15,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "4:3", "3:4"],
+    features: ["Multi-Camera", "Frame Control", "100+ Models", "Pro Grade"],
+  },
+  {
+    id: "higgsfield_i2v",
+    label: "Higgsfield i2v",
+    provider: "Higgsfield AI",
+    providerColor: "#a855f7",
+    badge: "IMAGE → VIDEO",
+    badgeColor: "#8b5cf6",
+    icon: "🖼→🎥",
+    desc: "Higgsfield image-to-video — animate reference frames with character consistency across all shots.",
+    mode: "i2v",
+    maxDuration: 10,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "4:3"],
+    features: ["Character Lock", "Style Preserve", "Audio Sync"],
+  },
+  {
+    id: "nano_banana_2k",
+    label: "Nano Banana 2K",
+    provider: "Gemini × fal.ai",
+    providerColor: "#10b981",
+    badge: "2K ULTRA",
+    badgeColor: "#10b981",
+    icon: "🍌",
+    desc: "Nano Banana powered by Gemini — 2560×1440 ultra-resolution with silky motion synthesis and deep detail.",
+    mode: "t2v",
+    maxDuration: 10,
+    resolutions: ["2K (2560×1440)"],
+    aspectRatios: ["16:9", "9:16", "4:3", "1:1"],
+    features: ["2K Resolution", "High Fidelity", "Gemini Powered", "Fast Gen"],
+  },
+  {
+    id: "nano_banana_4k",
+    label: "Nano Banana 4K",
+    provider: "Gemini × fal.ai",
+    providerColor: "#f59e0b",
+    badge: "4K CINEMA",
+    badgeColor: "#f59e0b",
+    icon: "🍌✨",
+    desc: "Nano Banana 4K — 3840×2160 cinematic ultra-resolution. The highest fidelity video generation available.",
+    mode: "t2v",
+    maxDuration: 10,
+    resolutions: ["4K (3840×2160)"],
+    aspectRatios: ["16:9", "9:16"],
+    features: ["4K UHD", "Cinema Grade", "Max Quality", "Gemini Pro"],
+  },
+  {
+    id: "wan_t2v",
+    label: "Wan 2.6",
+    provider: "Wan × fal.ai",
+    providerColor: "#ec4899",
+    badge: "TEXT → VIDEO",
+    badgeColor: "#ec4899",
+    icon: "🌊",
+    desc: "Wan 2.6 — excellent character animation, smooth motion, 720p/1080p. Best for character-driven content.",
+    mode: "t2v",
+    maxDuration: 10,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "1:1", "4:3"],
+    features: ["Character Animation", "Smooth Motion", "720p/1080p"],
+  },
+  {
+    id: "wan_i2v",
+    label: "Wan 2.6",
+    provider: "Wan × fal.ai",
+    providerColor: "#ec4899",
+    badge: "IMAGE → VIDEO",
+    badgeColor: "#db2777",
+    icon: "🌊",
+    desc: "Wan 2.6 image-to-video — animate your reference image with precise motion control.",
+    mode: "i2v",
+    maxDuration: 10,
+    resolutions: ["720p", "1080p"],
+    aspectRatios: ["16:9", "9:16", "4:3", "1:1"],
+    features: ["Image Reference", "Motion Control", "Character Consistency"],
+  },
+];
+
+// ── Clawbot Camera Motion Presets ─────────────────────────────────────────────
+const CAMERA_PRESETS = [
+  { label: "Slow dolly in", value: "Slow dolly in toward subject" },
+  { label: "Tracking shot", value: "Smooth tracking shot following subject" },
+  { label: "Orbit 360°", value: "360 degree orbit around subject" },
+  { label: "Crane up", value: "Crane shot rising up dramatically" },
+  { label: "Handheld", value: "Handheld camera movement, organic" },
+  { label: "Dutch angle", value: "Dutch tilt camera angle" },
+  { label: "Crash zoom", value: "Fast crash zoom toward subject" },
+  { label: "Static wide", value: "Static wide angle establishing shot" },
+];
+
+const STYLE_PRESETS = [
+  { label: "Cinematic", value: "cinematic film look, shallow depth of field, anamorphic lens" },
+  { label: "4K HDR", value: "4K HDR, high dynamic range, vivid colors, sharp detail" },
+  { label: "Music Video", value: "music video style, dynamic cuts, vibrant lighting, stylized" },
+  { label: "Documentary", value: "documentary style, natural lighting, realistic" },
+  { label: "Noir", value: "film noir, high contrast black and white, dramatic shadows" },
+  { label: "Neon Cyberpunk", value: "neon cyberpunk, night city, rain reflections, glowing signs" },
+  { label: "Golden Hour", value: "golden hour lighting, warm tones, lens flares" },
+  { label: "Clean & Minimal", value: "clean minimal composition, neutral background, professional" },
+];
 
 type ToolStatus = "idle" | "running" | "polling" | "complete" | "error";
 
@@ -152,16 +326,48 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
   const selectedAssetId = useEditorStore((s) => s.selectedAssetId);
   const project = useEditorStore((s) => s.project);
 
+  // ── Tab state ───────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<PanelTab>("generate");
+
+  // ── Enhancement Tools state ─────────────────────────────────────────────────
   const [selectedTool, setSelectedTool] = useState<AITool>("upscale");
   const [inputUrl, setInputUrl] = useState("");
-  const [inputFileName, setInputFileName] = useState<string | null>(null); // display name only
+  const [inputFileName, setInputFileName] = useState<string | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, number | boolean>>({});
   const [status, setStatus] = useState<ToolStatus>("idle");
   const [result, setResult] = useState<ToolResult | null>(null);
   const [progress, setProgress] = useState(0);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Auth gate — shown when user clicks Run without ClawFlow ─────────────────
+  // ── Video Generation Studio state ───────────────────────────────────────────
+  const [vgModel, setVgModel] = useState<VideoGenModel>("seedance_t2v");
+  const [vgPrompt, setVgPrompt] = useState("");
+  const [vgNegPrompt, setVgNegPrompt] = useState("");
+  const [vgImageUrl, setVgImageUrl] = useState("");
+  const [vgImageName, setVgImageName] = useState<string | null>(null);
+  const [vgDuration, setVgDuration] = useState(5);
+  const [vgResolution, setVgResolution] = useState("720p");
+  const [vgAspectRatio, setVgAspectRatio] = useState("16:9");
+  const [vgQuality, setVgQuality] = useState<"basic" | "high">("high");
+  const [vgCameraMotion, setVgCameraMotion] = useState("");
+  const [vgStyle, setVgStyle] = useState("");
+  const [vgStatus, setVgStatus] = useState<ToolStatus>("idle");
+  const [vgResult, setVgResult] = useState<{ videoUrl?: string; requestId?: string; provider?: string; message?: string; error?: string } | null>(null);
+  const [vgProgress, setVgProgress] = useState(0);
+  const vgPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const vgModelDef = VIDEO_GEN_MODELS.find((m) => m.id === vgModel)!;
+
+  // Reset resolution/aspect when model changes
+  useEffect(() => {
+    setVgResolution(vgModelDef.resolutions[0]);
+    setVgAspectRatio(vgModelDef.aspectRatios[0]);
+    setVgDuration(Math.min(vgDuration, vgModelDef.maxDuration));
+    if (vgModelDef.mode === "t2v") { setVgImageUrl(""); setVgImageName(null); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vgModel]);
+
+  // ── Auth gate — shown when user clicks Run without access ───────────────────
   const { modal, checkAndRun, closeModal } = useAuthGate();
 
   const tool = TOOLS.find((t) => t.id === selectedTool)!;
@@ -271,6 +477,101 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
     setProgress(0);
   };
 
+  // ── Video Generation — run ─────────────────────────────────────────────────
+  const runVideoGen = useCallback(async () => {
+    if (!vgPrompt.trim()) return;
+    if (vgPollRef.current) clearTimeout(vgPollRef.current);
+    setVgStatus("running");
+    setVgResult(null);
+    setVgProgress(0);
+
+    if (!window.flowstateAPI?.generateVideo) {
+      setVgStatus("error");
+      setVgResult({ error: "Not running in Electron — video generation requires the desktop app." });
+      return;
+    }
+
+    try {
+      const res = (await window.flowstateAPI.generateVideo({
+        model: vgModel,
+        prompt: vgPrompt.trim(),
+        imageUrl: vgModelDef.mode === "i2v" ? vgImageUrl || undefined : undefined,
+        duration: vgDuration,
+        resolution: vgResolution,
+        aspectRatio: vgAspectRatio,
+        quality: vgQuality,
+        cameraMotion: vgCameraMotion || undefined,
+        style: vgStyle || undefined,
+        negativePrompt: vgNegPrompt || undefined,
+      })) as any;
+
+      if (res.error) {
+        setVgStatus("error");
+        setVgResult({ error: res.error });
+        return;
+      }
+      if (res.status === "complete" && res.videoUrl) {
+        setVgStatus("complete");
+        setVgResult({ videoUrl: res.videoUrl });
+        return;
+      }
+      if (res.status === "queued" && res.requestId) {
+        setVgStatus("polling");
+        setVgResult({ requestId: res.requestId, provider: res.provider, message: res.message });
+        startVgPolling(res.requestId, res.provider || "fal");
+        return;
+      }
+      setVgStatus("error");
+      setVgResult({ error: res.error || "Unknown response from video generation." });
+    } catch (e: any) {
+      setVgStatus("error");
+      setVgResult({ error: e.message });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vgModel, vgPrompt, vgNegPrompt, vgImageUrl, vgDuration, vgResolution, vgAspectRatio, vgQuality, vgCameraMotion, vgStyle]);
+
+  const startVgPolling = (requestId: string, provider: string) => {
+    let attempts = 0;
+    const maxAttempts = 120; // 6 minutes
+
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        setVgStatus("error");
+        setVgResult({ error: "Generation timed out. Your job may still be processing — try again or check your API dashboard." });
+        return;
+      }
+      attempts++;
+      setVgProgress(Math.min(92, (attempts / maxAttempts) * 100 + 5));
+
+      if (!window.flowstateAPI?.pollVideoGen) return;
+      const res = (await window.flowstateAPI.pollVideoGen(requestId, provider)) as any;
+
+      if (res.status === "complete" && res.videoUrl) {
+        setVgProgress(100);
+        setVgStatus("complete");
+        setVgResult({ videoUrl: res.videoUrl });
+        return;
+      }
+      if (res.status === "error" || res.error) {
+        setVgStatus("error");
+        setVgResult({ error: res.error || "Generation failed." });
+        return;
+      }
+      if (res.percent != null) setVgProgress(res.percent);
+
+      vgPollRef.current = setTimeout(poll, 4000);
+    };
+
+    vgPollRef.current = setTimeout(poll, 5000);
+  };
+
+  const resetVg = () => {
+    if (vgPollRef.current) clearTimeout(vgPollRef.current);
+    setVgStatus("idle");
+    setVgResult(null);
+    setVgProgress(0);
+  };
+
   if (!isOpen) return null;
 
   const categories = [...new Set(TOOLS.map((t) => t.category))];
@@ -320,19 +621,312 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
         >
           <span style={{ fontSize: 18, marginRight: 8 }}>⚡</span>
           <span style={{ fontWeight: 800, fontSize: 15, color: "#e8e8e8", flex: 1 }}>
-            264 Pro AI Tools
+            264 Pro AI Studio
           </span>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginRight: 12 }}>
-            Powered by Replicate + HuggingFace
-          </span>
+          {/* Tab switcher */}
+          <div style={{ display: "flex", gap: 4, marginRight: 12 }}>
+            {(["generate", "enhance"] as PanelTab[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => tab === "enhance" ? (reset(), setActiveTab(tab)) : (resetVg(), setActiveTab(tab))}
+                style={{
+                  padding: "5px 12px", borderRadius: 7, border: "1px solid",
+                  borderColor: activeTab === tab ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.1)",
+                  background: activeTab === tab ? "rgba(168,85,247,0.15)" : "transparent",
+                  color: activeTab === tab ? "#c084fc" : "rgba(255,255,255,0.4)",
+                  fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  textTransform: "uppercase", letterSpacing: "0.06em",
+                }}
+              >
+                {tab === "generate" ? "🎬 Generate" : "🔧 Enhance"}
+              </button>
+            ))}
+          </div>
           <button
-            onClick={() => { reset(); onClose(); }}
+            onClick={() => { reset(); resetVg(); onClose(); }}
             style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}
           >
             ✕
           </button>
         </div>
 
+        {/* ═══════════════════════ VIDEO GENERATION STUDIO ═══════════════════════ */}
+        {activeTab === "generate" && (
+          <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+            {/* Model selector sidebar */}
+            <div style={{ width: 220, borderRight: "1px solid rgba(255,255,255,0.07)", overflowY: "auto", padding: "10px 8px", flexShrink: 0 }}>
+              {/* T2V group */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.08em", padding: "8px 8px 4px" }}>
+                Text → Video
+              </div>
+              {VIDEO_GEN_MODELS.filter((m) => m.mode === "t2v").map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => { setVgModel(m.id); resetVg(); }}
+                  style={{
+                    display: "flex", flexDirection: "column", width: "100%", padding: "9px 10px",
+                    borderRadius: 9, background: vgModel === m.id ? "rgba(168,85,247,0.14)" : "transparent",
+                    border: `1px solid ${vgModel === m.id ? "rgba(168,85,247,0.4)" : "transparent"}`,
+                    cursor: "pointer", textAlign: "left", marginBottom: 2, transition: "all 0.12s",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 2 }}>
+                    <span style={{ fontSize: 13 }}>{m.icon}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: vgModel === m.id ? "#d0a0ff" : "rgba(255,255,255,0.7)" }}>{m.label}</span>
+                    <span style={{ marginLeft: "auto", fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: `${m.badgeColor}22`, color: m.badgeColor }}>
+                      {m.badge.split(" ")[0]}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", paddingLeft: 20 }}>{m.provider}</div>
+                </button>
+              ))}
+
+              {/* I2V group */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.08em", padding: "12px 8px 4px" }}>
+                Image → Video
+              </div>
+              {VIDEO_GEN_MODELS.filter((m) => m.mode === "i2v").map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => { setVgModel(m.id); resetVg(); }}
+                  style={{
+                    display: "flex", flexDirection: "column", width: "100%", padding: "9px 10px",
+                    borderRadius: 9, background: vgModel === m.id ? "rgba(168,85,247,0.14)" : "transparent",
+                    border: `1px solid ${vgModel === m.id ? "rgba(168,85,247,0.4)" : "transparent"}`,
+                    cursor: "pointer", textAlign: "left", marginBottom: 2, transition: "all 0.12s",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 2 }}>
+                    <span style={{ fontSize: 13 }}>{m.icon}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: vgModel === m.id ? "#d0a0ff" : "rgba(255,255,255,0.7)" }}>{m.label}</span>
+                    <span style={{ marginLeft: "auto", fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: `${m.badgeColor}22`, color: m.badgeColor }}>
+                      I2V
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", paddingLeft: 20 }}>{m.provider}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Main generation area */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* Model header */}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                <div style={{ fontSize: 28, lineHeight: 1 }}>{vgModelDef.icon}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 800, fontSize: 16, color: "#e8e8e8" }}>{vgModelDef.label}</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 5, background: `${vgModelDef.badgeColor}22`, color: vgModelDef.badgeColor, border: `1px solid ${vgModelDef.badgeColor}44` }}>
+                      {vgModelDef.badge}
+                    </span>
+                    <span style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginLeft: "auto" }}>{vgModelDef.provider}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.6, marginBottom: 6 }}>{vgModelDef.desc}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {vgModelDef.features.map((f) => (
+                      <span key={f} style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "rgba(168,85,247,0.1)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.2)" }}>{f}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Image input for i2v */}
+              {vgModelDef.mode === "i2v" && (
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 8 }}>
+                    Reference Image
+                  </label>
+                  {vgImageUrl ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(16,185,129,0.07)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 9, padding: "10px 12px", marginBottom: 8 }}>
+                      <img src={vgImageUrl} alt="ref" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 10, color: "#10b981", fontWeight: 700, marginBottom: 2 }}>✓ REFERENCE LOADED</div>
+                        <div style={{ fontSize: 11, color: "#e8e8e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{vgImageName ?? vgImageUrl}</div>
+                      </div>
+                      <button onClick={() => { setVgImageUrl(""); setVgImageName(null); }} style={{ padding: "4px 8px", borderRadius: 5, border: "1px solid rgba(255,255,255,0.1)", background: "transparent", color: "#6b7280", fontSize: 10, cursor: "pointer" }}>Clear</button>
+                    </div>
+                  ) : null}
+                  <button
+                    onClick={async () => {
+                      const r = await (window as any).flowstateAPI?.pickMediaFile?.();
+                      if (r?.filePath) { setVgImageUrl(`media://localhost?path=${encodeURIComponent(r.filePath)}`); setVgImageName(r.name); }
+                    }}
+                    style={{ width: "100%", padding: "10px", borderRadius: 9, border: "1px dashed rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer" }}
+                  >
+                    📂 Browse Image / Frame…
+                  </button>
+                </div>
+              )}
+
+              {/* Prompt */}
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Prompt
+                  </label>
+                  <span style={{ fontSize: 10, color: vgPrompt.length > 900 ? "#ef4444" : "rgba(255,255,255,0.2)" }}>{vgPrompt.length}/1000</span>
+                </div>
+                <textarea
+                  value={vgPrompt}
+                  onChange={(e) => setVgPrompt(e.target.value.slice(0, 1000))}
+                  placeholder={`Describe your video... (e.g. "A lone figure walks through a neon-lit rainy street at night, cinematic slow dolly, 8K")`}
+                  rows={4}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "#e8e8e8", fontSize: 12, lineHeight: 1.6, resize: "vertical", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                />
+              </div>
+
+              {/* Camera motion & style presets */}
+              <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Camera Motion</label>
+                  <select
+                    value={vgCameraMotion}
+                    onChange={(e) => setVgCameraMotion(e.target.value)}
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}
+                  >
+                    <option value="">None / Prompt-driven</option>
+                    {CAMERA_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Style</label>
+                  <select
+                    value={vgStyle}
+                    onChange={(e) => setVgStyle(e.target.value)}
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}
+                  >
+                    <option value="">None</option>
+                    {STYLE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Negative prompt */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>Negative Prompt <span style={{ fontWeight: 400, textTransform: "none" }}>(optional)</span></label>
+                <input
+                  value={vgNegPrompt}
+                  onChange={(e) => setVgNegPrompt(e.target.value)}
+                  placeholder="blurry, distorted, low quality, watermark…"
+                  style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#9ca3af", fontSize: 12, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+                />
+              </div>
+
+              {/* Config row: duration, resolution, aspect, quality */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
+                {/* Duration */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>Duration</label>
+                  <select value={vgDuration} onChange={(e) => setVgDuration(Number(e.target.value))} style={{ width: "100%", padding: "7px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}>
+                    {[5, 10, ...(vgModelDef.maxDuration >= 15 ? [15] : [])].filter((d) => d <= vgModelDef.maxDuration).map((d) => <option key={d} value={d}>{d}s</option>)}
+                  </select>
+                </div>
+                {/* Resolution */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>Resolution</label>
+                  <select value={vgResolution} onChange={(e) => setVgResolution(e.target.value)} style={{ width: "100%", padding: "7px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}>
+                    {vgModelDef.resolutions.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                {/* Aspect Ratio */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>Aspect</label>
+                  <select value={vgAspectRatio} onChange={(e) => setVgAspectRatio(e.target.value)} style={{ width: "100%", padding: "7px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}>
+                    {vgModelDef.aspectRatios.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+                {/* Quality */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>Quality</label>
+                  <select value={vgQuality} onChange={(e) => setVgQuality(e.target.value as "basic" | "high")} style={{ width: "100%", padding: "7px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}>
+                    <option value="basic">Basic (fast)</option>
+                    <option value="high">High (best)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Generate button */}
+              <button
+                onClick={() => {
+                  checkAndRun(
+                    { toolName: `${vgModelDef.label} Video Gen`, toolIcon: vgModelDef.icon, requiredAccess: "pro" as RequiredAccess, description: vgModelDef.desc },
+                    () => void runVideoGen(),
+                  );
+                }}
+                disabled={vgStatus === "running" || vgStatus === "polling" || !vgPrompt.trim() || (vgModelDef.mode === "i2v" && !vgImageUrl)}
+                style={{
+                  padding: "13px 24px", borderRadius: 11,
+                  background: vgStatus === "running" || vgStatus === "polling"
+                    ? `rgba(${vgModelDef.providerColor === "#06b6d4" ? "6,182,212" : "168,85,247"},0.3)`
+                    : !vgPrompt.trim()
+                    ? "rgba(255,255,255,0.07)"
+                    : `linear-gradient(135deg, ${vgModelDef.providerColor}cc, ${vgModelDef.providerColor})`,
+                  border: "none",
+                  color: !vgPrompt.trim() ? "rgba(255,255,255,0.3)" : "#fff",
+                  fontSize: 14, fontWeight: 800,
+                  cursor: vgStatus === "running" || vgStatus === "polling" || !vgPrompt.trim() ? "not-allowed" : "pointer",
+                  transition: "all 0.15s", alignSelf: "flex-start",
+                }}
+              >
+                {vgStatus === "running" ? "⏳ Queuing…" : vgStatus === "polling" ? `⏳ Generating… ${vgProgress > 0 ? Math.round(vgProgress) + "%" : ""}` : `🎬 Generate ${vgDuration}s Video`}
+              </button>
+
+              {/* Progress bar */}
+              {(vgStatus === "running" || vgStatus === "polling") && (
+                <div>
+                  <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 99, overflow: "hidden", height: 6, marginBottom: 6 }}>
+                    <div style={{ height: "100%", width: `${vgStatus === "running" ? 8 : vgProgress}%`, background: `linear-gradient(90deg, ${vgModelDef.providerColor}88, ${vgModelDef.providerColor})`, transition: "width 0.8s ease", borderRadius: 99 }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", textAlign: "center" }}>
+                    {vgResult?.message ?? `${vgModelDef.label} is rendering your video — this usually takes 1–3 minutes`}
+                  </div>
+                </div>
+              )}
+
+              {/* Result */}
+              {vgResult && (vgStatus === "complete" || vgStatus === "error") && (
+                <div style={{ background: vgStatus === "error" ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)", border: `1px solid ${vgStatus === "error" ? "rgba(239,68,68,0.25)" : "rgba(16,185,129,0.25)"}`, borderRadius: 12, padding: 16 }}>
+                  {vgStatus === "error" && (
+                    <>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#fca5a5", marginBottom: 6 }}>✕ Generation Failed</div>
+                      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", lineHeight: 1.6 }}>{vgResult.error}</div>
+                      <button onClick={resetVg} style={{ marginTop: 10, padding: "7px 16px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer" }}>Try Again</button>
+                    </>
+                  )}
+                  {vgStatus === "complete" && vgResult.videoUrl && (
+                    <>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#6ee7b7", marginBottom: 10 }}>✓ Video Ready!</div>
+                      <video
+                        src={vgResult.videoUrl}
+                        controls autoPlay muted loop
+                        style={{ width: "100%", borderRadius: 10, background: "#000", maxHeight: 240, objectFit: "contain" }}
+                      />
+                      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        <a href={vgResult.videoUrl} target="_blank" rel="noreferrer" style={{ padding: "8px 14px", borderRadius: 8, background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)", color: "#6ee7b7", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>
+                          Download Video ↗
+                        </a>
+                        <button onClick={() => navigator.clipboard.writeText(vgResult!.videoUrl!).catch(() => {})} style={{ padding: "8px 14px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.6)", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Copy URL</button>
+                        <button onClick={resetVg} style={{ padding: "8px 14px", borderRadius: 8, background: "transparent", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)", fontSize: 12, cursor: "pointer" }}>Generate Another</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Model info footer */}
+              <div style={{ padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.05)", marginTop: "auto" }}>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", lineHeight: 1.7 }}>
+                  <strong style={{ color: "rgba(255,255,255,0.3)" }}>Note:</strong> Video generation takes 1–4 minutes depending on model and duration.
+                  {" "}Generated videos expire after 24 hours on fal.ai — download immediately.
+                  {" "}Requires Pro plan + FAL_AI_KEY or HIGGSFIELD_API_KEY configured on your FlowState account.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════ ENHANCEMENT TOOLS ═══════════════════════ */}
+        {activeTab === "enhance" && (
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
           {/* Tool selector */}
           <div
@@ -748,6 +1342,7 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
 

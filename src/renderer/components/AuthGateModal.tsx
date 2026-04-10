@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+// ── Window type augmentation for Electron APIs ────────────────────────────────
+declare global {
+  interface Window {
+    electronAPI?: {
+      openExternal?: (url: string) => void;
+      startAuthFlow?: (state: string) => void;
+      getAppVersion?: () => Promise<string>;
+    };
+  }
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 const FS_BASE = "https://flowst8.cc";
 const CLAWFLOW_PRICE = "$40/mo";

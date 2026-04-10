@@ -851,6 +851,51 @@ ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) =>
   }
 });
 
+// ── AI Video Generation — Seedance 2.0 / Higgsfield / Nano Banana ─────────────
+ipcMain.handle("flowstate:video-gen", async (_event, params: {
+  model: string;
+  prompt: string;
+  imageUrl?: string;
+  duration?: number;
+  resolution?: string;
+  aspectRatio?: string;
+  quality?: string;
+  cameraMotion?: string;
+  style?: string;
+  negativePrompt?: string;
+}) => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    const res = await fetch(`${FS_BASE_URL}/api/264pro/video-gen`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(params),
+    });
+    return res.json();
+  } catch (e: any) {
+    return { error: e.message };
+  }
+});
+
+// ── Poll AI Video Generation status ───────────────────────────────────────────
+ipcMain.handle("flowstate:video-gen-poll", async (_event, requestId: string, provider: string) => {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try {
+    const token = (await readFile(tokenPath, 'utf8')).trim();
+    const url = `${FS_BASE_URL}/api/264pro/video-gen/poll/${requestId}?provider=${encodeURIComponent(provider || 'fal')}`;
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    return res.json();
+  } catch (e: any) {
+    return { error: e.message };
+  }
+});
+
 // ── FlowState sign-out ────────────────────────────────────────────────────────
 ipcMain.handle("flowstate:sign-out", async () => {
   const tokenPath = join(app.getPath('userData'), 'fs_token.txt');

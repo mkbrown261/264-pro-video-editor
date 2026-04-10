@@ -118,6 +118,22 @@ const flowstateAPI = {
   // Poll Replicate prediction status
   pollAITool: (predictionId: string): Promise<unknown> =>
     ipcRenderer.invoke("flowstate:ai-tool-poll", predictionId),
+  // ── AI Video Generation — Seedance 2.0 / Higgsfield / Nano Banana ──────────
+  generateVideo: (params: {
+    model: string;
+    prompt: string;
+    imageUrl?: string;
+    duration?: number;
+    resolution?: string;
+    aspectRatio?: string;
+    quality?: string;
+    cameraMotion?: string;
+    style?: string;
+    negativePrompt?: string;
+  }): Promise<unknown> => ipcRenderer.invoke("flowstate:video-gen", params),
+  // Poll video generation job status
+  pollVideoGen: (requestId: string, provider: string): Promise<unknown> =>
+    ipcRenderer.invoke("flowstate:video-gen-poll", requestId, provider),
   // ── R2 Cloud Storage — persist projects & AI outputs ──────────────────────
   cloudSave: (projectData: unknown): Promise<{ ok: boolean; key?: string; url?: string; error?: string }> =>
     ipcRenderer.invoke("cloud:save", projectData),
