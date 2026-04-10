@@ -774,8 +774,8 @@ ipcMain.handle("flowstate:get-user", async () => {
         : null;
     }
     const res = await fetch(FS_VERIFY_URL, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` },
     });
     const data = await res.json() as any;
     return data.valid ? { ...data.user, tier: data.tier } : null;
@@ -834,6 +834,87 @@ ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) =>
     return res.json();
   } catch (e: any) {
     return { error: e.message };
+  }
+});
+
+// ── R2 Cloud Storage IPC ──────────────────────────────────────────────────────
+// Saves 264 Pro project files and AI exports to Cloudflare R2 via FlowState
+
+async function get264Token(): Promise<string | null> {
+  const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+  try { return (await readFile(tokenPath, 'utf8')).trim() || null; } catch { return null; }
+}
+
+ipcMain.handle('cloud:save', async (_event, projectData: unknown) => {
+  try {
+    const token = await get264Token();
+    if (!token) return { ok: false, error: 'Not authenticated' };
+
+    const projectJson = JSON.stringify(projectData);
+    const projectName = (projectData as any)?.name || 'Untitled Project';
+    const filename = projectName.replace(/[^a-z0-9]/gi, '_') + '.264pro';
+
+    // Use Node.js FormData + Blob for multipart upload
+    const { FormData } = await import('node:form-data' as any).catch(() => ({ FormData: undefined }));
+    // Fall back to flowstate:api-call pattern with JSON body if FormData unavailable
+    const form = new (globalThis.FormData || FormData)();
+    const blob = new Blob([Buffer.from(projectJson, 'utf8')], { type: 'application/json' });
+    form.append('file', blob, filename);
+    form.append('app', '264pro');
+
+    const res = await fetch(`${FS_BASE_URL}/api/r2/upload`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: form as any,
+    });
+    const data = await res.json() as any;
+    return data.ok ? { ok: true, key: data.key, url: `${FS_BASE_URL}${data.url}` } : { ok: false, error: data.error || 'Upload failed' };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cloud:list', async () => {
+  try {
+    const token = await get264Token();
+    if (!token) return { ok: false, error: 'Not authenticated', files: [] };
+    const res = await fetch(`${FS_BASE_URL}/api/r2/list?app=264pro`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const data = await res.json() as any;
+    return { ok: true, files: data.files ?? [] };
+  } catch (e: any) {
+    return { ok: false, error: e.message, files: [] };
+  }
+});
+
+ipcMain.handle('cloud:load', async (_event, key: string) => {
+  try {
+    const token = await get264Token();
+    if (!token) return { ok: false, error: 'Not authenticated' };
+    const res = await fetch(`${FS_BASE_URL}/api/r2/file/${encodeURIComponent(key)}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return { ok: false, error: `Download failed: ${res.status}` };
+    const text = await res.text();
+    return { ok: true, data: JSON.parse(text) };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cloud:delete', async (_event, key: string) => {
+  try {
+    const token = await get264Token();
+    if (!token) return { ok: false, error: 'Not authenticated' };
+    const res = await fetch(`${FS_BASE_URL}/api/r2/file/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const data = await res.json() as any;
+    return { ok: data.ok };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
   }
 });
 

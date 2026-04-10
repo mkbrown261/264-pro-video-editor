@@ -118,5 +118,14 @@ const flowstateAPI = {
   // Poll Replicate prediction status
   pollAITool: (predictionId: string): Promise<unknown> =>
     ipcRenderer.invoke("flowstate:ai-tool-poll", predictionId),
+  // ── R2 Cloud Storage — persist projects & AI outputs ──────────────────────
+  cloudSave: (projectData: unknown): Promise<{ ok: boolean; key?: string; url?: string; error?: string }> =>
+    ipcRenderer.invoke("cloud:save", projectData),
+  cloudList: (): Promise<{ ok: boolean; files: Array<{ key: string; name: string; size: number; uploaded: string; url: string }>; error?: string }> =>
+    ipcRenderer.invoke("cloud:list"),
+  cloudLoad: (key: string): Promise<{ ok: boolean; data?: unknown; error?: string }> =>
+    ipcRenderer.invoke("cloud:load", key),
+  cloudDelete: (key: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("cloud:delete", key),
 };
 contextBridge.exposeInMainWorld("flowstateAPI", flowstateAPI);
