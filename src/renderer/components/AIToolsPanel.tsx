@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from "react";
+import { useAuthGate, AuthGateModal, AuthGateWrapper, type RequiredAccess } from "./AuthGateModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AITool =
@@ -136,6 +137,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 // AIToolsPanel uses flowstateAPI declared in FlowStatePanel.tsx (same global interface Window merge)
+// All AI tools require ClawFlow — sign-in + subscription gated at click-time via AuthGateModal
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 interface AIToolsPanelProps {
@@ -151,6 +153,9 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
   const [result, setResult] = useState<ToolResult | null>(null);
   const [progress, setProgress] = useState(0);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Auth gate — shown when user clicks Run without ClawFlow ─────────────────
+  const { modal, checkAndRun, closeModal } = useAuthGate();
 
   const tool = TOOLS.find((t) => t.id === selectedTool)!;
 
@@ -264,6 +269,7 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
   const categories = [...new Set(TOOLS.map((t) => t.category))];
 
   return (
+    <>
     <div
       style={{
         position: "fixed",
@@ -476,7 +482,17 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
 
             {/* Run button */}
             <button
-              onClick={() => void runTool()}
+              onClick={() => {
+                checkAndRun(
+                  {
+                    toolName: tool.label,
+                    toolIcon: tool.icon,
+                    requiredAccess: "clawflow" as RequiredAccess,
+                    description: tool.desc,
+                  },
+                  () => void runTool(),
+                );
+              }}
               disabled={status === "running" || status === "polling" || !inputUrl.trim()}
               style={{
                 padding: "12px 24px",
@@ -652,5 +668,16 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
         </div>
       </div>
     </div>
+
+    {/* Auth Gate Modal — rendered outside the panel so it covers the full screen */}
+    {modal && (
+      <AuthGateModal
+        config={modal.config}
+        auth={modal.auth}
+        onClose={closeModal}
+        onGranted={modal.onGranted}
+      />
+    )}
+    </>
   );
 }
