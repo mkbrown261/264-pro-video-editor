@@ -40,6 +40,7 @@ interface VideoGenModelDef {
   resolutions: string[];
   aspectRatios: string[];
   features: string[];
+  proOnly?: boolean;
 }
 
 const VIDEO_GEN_MODELS: VideoGenModelDef[] = [
@@ -75,33 +76,35 @@ const VIDEO_GEN_MODELS: VideoGenModelDef[] = [
   },
   {
     id: "higgsfield_t2v",
-    label: "Higgsfield × Seedance",
+    label: "Higgsfield ✦ Seedance 2.0",
     provider: "Higgsfield AI",
-    providerColor: "#a855f7",
-    badge: "CINEMATIC",
-    badgeColor: "#a855f7",
-    icon: "🎥",
-    desc: "Higgsfield's production-grade pipeline — multi-camera storytelling, frame-level control, 40+ model library.",
+    providerColor: "#00d4ff",
+    badge: "✦ HIGGSFIELD PRO",
+    badgeColor: "#00d4ff",
+    icon: "✦",
+    desc: "Higgsfield's production pipeline powered by Seedance 2.0 — cinematic multi-shot, native audio, 100+ models. Pro members only.",
     mode: "t2v",
     maxDuration: 15,
     resolutions: ["720p", "1080p"],
     aspectRatios: ["16:9", "9:16", "4:3", "3:4"],
-    features: ["Multi-Camera", "Frame Control", "100+ Models", "Pro Grade"],
+    features: ["Multi-Camera", "Native Audio", "100+ Models", "Pro Grade"],
+    proOnly: true,
   },
   {
     id: "higgsfield_i2v",
-    label: "Higgsfield i2v",
+    label: "Higgsfield ✦ Image→Video",
     provider: "Higgsfield AI",
-    providerColor: "#a855f7",
-    badge: "IMAGE → VIDEO",
-    badgeColor: "#8b5cf6",
-    icon: "🖼→🎥",
-    desc: "Higgsfield image-to-video — animate reference frames with character consistency across all shots.",
+    providerColor: "#00d4ff",
+    badge: "✦ HIGGSFIELD PRO",
+    badgeColor: "#00ffa3",
+    icon: "✦",
+    desc: "Higgsfield image-to-video — animate reference frames with character consistency, cinematic motion, native audio. Pro only.",
     mode: "i2v",
     maxDuration: 10,
     resolutions: ["720p", "1080p"],
     aspectRatios: ["16:9", "9:16", "4:3"],
-    features: ["Character Lock", "Style Preserve", "Audio Sync"],
+    features: ["Character Lock", "Style Preserve", "Audio Sync", "Pro Only"],
+    proOnly: true,
   },
   {
     id: "nano_banana_2k",
@@ -655,11 +658,42 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
             {/* Model selector sidebar */}
             <div style={{ width: 220, borderRight: "1px solid rgba(255,255,255,0.07)", overflowY: "auto", padding: "10px 8px", flexShrink: 0 }}>
-              {/* T2V group */}
+
+              {/* ✦ Higgsfield AI section — Pro-only, top placement */}
+              <div style={{ marginBottom: 6, padding: "7px 8px 4px", borderRadius: 8, background: "linear-gradient(135deg,rgba(0,212,255,0.06),rgba(0,255,163,0.04))", border: "1px solid rgba(0,212,255,0.15)" }}>
+                <div style={{ fontSize: 9, fontWeight: 800, color: "#00d4ff", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ fontSize: 11 }}>✦</span> Higgsfield AI <span style={{ marginLeft: "auto", fontSize: 8, background: "rgba(0,212,255,0.15)", color: "#00d4ff", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(0,212,255,0.3)" }}>PRO</span>
+                </div>
+                {VIDEO_GEN_MODELS.filter((m) => m.proOnly).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => { setVgModel(m.id); resetVg(); }}
+                    style={{
+                      display: "flex", flexDirection: "column", width: "100%", padding: "8px 8px",
+                      borderRadius: 8,
+                      background: vgModel === m.id ? "rgba(0,212,255,0.14)" : "transparent",
+                      border: `1px solid ${vgModel === m.id ? "rgba(0,212,255,0.5)" : "transparent"}`,
+                      cursor: "pointer", textAlign: "left", marginBottom: 2, transition: "all 0.12s",
+                      boxShadow: vgModel === m.id ? "0 0 10px rgba(0,212,255,0.15)" : "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                      <span style={{ fontSize: 11, color: "#00d4ff" }}>✦</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: vgModel === m.id ? "#00d4ff" : "rgba(255,255,255,0.75)" }}>{m.label}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 8, fontWeight: 800, padding: "1px 5px", borderRadius: 3, background: `${m.badgeColor}18`, color: m.badgeColor }}>
+                        {m.mode === "i2v" ? "I2V" : "T2V"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 9, color: "rgba(0,212,255,0.5)", paddingLeft: 17 }}>{m.provider}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Standard T2V group */}
               <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.08em", padding: "8px 8px 4px" }}>
                 Text → Video
               </div>
-              {VIDEO_GEN_MODELS.filter((m) => m.mode === "t2v").map((m) => (
+              {VIDEO_GEN_MODELS.filter((m) => m.mode === "t2v" && !m.proOnly).map((m) => (
                 <button
                   key={m.id}
                   onClick={() => { setVgModel(m.id); resetVg(); }}
@@ -685,7 +719,7 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
               <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.08em", padding: "12px 8px 4px" }}>
                 Image → Video
               </div>
-              {VIDEO_GEN_MODELS.filter((m) => m.mode === "i2v").map((m) => (
+              {VIDEO_GEN_MODELS.filter((m) => m.mode === "i2v" && !m.proOnly).map((m) => (
                 <button
                   key={m.id}
                   onClick={() => { setVgModel(m.id); resetVg(); }}
@@ -709,22 +743,56 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
             </div>
 
             {/* Main generation area */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{
+              flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14,
+              // Higgsfield gets a cyan/teal glow background
+              background: vgModelDef.proOnly
+                ? "linear-gradient(160deg, rgba(0,212,255,0.03) 0%, rgba(0,255,163,0.02) 100%)"
+                : undefined,
+            }}>
+              {/* Higgsfield Pro banner */}
+              {vgModelDef.proOnly && (
+                <div style={{
+                  background: "linear-gradient(135deg,rgba(0,212,255,0.08),rgba(0,255,163,0.06))",
+                  border: "1px solid rgba(0,212,255,0.2)",
+                  borderRadius: 12, padding: "10px 14px",
+                  display: "flex", alignItems: "center", gap: 10,
+                }}>
+                  <span style={{ fontSize: 20, color: "#00d4ff" }}>✦</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#00d4ff", marginBottom: 2 }}>Higgsfield AI — Pro Members Only</div>
+                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>100+ cinematic models · Seedance 2.0 · Native audio · Multi-shot storytelling</div>
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 800, padding: "3px 8px", borderRadius: 5, background: "rgba(0,212,255,0.15)", color: "#00d4ff", border: "1px solid rgba(0,212,255,0.3)" }}>PRO</span>
+                </div>
+              )}
+
               {/* Model header */}
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                <div style={{ fontSize: 28, lineHeight: 1 }}>{vgModelDef.icon}</div>
+              <div style={{
+                display: "flex", alignItems: "flex-start", gap: 12,
+                padding: vgModelDef.proOnly ? "12px 14px" : "0",
+                borderRadius: vgModelDef.proOnly ? 12 : 0,
+                background: vgModelDef.proOnly ? "rgba(0,212,255,0.05)" : "transparent",
+                border: vgModelDef.proOnly ? "1px solid rgba(0,212,255,0.12)" : "none",
+              }}>
+                <div style={{ fontSize: 28, lineHeight: 1, color: vgModelDef.proOnly ? "#00d4ff" : undefined }}>{vgModelDef.icon}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontWeight: 800, fontSize: 16, color: "#e8e8e8" }}>{vgModelDef.label}</span>
+                    <span style={{ fontWeight: 800, fontSize: 16, color: vgModelDef.proOnly ? "#00d4ff" : "#e8e8e8" }}>{vgModelDef.label}</span>
                     <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 5, background: `${vgModelDef.badgeColor}22`, color: vgModelDef.badgeColor, border: `1px solid ${vgModelDef.badgeColor}44` }}>
                       {vgModelDef.badge}
                     </span>
-                    <span style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginLeft: "auto" }}>{vgModelDef.provider}</span>
+                    <span style={{ fontSize: 10, color: vgModelDef.proOnly ? "rgba(0,212,255,0.4)" : "rgba(255,255,255,0.3)", marginLeft: "auto" }}>{vgModelDef.provider}</span>
                   </div>
                   <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.6, marginBottom: 6 }}>{vgModelDef.desc}</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                     {vgModelDef.features.map((f) => (
-                      <span key={f} style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "rgba(168,85,247,0.1)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.2)" }}>{f}</span>
+                      <span key={f} style={{
+                        fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+                        background: vgModelDef.proOnly ? "rgba(0,212,255,0.1)" : "rgba(168,85,247,0.1)",
+                        color: vgModelDef.proOnly ? "#00d4ff" : "#a855f7",
+                        border: `1px solid ${vgModelDef.proOnly ? "rgba(0,212,255,0.2)" : "rgba(168,85,247,0.2)"}`,
+                      }}>{f}</span>
                     ))}
                   </div>
                 </div>
@@ -857,18 +925,24 @@ export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
                 style={{
                   padding: "13px 24px", borderRadius: 11,
                   background: vgStatus === "running" || vgStatus === "polling"
-                    ? `rgba(${vgModelDef.providerColor === "#06b6d4" ? "6,182,212" : "168,85,247"},0.3)`
+                    ? `rgba(0,0,0,0.3)`
                     : !vgPrompt.trim()
                     ? "rgba(255,255,255,0.07)"
+                    : vgModelDef.proOnly
+                    ? "linear-gradient(135deg, #00d4ff, #00ffa3)"
                     : `linear-gradient(135deg, ${vgModelDef.providerColor}cc, ${vgModelDef.providerColor})`,
                   border: "none",
-                  color: !vgPrompt.trim() ? "rgba(255,255,255,0.3)" : "#fff",
+                  color: !vgPrompt.trim() ? "rgba(255,255,255,0.3)" : vgModelDef.proOnly ? "#000" : "#fff",
                   fontSize: 14, fontWeight: 800,
                   cursor: vgStatus === "running" || vgStatus === "polling" || !vgPrompt.trim() ? "not-allowed" : "pointer",
                   transition: "all 0.15s", alignSelf: "flex-start",
+                  boxShadow: vgModelDef.proOnly && vgPrompt.trim() ? "0 0 18px rgba(0,212,255,0.3)" : "none",
                 }}
               >
-                {vgStatus === "running" ? "⏳ Queuing…" : vgStatus === "polling" ? `⏳ Generating… ${vgProgress > 0 ? Math.round(vgProgress) + "%" : ""}` : `🎬 Generate ${vgDuration}s Video`}
+                {vgStatus === "running" ? "⏳ Queuing…"
+                  : vgStatus === "polling" ? `⏳ Generating… ${vgProgress > 0 ? Math.round(vgProgress) + "%" : ""}`
+                  : vgModelDef.proOnly ? `✦ Generate ${vgDuration}s — Higgsfield`
+                  : `🎬 Generate ${vgDuration}s Video`}
               </button>
 
               {/* Progress bar */}
