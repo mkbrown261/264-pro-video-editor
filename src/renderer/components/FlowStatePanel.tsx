@@ -192,6 +192,105 @@ class LearningEngine {
 
 const learningEngine = new LearningEngine();
 
+// ── Project Memory Engine ─────────────────────────────────────────────────────
+// Tracks in-session edits, tools used, and detected issues for Clawbot context
+interface DiagnosticIssue {
+  type: "clipping" | "loudness" | "frequency" | "masking" | "gap" | "orphan";
+  message: string;
+  track?: string;
+  severity: "high" | "medium" | "low";
+}
+
+interface SessionMemoryState {
+  editsMade: number;
+  toolsUsed: string[];
+  clipCount: number;
+  diagnostics: DiagnosticIssue[];
+  lastDiagRun: number;
+}
+
+class ProjectMemoryEngine {
+  state: SessionMemoryState = {
+    editsMade: 0,
+    toolsUsed: [],
+    clipCount: 0,
+    diagnostics: [],
+    lastDiagRun: 0,
+  };
+
+  recordEdit(): void {
+    this.state.editsMade++;
+  }
+
+  recordTool(toolName: string): void {
+    if (!this.state.toolsUsed.includes(toolName)) {
+      this.state.toolsUsed = [...this.state.toolsUsed, toolName];
+    }
+  }
+
+  updateClipCount(count: number): void {
+    this.state.clipCount = count;
+  }
+
+  setDiagnostics(issues: DiagnosticIssue[]): void {
+    this.state.diagnostics = issues;
+    this.state.lastDiagRun = Date.now();
+  }
+
+  // Run lightweight local diagnostics (no AI cost)
+  runLocalDiagnostics(
+    tracks: any[],
+    clips: any[],
+    audioMetrics?: { peakDb?: number; lufs?: number; frequencyProfile?: { low: number; mid: number; high: number } }
+  ): DiagnosticIssue[] {
+    const issues: DiagnosticIssue[] = [];
+
+    // Check for gaps in timeline
+    if (clips.length > 1) {
+      const sorted = [...clips].sort((a, b) => (a.startFrame ?? 0) - (b.startFrame ?? 0));
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const endFrame = (sorted[i].startFrame ?? 0) + (sorted[i].durationFrames ?? 0);
+        const nextStart = sorted[i + 1].startFrame ?? 0;
+        if (nextStart - endFrame > 5) { // > 5 frames gap
+          issues.push({ type: "gap", message: `Timeline gap detected around clip "${sorted[i].name ?? 'Unknown'}"`, severity: "low" });
+          break; // report only first gap
+        }
+      }
+    }
+
+    // Check for very large track counts
+    if (tracks.length > 20) {
+      issues.push({ type: "masking", message: `${tracks.length} tracks — complex project. Consider grouping/nesting tracks for clarity`, severity: "low" });
+    }
+
+    // Audio metrics (if provided by editor)
+    if (audioMetrics) {
+      const { peakDb, lufs, frequencyProfile } = audioMetrics;
+      if (peakDb != null && peakDb > -1) {
+        issues.push({ type: "clipping", message: `Master peak ${peakDb.toFixed(1)} dBFS — reduce gain by ${Math.abs(peakDb + 3).toFixed(1)} dB`, severity: "high" });
+      }
+      if (lufs != null && lufs > -8) {
+        issues.push({ type: "loudness", message: `LUFS ${lufs.toFixed(1)} — too loud for streaming (target -14 LUFS)`, severity: "medium" });
+      }
+      if (frequencyProfile) {
+        const total = frequencyProfile.low + frequencyProfile.mid + frequencyProfile.high;
+        if (total > 0 && (frequencyProfile.low / total) > 0.55) {
+          issues.push({ type: "frequency", message: `Low-heavy mix — highpass at 80Hz, cut 200-400Hz by 2dB`, severity: "medium" });
+        }
+      }
+    }
+
+    this.setDiagnostics(issues);
+    return issues;
+  }
+
+  getSummary(): SessionMemoryState {
+    return { ...this.state };
+  }
+}
+
+const projectMemory = new ProjectMemoryEngine();
+
 // ── Main component ────────────────────────────────────────────────────────────
 interface FlowStatePanelProps {
   isOpen: boolean;
@@ -233,6 +332,7 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [suggestedActions, setSuggestedActions] = useState<any[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Projects state
@@ -241,6 +341,10 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
 
   // Session state
   const [sessionMsg, setSessionMsg] = useState<string | null>(null);
+
+  // Diagnostics state
+  const [diagnostics, setDiagnostics] = useState<DiagnosticIssue[]>([]);
+  const [diagVisible, setDiagVisible] = useState(false);
 
   // Learning state
   const [suggestionBanner, setSuggestionBanner] = useState<string | null>(null);
@@ -289,6 +393,12 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
       lastModified: new Date().toISOString(),
     };
     void fsApi.apiCall("/api/264pro/context-sync", "POST", ctx);
+
+    // Run local diagnostics (zero AI cost)
+    projectMemory.updateClipCount(clips.length);
+    const localIssues = projectMemory.runLocalDiagnostics(tracks, clips);
+    setDiagnostics(localIssues);
+    if (localIssues.length > 0) setDiagVisible(true);
   }, [isOpen, user, project]);
 
   // ── Load recent projects ───────────────────────────────────────────────────
@@ -309,27 +419,51 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
   }, [messages]);
 
   // ── Send chat ──────────────────────────────────────────────────────────────
-  const sendChat = useCallback(async () => {
-    const text = chatInput.trim();
+  const sendChat = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? chatInput).trim();
     if (!text || chatBusy) return;
-    setChatInput("");
+    if (!overrideText) setChatInput("");
     learningEngine.observe(text);
+    projectMemory.recordEdit();
     const userMsg: ChatMessage = { role: "user", content: text, ts: Date.now() };
     setMessages((m) => [...m, userMsg]);
     setChatBusy(true);
+    setSuggestedActions([]);
     try {
       const history = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
+      const tracks = project.sequence?.tracks ?? [];
+      const clips  = project.sequence?.clips  ?? [];
+      const settings = project.sequence?.settings ?? {};
+      const memSummary = projectMemory.getSummary();
+
       const res = (await fsApi.apiCall("/api/264pro/ai-chat", "POST", {
         messages: history,
+        // Live project context
         projectContext: {
           projectName: project.name ?? "Untitled",
-          trackCount: project.sequence?.tracks?.length ?? 0,
-          fps: project.sequence?.settings?.fps ?? 30,
-          resolution: `${project.sequence?.settings?.width ?? 1920}×${project.sequence?.settings?.height ?? 1080}`,
+          trackCount: tracks.length,
+          clipCount: clips.length,
+          fps: settings.fps ?? 30,
+          resolution: `${settings.width ?? 1920}×${settings.height ?? 1080}`,
         },
+        // In-session memory (tracked locally)
+        sessionMemory: {
+          editsMade:  memSummary.editsMade,
+          toolsUsed:  memSummary.toolsUsed,
+          clipCount:  memSummary.clipCount,
+        },
+        // Real-time diagnostics
+        diagnostics: memSummary.diagnostics,
       })) as any;
+
       const reply = res?.reply ?? res?.message ?? "Sorry, I couldn't get a response.";
       setMessages((m) => [...m, { role: "assistant", content: reply, ts: Date.now() }]);
+
+      // Show Clawbot's suggested actions (if any)
+      if (Array.isArray(res?.suggestedActions) && res.suggestedActions.length > 0) {
+        setSuggestedActions(res.suggestedActions);
+      }
+
       if (learningEngine.shouldSuggest()) {
         learningEngine.markSuggested();
         setSuggestionBanner(learningEngine.topic ?? "this topic");
@@ -651,11 +785,125 @@ Be specific, not generic. Surprising insights only.`;
                   fontSize: 10,
                   color: "rgba(168,85,247,0.8)",
                   flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
                 }}
               >
-                📎 Context: {project.name ?? "Untitled"} · {project.sequence?.tracks?.length ?? 0} tracks ·{" "}
-                {project.sequence?.settings?.fps ?? 30}fps · {project.sequence?.settings?.width ?? 1920}×{project.sequence?.settings?.height ?? 1080}
+                <span>📎 {project.name ?? "Untitled"} · {project.sequence?.tracks?.length ?? 0} tracks · {project.sequence?.settings?.fps ?? 30}fps</span>
+                {diagnostics.length > 0 && (
+                  <button
+                    onClick={() => setDiagVisible(v => !v)}
+                    style={{
+                      background: diagnostics.some(d => d.severity === "high") ? "rgba(239,68,68,0.2)" : "rgba(245,158,11,0.2)",
+                      border: `1px solid ${diagnostics.some(d => d.severity === "high") ? "rgba(239,68,68,0.4)" : "rgba(245,158,11,0.4)"}`,
+                      color: diagnostics.some(d => d.severity === "high") ? "#ef4444" : "#f59e0b",
+                      borderRadius: 5,
+                      padding: "2px 7px",
+                      fontSize: 9,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ⚠ {diagnostics.length} issue{diagnostics.length !== 1 ? "s" : ""}
+                  </button>
+                )}
               </div>
+
+              {/* Diagnostics panel */}
+              {diagVisible && diagnostics.length > 0 && (
+                <div style={{
+                  background: "rgba(0,0,0,0.3)",
+                  borderBottom: "1px solid rgba(239,68,68,0.2)",
+                  padding: "8px 12px",
+                  flexShrink: 0,
+                }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#f59e0b", marginBottom: 5, letterSpacing: "0.05em" }}>CLAWBOT DIAGNOSTICS</div>
+                  {diagnostics.map((issue, i) => (
+                    <div key={i} style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 6,
+                      marginBottom: 4,
+                      fontSize: 10,
+                      color: issue.severity === "high" ? "#ef4444" : issue.severity === "medium" ? "#f59e0b" : "rgba(255,255,255,0.5)",
+                    }}>
+                      <span style={{ flexShrink: 0 }}>
+                        {issue.severity === "high" ? "🔴" : issue.severity === "medium" ? "🟡" : "🔵"}
+                      </span>
+                      <span style={{ flex: 1, lineHeight: 1.4 }}>{issue.message}</span>
+                      <button
+                        onClick={() => void sendChat(`Fix this issue: ${issue.message}`)}
+                        style={{
+                          background: "rgba(168,85,247,0.2)",
+                          border: "1px solid rgba(168,85,247,0.3)",
+                          color: "#d0a0ff",
+                          borderRadius: 4,
+                          padding: "2px 6px",
+                          fontSize: 9,
+                          cursor: "pointer",
+                          flexShrink: 0,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Fix →
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Suggested actions from Clawbot */}
+              {suggestedActions.length > 0 && (
+                <div style={{
+                  padding: "8px 12px",
+                  background: "rgba(16,185,129,0.06)",
+                  borderBottom: "1px solid rgba(16,185,129,0.15)",
+                  flexShrink: 0,
+                }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#10b981", marginBottom: 5, letterSpacing: "0.05em" }}>CLAWBOT SUGGESTS</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {suggestedActions.slice(0, 3).map((action: any, i: number) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          // Log the action trigger
+                          void fsApi.apiCall("/api/264pro/activity", "POST", {
+                            event: "clawbot_action_triggered",
+                            actionType: action.action,
+                            tool: action.tool || action.model,
+                            projectName: project.name ?? "Untitled",
+                          });
+                          setSuggestedActions([]);
+                          // Track tool usage
+                          if (action.tool) projectMemory.recordTool(action.tool);
+                        }}
+                        style={{
+                          background: "rgba(16,185,129,0.15)",
+                          border: "1px solid rgba(16,185,129,0.3)",
+                          color: "#34d399",
+                          borderRadius: 5,
+                          padding: "4px 9px",
+                          fontSize: 10,
+                          cursor: "pointer",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {action.action === "tool" ? `🔧 ${action.tool}` :
+                         action.action === "generate_video" ? `🎬 Generate: ${action.model}` :
+                         action.action === "export" ? `📤 Export` :
+                         `▶ ${action.action}`}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setSuggestedActions([])}
+                      style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 10, cursor: "pointer" }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Messages */}
               <div style={{ flex: 1, overflowY: "auto", padding: "12px 12px 4px" }}>
