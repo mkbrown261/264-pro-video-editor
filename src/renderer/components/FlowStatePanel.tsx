@@ -790,7 +790,7 @@ Be specific, not generic. Surprising insights only.`;
                     {suggestedActions.slice(0, 3).map((action: any, i: number) => (
                       <button
                         key={i}
-                        onClick={() => {
+                        onClick={async () => {
                           // Log the action trigger
                           void fsApi.apiCall("/api/264pro/activity", "POST", {
                             event: "clawbot_action_triggered",
@@ -798,14 +798,54 @@ Be specific, not generic. Surprising insights only.`;
                             tool: action.tool || action.model,
                             projectName: project.name ?? "Untitled",
                           });
-                          setSuggestedActions([]);
                           // Track tool usage
                           if (action.tool) projectMemory.recordTool(action.tool);
+
+                          // External (Layer 3) actions — route through execute-action on the hub
+                          const externalActions = ["slack_post", "slack_standup", "notion_create_task", "notion_update_page"];
+                          if (externalActions.includes(action.action)) {
+                            try {
+                              const res = await fsApi.apiCall("/api/claw/execute-action", "POST", {
+                                action: action.action,
+                                params: action,
+                              }) as { ok?: boolean; message?: string; needsPermission?: boolean; needsIntegration?: boolean; integration?: string; error?: string } | null;
+                              if (res?.needsPermission) {
+                                // Append info message to chat
+                                setMessages((prev) => [...prev, {
+                                  role: "assistant" as const,
+                                  content: "I need permission to do that — open Claw Permissions in the FlowState Hub to enable it.",
+                                  ts: Date.now(),
+                                }]);
+                              } else if (res?.needsIntegration) {
+                                setMessages((prev) => [...prev, {
+                                  role: "assistant" as const,
+                                  content: `Connect ${res.integration} in the FlowState Hub first, then I can do that automatically.`,
+                                  ts: Date.now(),
+                                }]);
+                              } else if (res?.ok) {
+                                setMessages((prev) => [...prev, {
+                                  role: "assistant" as const,
+                                  content: res.message ?? `✓ Done: ${action.action}`,
+                                  ts: Date.now(),
+                                }]);
+                              }
+                            } catch {
+                              // Network error — silently fail, user can retry
+                            }
+                          }
+
+                          setSuggestedActions([]);
                         }}
                         style={{
-                          background: "rgba(16,185,129,0.15)",
-                          border: "1px solid rgba(16,185,129,0.3)",
-                          color: "#34d399",
+                          background: ["slack_post","slack_standup","notion_create_task","notion_update_page"].includes(action.action)
+                            ? "rgba(168,85,247,0.15)"
+                            : "rgba(16,185,129,0.15)",
+                          border: ["slack_post","slack_standup","notion_create_task","notion_update_page"].includes(action.action)
+                            ? "1px solid rgba(168,85,247,0.3)"
+                            : "1px solid rgba(16,185,129,0.3)",
+                          color: ["slack_post","slack_standup","notion_create_task","notion_update_page"].includes(action.action)
+                            ? "#c084fc"
+                            : "#34d399",
                           borderRadius: 5,
                           padding: "4px 9px",
                           fontSize: 10,
@@ -816,6 +856,9 @@ Be specific, not generic. Surprising insights only.`;
                         {action.action === "tool" ? `🔧 ${action.tool}` :
                          action.action === "generate_video" ? `🎬 Generate: ${action.model}` :
                          action.action === "export" ? `📤 Export` :
+                         action.action === "slack_post" || action.action === "slack_standup" ? `💬 Post to ${action.channel || "Slack"}` :
+                         action.action === "notion_create_task" ? `✅ Create task` :
+                         action.action === "notion_update_page" ? `📝 Update Notion` :
                          `▶ ${action.action}`}
                       </button>
                     ))}
