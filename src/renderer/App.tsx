@@ -668,6 +668,28 @@ export default function App() {
   // ── Image Gen Modal ────────────────────────────────────────────────────────
   const [imgGenOpen, setImgGenOpen] = useState(false);
 
+  // ── CLAW Video first-launch promo ─────────────────────────────────────────
+  // Shows once per install. Stored in localStorage so it never shows again.
+  const [showClawPromo, setShowClawPromo] = useState(false);
+  useEffect(() => {
+    try {
+      const seen = localStorage.getItem('264pro_claw_video_seen');
+      if (!seen) {
+        // Small delay so the app fully loads before the promo appears
+        const t = setTimeout(() => setShowClawPromo(true), 2200);
+        return () => clearTimeout(t);
+      }
+    } catch { /* localStorage unavailable */ }
+  }, []);
+  const dismissClawPromo = (openWizard = false) => {
+    try { localStorage.setItem('264pro_claw_video_seen', '1'); } catch { /* ignore */ }
+    setShowClawPromo(false);
+    if (openWizard) {
+      // Open the FlowState hub CLAW wizard in a new window
+      window.open('https://flowst8.cc/#claw-video', '_blank');
+    }
+  };
+
   // ── AI Quick Bar dropdown ──────────────────────────────────────────────────
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
   const [aiMenuPos, setAiMenuPos] = useState({ bottom: 0, right: 0 });
@@ -3044,6 +3066,82 @@ export default function App() {
 
       {/* ── Image Gen Modal ── */}
       {renderImageGenModal()}
+
+      {/* ── CLAW Video First-Launch Promo ── */}
+      {showClawPromo && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.72)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: 'linear-gradient(160deg,#1a0a2e 0%,#0f1a2e 60%,#0a1a1f 100%)',
+            border: '1px solid rgba(168,85,247,.4)',
+            borderRadius: 20,
+            padding: '32px 28px',
+            maxWidth: 440,
+            width: '90%',
+            boxShadow: '0 24px 80px rgba(0,0,0,.6), 0 0 60px rgba(168,85,247,.12)',
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 44, marginBottom: 10 }}>🎬</div>
+            <div style={{
+              fontSize: 22, fontWeight: 800, marginBottom: 8,
+              background: 'linear-gradient(135deg,#a855f7,#06b6d4)',
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+            }}>
+              Create AI Videos with CLAW
+            </div>
+            <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.65)', marginBottom: 22, lineHeight: 1.6 }}>
+              CLAW is your Production Director AI. It generates concepts, shot lists, and full music videos — then sends them straight into your 264 Pro timeline.
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              {[
+                { icon: '✦', label: 'Concept generation' },
+                { icon: '🎞', label: 'Shot list builder' },
+                { icon: '🤖', label: 'AI video render' },
+              ].map(f => (
+                <div key={f.label} style={{
+                  flex: 1, background: 'rgba(168,85,247,.08)',
+                  border: '1px solid rgba(168,85,247,.2)',
+                  borderRadius: 10, padding: '8px 6px',
+                  fontSize: 11, color: 'rgba(255,255,255,0.7)',
+                }}>
+                  <div style={{ fontSize: 16, marginBottom: 4 }}>{f.icon}</div>
+                  {f.label}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => dismissClawPromo(true)}
+              style={{
+                width: '100%', padding: '13px 0', borderRadius: 12,
+                border: 'none', marginBottom: 10,
+                background: 'linear-gradient(135deg,#a855f7,#06b6d4)',
+                color: '#fff', fontSize: 15, fontWeight: 800,
+                cursor: 'pointer', letterSpacing: 0.3,
+              }}
+            >
+              Create Video with CLAW →
+            </button>
+            <button
+              onClick={() => dismissClawPromo(false)}
+              style={{
+                width: '100%', padding: '9px 0', borderRadius: 10,
+                border: '1px solid rgba(255,255,255,.1)',
+                background: 'transparent',
+                color: 'rgba(255,255,255,0.45)', fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              Skip for now
+            </button>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 10 }}>
+              This message won't appear again
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
