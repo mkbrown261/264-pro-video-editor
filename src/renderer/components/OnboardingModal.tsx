@@ -4,7 +4,7 @@
  * Accessible from Help menu → "Feature Tour".
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 
 interface OnboardingModalProps {
   onFinish: () => void;
@@ -41,11 +41,11 @@ function OnboardingModal({
   });
   const [slide, setSlide] = useState(0);
 
-  const finish = () => {
+  const finish = useCallback(() => {
     try { localStorage.setItem("264pro_onboarded", "1"); } catch { /* ignore */ }
     setVisible(false);
     onFinish();
-  };
+  }, [onFinish]);
 
   // Re-show if triggered externally by Help menu
   useEffect(() => {
@@ -53,6 +53,16 @@ function OnboardingModal({
     window.addEventListener("264pro:show-onboarding", handler);
     return () => window.removeEventListener("264pro:show-onboarding", handler);
   }, []);
+
+  // Escape key closes modal (marks as onboarded)
+  useEffect(() => {
+    if (!visible) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") finish();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [visible, finish]);
 
   if (!visible) return null;
 

@@ -126,10 +126,15 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
   const [dialogueMode, setDialogueMode] = useState<'dialogue' | 'background' | 'both'>('dialogue');
   const [voiceSensitivity, setVoiceSensitivity] = useState(0.8);
   const [aiToast, setAiToast] = useState<string | null>(null);
+  const aiToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear toast timer on unmount to prevent setState on unmounted component
+  useEffect(() => () => { if (aiToastTimerRef.current) clearTimeout(aiToastTimerRef.current); }, []);
 
   const showAiToast = (msg: string) => {
+    if (aiToastTimerRef.current) clearTimeout(aiToastTimerRef.current);
     setAiToast(msg);
-    setTimeout(() => setAiToast(null), 4000);
+    aiToastTimerRef.current = setTimeout(() => setAiToast(null), 4000);
   };
 
   const applyAudioAI = async (mode: string) => {

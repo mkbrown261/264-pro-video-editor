@@ -359,6 +359,17 @@ export async function generateProxiesInBackground(
   }
 }
 
+// ── Active child process registry (for kill-on-quit) ─────────────────────────
+const _activeChildren = new Set<import("node:child_process").ChildProcess>();
+
+/** Kill all active FFmpeg child processes — called on app will-quit. */
+export function killAllActiveProcesses(): void {
+  for (const child of _activeChildren) {
+    try { child.kill("SIGKILL"); } catch { /* already dead */ }
+  }
+  _activeChildren.clear();
+}
+
 // ── atempo chain helper ───────────────────────────────────────────────────────
 // atempo filter only accepts 0.5–2.0. For values outside that range we chain
 // multiple atempo filters. E.g. 4x speed = atempo=2.0,atempo=2.0
@@ -820,6 +831,7 @@ export async function exportSequence(
     const child = spawn(environment.ffmpegPath, args, {
       stdio: ["ignore", "pipe", "pipe"]
     });
+    _activeChildren.add(child);
 
     let stderr = "";
     // BUG #16 fix: track current progress to avoid going backwards
@@ -854,6 +866,7 @@ export async function exportSequence(
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      _activeChildren.delete(child);
       if (code === 0) {
         if (onProgress) onProgress(100);
         resolve();

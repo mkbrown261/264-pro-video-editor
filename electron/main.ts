@@ -11,6 +11,7 @@ import {
   exportSequence,
   generateProxiesInBackground,
   getEnvironmentStatus,
+  killAllActiveProcesses,
   probeMediaFiles
 } from "./ffmpeg.js";
 
@@ -594,7 +595,13 @@ ipcMain.handle("media:open-files", async (event) => {
   }
 
   // Fast probe: metadata + thumbnail only, returns immediately
-  const assets = await probeMediaFiles(result.filePaths);
+  let assets;
+  try {
+    assets = await probeMediaFiles(result.filePaths);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
+  }
 
   // Kick off proxy generation in the background (non-blocking).
   // When each proxy is ready, notify the renderer to swap the previewUrl.
@@ -1066,6 +1073,11 @@ app.on('second-instance', (_event, argv) => {
   // Focus gate or main window
   const wins = BrowserWindow.getAllWindows();
   if (wins[0]) { if (wins[0].isMinimized()) wins[0].restore(); wins[0].focus(); }
+});
+
+// ── Kill active FFmpeg processes on quit ──────────────────────────────────────
+app.on("will-quit", () => {
+  killAllActiveProcesses();
 });
 
 // ── Entry point ───────────────────────────────────────────────────────────────

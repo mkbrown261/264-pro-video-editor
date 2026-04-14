@@ -300,7 +300,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
   // ── Wheel / scroll handling ───────────────────────────────────────────────
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
@@ -357,7 +358,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     if (ctxMenu) { setCtxMenu(null); return; }
     if (addMenu) { setAddMenu(null); setAddSearch(""); return; }
 
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     const wx = (mx - pan.x) / zoom;
@@ -379,7 +381,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
   }, [ctxMenu, addMenu, pan, zoom, spaceHeld]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
@@ -457,7 +460,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     setCtxMenu({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -482,7 +486,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     }
 
     // BUG 3A: Record precise offset from node's top-left corner using getBoundingClientRect
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     // Convert click to world coords
@@ -504,7 +509,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
   const onNodeContextMenu = useCallback((e: React.MouseEvent, nodeId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     setCtxMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, nodeId });
     if (!selectedNodeIds.includes(nodeId)) onSelectNodes([nodeId]);
   }, [selectedNodeIds, onSelectNodes]);
@@ -623,7 +629,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
 
   // ── Add node ──────────────────────────────────────────────────────────────
   const openAddMenu = useCallback((e: React.MouseEvent) => {
-    const rect = containerRef.current!.getBoundingClientRect();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
     setAddMenu({ x: cx, y: cy, wx: (cx - pan.x) / zoom, wy: (cy - pan.y) / zoom });

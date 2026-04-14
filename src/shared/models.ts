@@ -378,7 +378,10 @@ export type EffectType =
   // Phase 6: Signature effects
   | "glitch_storm"
   | "analog_dream"
-  | "clawflow_style";
+  | "clawflow_style"
+  // Phase 8: AI-powered effects
+  | "face_refinement"
+  | "defocus_background";
 
 export interface ClipEffect {
   id: string;
