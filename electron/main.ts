@@ -1065,6 +1065,114 @@ ipcMain.handle('publish:upload-tiktok', async (_event, _params: unknown) => {
   return { ok: false, error: 'TikTok upload requires OAuth setup. Connect your account in Settings.' };
 });
 
+// ── Whisper AI Transcription via Groq ─────────────────────────────────────────
+ipcMain.handle('ai:transcribe', async (_ev, args: { filePath: string; language?: string }) => {
+  try {
+    const groqKey = process.env.GROQ_API_KEY || '';
+    if (!groqKey) {
+      return { success: false, error: 'Add GROQ_API_KEY in Settings → AI to enable transcription' };
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+    const FormData = (await import('form-data')).default;
+
+    if (!fs.existsSync(args.filePath)) {
+      return { success: false, error: `File not found: ${args.filePath}` };
+    }
+
+    const form = new FormData();
+    form.append('file', fs.readFileSync(args.filePath), {
+      filename: path.basename(args.filePath),
+      contentType: 'audio/mpeg',
+    });
+    form.append('model', 'whisper-large-v3');
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'word');
+    if (args.language) form.append('language', args.language);
+
+    const formBuffer = form.getBuffer();
+    const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${groqKey}`, ...form.getHeaders() },
+      body: formBuffer,
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return { success: false, error: `Groq API error ${resp.status}: ${errText.slice(0, 200)}` };
+    }
+
+    const data = await resp.json() as Record<string, unknown>;
+
+    // Convert word-level timestamps to subtitle segments
+    const words = (data.words ?? []) as Array<{ word: string; start: number; end: number }>;
+
+    if (words.length === 0 && data.text) {
+      // No word timestamps — return as single segment
+      return { success: true, segments: [{ startMs: 0, endMs: 5000, text: data.text as string }] };
+    }
+
+    // Group words into ~6-word subtitle lines
+    const segments: Array<{ startMs: number; endMs: number; text: string }> = [];
+    const GROUP_SIZE = 6;
+    for (let i = 0; i < words.length; i += GROUP_SIZE) {
+      const group = words.slice(i, i + GROUP_SIZE);
+      segments.push({
+        startMs: Math.round(group[0].start * 1000),
+        endMs: Math.round(group[group.length - 1].end * 1000),
+        text: group.map(w => w.word).join(' ').trim(),
+      });
+    }
+    return { success: true, segments };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('lut:export', async (_ev, args: { grade: Record<string, number>; name: string }) => {
+  try {
+    const { dialog } = await import('electron');
+    const fsM = await import('fs');
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export LUT',
+      defaultPath: `${(args.name || 'grade').replace(/[^a-zA-Z0-9_-]/g,'_')}.cube`,
+      filters: [{ name: 'LUT Files', extensions: ['cube'] }],
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+    const SIZE = 17;
+    const g = args.grade;
+    const exposure = g.exposure ?? 0;
+    const contrast = g.contrast ?? 0;
+    const saturation = g.saturation ?? 1;
+    const temperature = g.temperature ?? 0;
+    const tint = g.tint ?? 0;
+    const shadows = g.shadows ?? 0;
+    const highlights = g.highlights ?? 0;
+    const vibrance = g.vibrance ?? 0;
+    const lines = [`# 264 Pro LUT export`, `TITLE "${args.name}"`, `LUT_3D_SIZE ${SIZE}`, ''];
+    for (let b = 0; b < SIZE; b++) {
+      for (let g2 = 0; g2 < SIZE; g2++) {
+        for (let r = 0; r < SIZE; r++) {
+          let R = r/(SIZE-1), G = g2/(SIZE-1), B = b/(SIZE-1);
+          const em = Math.pow(2, exposure); R*=em; G*=em; B*=em;
+          const cf = 1+contrast; R=(R-.5)*cf+.5; G=(G-.5)*cf+.5; B=(B-.5)*cf+.5;
+          const tf=temperature/500; R+=tf; B-=tf;
+          const tif=tint/500; G+=tif;
+          if(shadows){const s=shadows*.1; R+=s*(1-R); G+=s*(1-G); B+=s*(1-B);}
+          if(highlights){const h=highlights*.1; R+=h*R; G+=h*G; B+=h*B;}
+          if(saturation!==1){const l=.2126*R+.7152*G+.0722*B; R=l+(R-l)*saturation; G=l+(G-l)*saturation; B=l+(B-l)*saturation;}
+          if(vibrance){const l=.2126*R+.7152*G+.0722*B; const sat=Math.max(R,G,B)-Math.min(R,G,B); const vf=1+(vibrance*.01)*(1-sat); R=l+(R-l)*vf; G=l+(G-l)*vf; B=l+(B-l)*vf;}
+          R=Math.max(0,Math.min(1,R)); G=Math.max(0,Math.min(1,G)); B=Math.max(0,Math.min(1,B));
+          lines.push(`${R.toFixed(6)} ${G.toFixed(6)} ${B.toFixed(6)}`);
+        }
+      }
+    }
+    fsM.writeFileSync(filePath, lines.join('\n'));
+    return { success: true, filePath };
+  } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
 function handleDeepLink(url: string) {
   try {
     const parsed = new URL(url);

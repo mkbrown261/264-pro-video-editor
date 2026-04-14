@@ -3903,6 +3903,7 @@ export default function App() {
             onUpdateCue={handleUpdateSubtitleCue}
             onRemoveCue={handleRemoveSubtitleCue}
             onSeekToFrame={(frame) => setPlayheadFrame(frame)}
+            project={project}
           />
           <button
             onClick={() => setSubtitlesPanelOpen(false)}

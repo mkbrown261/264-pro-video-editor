@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-import type { SubtitleCue, SubtitleStyle } from "../../shared/models";
+import type { SubtitleCue, SubtitleStyle, MediaAsset } from "../../shared/models";
 import { DEFAULT_SUBTITLE_STYLE, createId } from "../../shared/models";
 import { toast } from "../lib/toast";
 
@@ -11,6 +11,7 @@ interface SubtitlesPanelProps {
   onUpdateCue: (id: string, updates: Partial<SubtitleCue>) => void;
   onRemoveCue: (id: string) => void;
   onSeekToFrame: (frame: number) => void;
+  project?: { assets: MediaAsset[] };
 }
 
 function framesTo_SRT_Time(frames: number, fps: number): string {
@@ -68,9 +69,10 @@ function generateSRT(cues: SubtitleCue[], fps: number): string {
     .join("\n\n");
 }
 
-export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue, onRemoveCue, onSeekToFrame }: SubtitlesPanelProps) {
+export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue, onRemoveCue, onSeekToFrame, project }: SubtitlesPanelProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [globalStyle, setGlobalStyle] = useState<SubtitleStyle>({ ...DEFAULT_SUBTITLE_STYLE });
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const sorted = [...cues].sort((a, b) => a.startFrame - b.startFrame);
@@ -89,9 +91,31 @@ export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue
     setEditingId(cue.id);
   }
 
-  function handleAITranscribe() {
-    toast.warning("AI transcription requires API key. Add your key in Settings → AI.");
-  }
+  const handleAiTranscribe = async () => {
+    // Find first media asset with a source path
+    const mediaAsset = project?.assets?.find((a: MediaAsset) => a.sourcePath);
+    const filePath = mediaAsset?.sourcePath ?? '';
+    if (!filePath) { toast.warning('No media file found. Import a video or audio file first.'); return; }
+    setIsTranscribing(true);
+    toast.info('🎙 Transcribing with Whisper…');
+    try {
+      const result = await (window as any).electronAPI?.transcribeAudio?.({ filePath }) as { success: boolean; segments?: Array<{ startMs: number; endMs: number; text: string }>; error?: string } | undefined;
+      if (!result?.success) { toast.error(result?.error ?? 'Transcription failed'); return; }
+      const newCues = (result.segments ?? []).map((seg: { startMs: number; endMs: number; text: string }, i: number) => ({
+        id: `sub_whisper_${Date.now()}_${i}`,
+        startFrame: Math.round((seg.startMs / 1000) * fps),
+        endFrame: Math.round((seg.endMs / 1000) * fps),
+        text: seg.text,
+        style: { ...globalStyle },
+      }));
+      newCues.forEach((cue: SubtitleCue) => onAddCue(cue));
+      toast.success(`✅ ${newCues.length} subtitle segments added`);
+    } catch(e) {
+      toast.error('Transcription error: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
 
   function handleImportSRT() {
     fileInputRef.current?.click();
@@ -152,10 +176,11 @@ export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue
           + Add Cue
         </button>
         <button
-          onClick={handleAITranscribe}
-          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.3)", background: "rgba(168,85,247,0.1)", color: "#d0a0ff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+          onClick={handleAiTranscribe}
+          disabled={isTranscribing}
+          style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.3)", background: "rgba(168,85,247,0.1)", color: "#d0a0ff", fontSize: 11, fontWeight: 600, cursor: isTranscribing ? "not-allowed" : "pointer", opacity: isTranscribing ? 0.7 : 1 }}
         >
-          🤖 AI Transcribe
+          {isTranscribing ? "🎙 Transcribing…" : "🤖 AI Transcribe"}
         </button>
         <button
           onClick={handleImportSRT}

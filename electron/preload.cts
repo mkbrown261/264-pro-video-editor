@@ -110,6 +110,9 @@ const electronAPI = {
     ipcRenderer.invoke("publish:upload-youtube", params),
   uploadToTikTok: (params: unknown): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke("publish:upload-tiktok", params),
+  transcribeAudio: (args: { filePath: string; language?: string }) =>
+    ipcRenderer.invoke('ai:transcribe', args),
+  exportLut: (args: { grade: Record<string, number>; name: string }) => ipcRenderer.invoke('lut:export', args),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 

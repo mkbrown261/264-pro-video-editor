@@ -46,6 +46,9 @@ declare global {
       uploadToYouTube?: (params: unknown) => Promise<{ ok: boolean; error?: string }>;
       /** Phase 9: Upload to TikTok */
       uploadToTikTok?: (params: unknown) => Promise<{ ok: boolean; error?: string }>;
+      /** Whisper AI transcription via Groq */
+      transcribeAudio?: (args: { filePath: string; language?: string }) => Promise<{ success: boolean; segments?: Array<{ startMs: number; endMs: number; text: string }>; error?: string }>;
+      exportLut?: (args: { grade: Record<string, number>; name: string }) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
     };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;
