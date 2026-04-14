@@ -26,6 +26,8 @@ import { usePlaybackController } from "../hooks/usePlaybackController";
 import { MaskingCanvas, type MaskTool } from "./MaskingCanvas";
 import { getGradeFilterStyle, GRADE_FILTER_ID } from "../lib/colorGradeRenderer";
 import { computeCssFilterFromEffects } from "./EffectsPanel";
+import { interpolateKeyframes } from "./KeyframeCurveEditor";
+import type { CurveKeyframe } from "./KeyframeCurveEditor";
 import { isWebGLTransition, renderTransitionFrame, disposeTransitionRenderer } from "../lib/transitionRenderer";
 
 export interface ViewerPanelHandle {
@@ -685,19 +687,45 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     );
     const hasGrade    = Boolean(colorGrade);
 
+    // ── Keyframe interpolation: patch effect params at current frame ──────────
+    // For each ClipEffect param that has CurveKeyframe[] data stored in
+    // ef.keyframes[paramKey], compute the interpolated value at playheadFrame
+    // and override the static param value.  This is the playback engine hook
+    // for the bezier curve editor.
+    const interpolatedEffects = useMemo((): ClipEffect[] => {
+      if (!clipEffects || clipEffects.length === 0) return clipEffects ?? [];
+      return clipEffects.map((ef) => {
+        if (!ef.enabled || !ef.keyframes || Object.keys(ef.keyframes).length === 0) return ef;
+        const patchedParams = { ...ef.params };
+        for (const [paramKey, kfArr] of Object.entries(ef.keyframes)) {
+          if (!kfArr || kfArr.length === 0) continue;
+          const vals = (kfArr as CurveKeyframe[]).map((k) => k.value);
+          const kMin = Math.min(...vals);
+          const kMax = Math.max(...vals);
+          patchedParams[paramKey] = interpolateKeyframes(
+            kfArr as CurveKeyframe[],
+            playheadFrame,
+            kMin,
+            kMax
+          );
+        }
+        return { ...ef, params: patchedParams };
+      });
+    }, [clipEffects, playheadFrame]);
+
     // ── Effects CSS filter (blur, sharpen, brightness, etc.) ─────────────────
     // FIX 7: compute filter from active effects and merge with grade filter
     const effectsFilter = useMemo(() => {
-      if (!clipEffects || clipEffects.length === 0) return "";
-      const f = computeCssFilterFromEffects(clipEffects);
+      if (!interpolatedEffects || interpolatedEffects.length === 0) return "";
+      const f = computeCssFilterFromEffects(interpolatedEffects);
       return f === "none" ? "" : f;
-    }, [clipEffects]);
+    }, [interpolatedEffects]);
 
     // ── Vignette overlay (cannot be done via CSS filter) ─────────────────────
     const vignetteEffect = useMemo(() => {
-      if (!clipEffects) return null;
-      return clipEffects.find((e) => e.enabled && e.type === "vignette") ?? null;
-    }, [clipEffects]);
+      if (!interpolatedEffects) return null;
+      return interpolatedEffects.find((e) => e.enabled && e.type === "vignette") ?? null;
+    }, [interpolatedEffects]);
 
     const vignetteStyle = useMemo((): CSSProperties | null => {
       if (!vignetteEffect) return null;

@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import type { BackgroundRemovalConfig, ClipEffect, EffectType } from "../../shared/models";
 import { createId } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
+import { KeyframeCurveEditor, interpolateKeyframes } from "./KeyframeCurveEditor";
+import type { CurveKeyframe } from "./KeyframeCurveEditor";
 
 interface EffectsPanelProps {
   selectedSegment: TimelineSegment | null;
@@ -18,6 +20,11 @@ interface EffectsPanelProps {
   currentFrame?: number;
   /** Phase 8: add a keyframe for an effect parameter at the current frame */
   onAddEffectKeyframe?: (effectId: string, paramKey: string, frame: number, value: number) => void;
+  /** Bezier curve editor: replace all keyframes for an effect param with new curve keyframes */
+  onUpdateEffectKeyframes?: (effectId: string, paramName: string, keyframes: CurveKeyframe[]) => void;
+  /** Sequence settings for curve editor */
+  totalFrames?: number;
+  fps?: number;
 }
 
 // ─── Preset type ──────────────────────────────────────────────────────────────
@@ -1366,6 +1373,8 @@ interface EffectCardProps {
   currentFrame?: number;
   /** Phase 8: add keyframe for this effect param */
   onAddEffectKeyframe?: (paramKey: string, frame: number, value: number) => void;
+  /** Open the bezier curve editor for this effect param */
+  onOpenCurveEditor?: (paramKey: string, paramMin: number, paramMax: number) => void;
 }
 
 function EffectCard({
@@ -1386,6 +1395,7 @@ function EffectCard({
   onDragEnd,
   currentFrame,
   onAddEffectKeyframe,
+  onOpenCurveEditor,
 }: EffectCardProps) {
   return (
     <div
@@ -1460,12 +1470,18 @@ function EffectCard({
                     <span className="effect-param-value">
                       {displayVal}{pDef.unit ?? ""}
                     </span>
-                    {/* Phase 8: Effect keyframe button */}
-                    {onAddEffectKeyframe && currentFrame !== undefined && (
+                    {/* Keyframe / curve editor button */}
+                    {(onOpenCurveEditor || onAddEffectKeyframe) && currentFrame !== undefined && (
                       <button
                         type="button"
-                        title={`Add keyframe for ${pDef.label} at frame ${currentFrame}`}
-                        onClick={() => onAddEffectKeyframe(pDef.key, currentFrame, Number(val))}
+                        title={`Open curve editor for ${pDef.label}`}
+                        onClick={() => {
+                          if (onOpenCurveEditor && pDef.type === "range") {
+                            onOpenCurveEditor(pDef.key, pDef.min ?? 0, pDef.max ?? 1);
+                          } else if (onAddEffectKeyframe) {
+                            onAddEffectKeyframe(pDef.key, currentFrame, Number(val));
+                          }
+                        }}
                         style={{
                           background: "none",
                           border: "none",
@@ -1727,6 +1743,9 @@ export function EffectsPanel({
   onSetBackgroundRemoval,
   currentFrame,
   onAddEffectKeyframe,
+  onUpdateEffectKeyframes,
+  totalFrames = 300,
+  fps = 30,
 }: EffectsPanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -1735,6 +1754,14 @@ export function EffectsPanel({
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [savedPresets, setSavedPresets] = useState<EffectPreset[]>(loadSavedPresets);
   const [presetSaveName, setPresetSaveName] = useState("");
+
+  // Curve editor state
+  const [curveEditorOpen, setCurveEditorOpen] = useState<{
+    effectId: string;
+    paramName: string;
+    paramMin: number;
+    paramMax: number;
+  } | null>(null);
 
   const { activePreview, startPreview, cancelPreview } = useHoverPreview(2500);
 
@@ -1954,10 +1981,49 @@ export function EffectsPanel({
                 ? (paramKey, frame, value) => onAddEffectKeyframe(effect.id, paramKey, frame, value)
                 : undefined
               }
+              onOpenCurveEditor={onUpdateEffectKeyframes
+                ? (paramKey, paramMin, paramMax) => {
+                    setCurveEditorOpen({ effectId: effect.id, paramName: paramKey, paramMin, paramMax });
+                  }
+                : undefined
+              }
             />
           );
         })}
       </div>
+
+      {/* Bezier Curve Editor floating panel */}
+      {curveEditorOpen && (() => {
+        const ef = effects.find((e) => e.id === curveEditorOpen.effectId);
+        const rawKfs = ef?.keyframes?.[curveEditorOpen.paramName] ?? [];
+        // CurveKeyframes are stored as Keyframe<number> (via cast) — recover them
+        const curveKfs: CurveKeyframe[] = (rawKfs as unknown as CurveKeyframe[]).map((k) => ({
+          frame: k.frame,
+          value: k.value,
+          easing: (k.easing === "linear" || k.easing === "bezier" || k.easing === "hold")
+            ? k.easing
+            : ("bezier" as const),
+          cpOut: k.cpOut,
+          cpIn: k.cpIn,
+        }));
+        return (
+          <KeyframeCurveEditor
+            paramName={curveEditorOpen.paramName}
+            paramMin={curveEditorOpen.paramMin}
+            paramMax={curveEditorOpen.paramMax}
+            totalFrames={totalFrames}
+            fps={fps}
+            keyframes={curveKfs}
+            currentFrame={currentFrame ?? 0}
+            onKeyframesChange={(kfs) => {
+              if (onUpdateEffectKeyframes) {
+                onUpdateEffectKeyframes(curveEditorOpen.effectId, curveEditorOpen.paramName, kfs);
+              }
+            }}
+            onClose={() => setCurveEditorOpen(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

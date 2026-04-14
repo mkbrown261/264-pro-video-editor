@@ -79,8 +79,12 @@ interface InspectorPanelProps {
   onSetBackgroundRemoval: (config: Partial<BackgroundRemovalConfig>) => void;
   /** Phase 8: add keyframe for an effect parameter */
   onAddEffectKeyframe?: (effectId: string, paramKey: string, frame: number, value: number) => void;
+  /** Bezier curve editor: replace all keyframes for an effect param */
+  onUpdateEffectKeyframes?: (effectId: string, paramName: string, keyframes: import("./KeyframeCurveEditor").CurveKeyframe[]) => void;
   /** Phase 8: current playhead frame (for effect keyframing) */
   currentPlayheadFrame?: number;
+  /** Total timeline frames (for curve editor) */
+  totalFrames?: number;
 
   // Clip actions
   onToggleClipEnabled: (clipId: string) => void;
@@ -1086,7 +1090,9 @@ export function InspectorPanel({
   onAddToQueue,
   videoRef,
   onAddEffectKeyframe,
+  onUpdateEffectKeyframes,
   currentPlayheadFrame,
+  totalFrames,
 }: InspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("clip");
   const [transitionCategory, setTransitionCategory] = useState("Basic");
@@ -1422,6 +1428,9 @@ export function InspectorPanel({
               onSetBackgroundRemoval={onSetBackgroundRemoval}
               currentFrame={currentPlayheadFrame}
               onAddEffectKeyframe={onAddEffectKeyframe}
+              onUpdateEffectKeyframes={onUpdateEffectKeyframes}
+              totalFrames={totalFrames}
+              fps={sequenceSettings.fps}
             />
           </div>
         )}
