@@ -99,6 +99,17 @@ const electronAPI = {
     ipcRenderer.on("gate:auth-result", listener);
     return () => ipcRenderer.removeListener("gate:auth-result", listener);
   },
+  // ── Phase 9: Publish IPC ──────────────────────────────────────────────────
+  generatePublishMetadata: (params: {
+    projectName: string;
+    durationSeconds: number;
+    platforms: string[];
+  }): Promise<{ title: string; description: string; tags: string[]; platforms: string[] }> =>
+    ipcRenderer.invoke("publish:generate-metadata", params),
+  uploadToYouTube: (params: unknown): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("publish:upload-youtube", params),
+  uploadToTikTok: (params: unknown): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("publish:upload-tiktok", params),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 

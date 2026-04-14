@@ -30,6 +30,23 @@ export interface OpenProjectResult {
 
 declare global {
   interface Window {
+    electronAPI?: {
+      openExternal: (url: string) => void;
+      getAppVersion: () => Promise<string>;
+      startAuthFlow: (state: string) => void;
+      submitDevKey: (key: string) => Promise<{ success: boolean; error?: string }>;
+      onAuthResult: (cb: (success: boolean, error?: string) => void) => () => void;
+      /** Phase 9: Generate publish metadata (title, description, tags) */
+      generatePublishMetadata?: (params: {
+        projectName: string;
+        durationSeconds: number;
+        platforms: string[];
+      }) => Promise<{ title: string; description: string; tags: string[]; platforms: string[] }>;
+      /** Phase 9: Upload to YouTube */
+      uploadToYouTube?: (params: unknown) => Promise<{ ok: boolean; error?: string }>;
+      /** Phase 9: Upload to TikTok */
+      uploadToTikTok?: (params: unknown) => Promise<{ ok: boolean; error?: string }>;
+    };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;
       chooseExportFile: (suggestedName: string) => Promise<string | null>;

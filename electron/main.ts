@@ -1038,6 +1038,33 @@ if (process.defaultApp) {
   app.setAsDefaultProtocolClient('264pro');
 }
 
+// ── Phase 9: Publish IPC (stub — returns mock metadata) ──────────────────────
+ipcMain.handle('publish:generate-metadata', async (_event, params: {
+  projectName: string;
+  durationSeconds: number;
+  platforms: string[];
+}) => {
+  // Stub: generate mock metadata for the publish wizard
+  const { projectName, durationSeconds, platforms } = params;
+  const dur = Math.round(durationSeconds);
+  return {
+    title: `${projectName} — ${dur}s Edit`,
+    description: `A ${dur}-second video project created with 264 Pro.\n\nEdited with ClawFlow Intelligence.\n\n#264Pro #VideoEditing`,
+    tags: ['264pro', 'videoediting', 'clawflow', 'edit', projectName.toLowerCase().replace(/\s+/g, '')],
+    platforms,
+  };
+});
+
+ipcMain.handle('publish:upload-youtube', async (_event, _params: unknown) => {
+  // Stub: connect to YouTube upload flow
+  return { ok: false, error: 'YouTube upload requires OAuth setup. Connect your account in Settings.' };
+});
+
+ipcMain.handle('publish:upload-tiktok', async (_event, _params: unknown) => {
+  // Stub: connect to TikTok upload flow
+  return { ok: false, error: 'TikTok upload requires OAuth setup. Connect your account in Settings.' };
+});
+
 function handleDeepLink(url: string) {
   try {
     const parsed = new URL(url);
