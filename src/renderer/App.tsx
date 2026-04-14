@@ -3771,6 +3771,7 @@ export default function App() {
               }}
               duckingSettings={project.duckingSettings}
               onSetDuckingSettings={setDuckingSettings}
+              project={project}
             />
           </div>
         )}

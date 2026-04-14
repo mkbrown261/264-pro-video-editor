@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import type { TimelineTrack, EQBand, CompressorSettings, DuckingSettings } from "../../shared/models";
+import type { TimelineTrack, EQBand, CompressorSettings, DuckingSettings, EditorProject } from "../../shared/models";
 import { createId } from "../../shared/models";
 
 interface FairlightPanelProps {
@@ -13,6 +13,8 @@ interface FairlightPanelProps {
   /** Phase 8: Audio ducking settings */
   duckingSettings?: DuckingSettings[];
   onSetDuckingSettings?: (settings: DuckingSettings[]) => void;
+  /** Full project — required for stems export */
+  project?: EditorProject;
 }
 
 const DEFAULT_EQ_BANDS: EQBand[] = [
@@ -70,7 +72,7 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings }: FairlightPanelProps) {
+export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project }: FairlightPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
@@ -128,8 +130,57 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
   const [aiToast, setAiToast] = useState<string | null>(null);
   const aiToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Stems Export state ──────────────────────────────────────────────────────
+  const [stemsFormat, setStemsFormat] = useState<'wav' | 'aiff' | 'mp3' | 'aac'>('wav');
+  const [stemsSampleRate, setStemsSampleRate] = useState(48000);
+  const [stemsSelection, setStemsSelection] = useState({ dialogue: true, music: true, sfx: true, mix: true });
+  const [stemsExporting, setStemsExporting] = useState(false);
+  const [stemsToast, setStemsToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const stemsToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Clear toast timer on unmount to prevent setState on unmounted component
   useEffect(() => () => { if (aiToastTimerRef.current) clearTimeout(aiToastTimerRef.current); }, []);
+  useEffect(() => () => { if (stemsToastTimerRef.current) clearTimeout(stemsToastTimerRef.current); }, []);
+
+  const showStemsToast = (type: 'success' | 'error', text: string) => {
+    if (stemsToastTimerRef.current) clearTimeout(stemsToastTimerRef.current);
+    setStemsToast({ type, text });
+    stemsToastTimerRef.current = setTimeout(() => setStemsToast(null), 5000);
+  };
+
+  const handleExportStems = async () => {
+    const selectedStems = (Object.keys(stemsSelection) as Array<keyof typeof stemsSelection>)
+      .filter(k => stemsSelection[k]);
+    if (selectedStems.length === 0) {
+      showStemsToast('error', 'Select at least one stem');
+      return;
+    }
+    setStemsExporting(true);
+    try {
+      // Cast to access exportStems — declared in vite-env.d.ts
+      const api = window.electronAPI as (typeof window.electronAPI & {
+        exportStems?: (args: { project: unknown; format: string; sampleRate: number; stems: string[] }) => Promise<{
+          success: boolean; files?: Array<{ stem: string; path: string }>; canceled?: boolean; error?: string;
+        }>;
+      });
+      const result = await api?.exportStems?.({
+        project: project ?? null,
+        format: stemsFormat,
+        sampleRate: stemsSampleRate,
+        stems: selectedStems,
+      });
+      if (!result || result.canceled) return;
+      if (result.success) {
+        showStemsToast('success', `✅ ${result.files?.length ?? 0} stem${(result.files?.length ?? 0) !== 1 ? 's' : ''} exported`);
+      } else {
+        showStemsToast('error', result.error ?? 'Stems export failed');
+      }
+    } catch (e) {
+      showStemsToast('error', e instanceof Error ? e.message : 'Stems export failed');
+    } finally {
+      setStemsExporting(false);
+    }
+  };
 
   const showAiToast = (msg: string) => {
     if (aiToastTimerRef.current) clearTimeout(aiToastTimerRef.current);
@@ -667,6 +718,84 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
           </button>
         </div>
       )}
+
+      {/* ── Stems Export ──────────────────────────────────────────────────── */}
+      <div style={{ margin: "8px 12px 12px", padding: 12, background: "#0f172a", borderRadius: 8, border: "1px solid #1e293b" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          🎚 Export Stems
+        </div>
+
+        {/* Format + sample rate row */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <select
+            value={stemsFormat}
+            onChange={e => setStemsFormat(e.target.value as typeof stemsFormat)}
+            style={{ flex: 1, background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 4, padding: "4px 8px", fontSize: 11 }}
+          >
+            <option value="wav">WAV 24-bit</option>
+            <option value="aiff">AIFF 24-bit</option>
+            <option value="mp3">MP3 320k</option>
+            <option value="aac">AAC 256k</option>
+          </select>
+          <select
+            value={stemsSampleRate}
+            onChange={e => setStemsSampleRate(Number(e.target.value))}
+            style={{ flex: 1, background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 4, padding: "4px 8px", fontSize: 11 }}
+          >
+            <option value={44100}>44.1 kHz</option>
+            <option value={48000}>48 kHz</option>
+            <option value={96000}>96 kHz</option>
+          </select>
+        </div>
+
+        {/* Stem checkboxes */}
+        <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+          {(["dialogue", "music", "sfx", "mix"] as const).map(s => (
+            <label key={s} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={stemsSelection[s]}
+                onChange={e => setStemsSelection(prev => ({ ...prev, [s]: e.target.checked }))}
+              />
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </label>
+          ))}
+        </div>
+
+        {/* Toast */}
+        {stemsToast && (
+          <div style={{
+            marginBottom: 8,
+            padding: "6px 10px",
+            borderRadius: 6,
+            fontSize: 11,
+            background: stemsToast.type === "success" ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
+            color: stemsToast.type === "success" ? "#4ade80" : "#f87171",
+            border: `1px solid ${stemsToast.type === "success" ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+          }}>
+            {stemsToast.text}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleExportStems}
+          disabled={stemsExporting}
+          style={{
+            width: "100%",
+            padding: "8px 0",
+            borderRadius: 6,
+            border: "none",
+            background: stemsExporting ? "#1e3a5f" : "#1d4ed8",
+            color: "white",
+            cursor: stemsExporting ? "not-allowed" : "pointer",
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          {stemsExporting ? "⏳ Exporting Stems…" : "⬇ Export Stems"}
+        </button>
+      </div>
     </div>
   );
 }
