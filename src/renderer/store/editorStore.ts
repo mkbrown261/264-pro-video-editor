@@ -1020,7 +1020,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
         // Add the moved clip at dropStart
         const movedClip = { ...clip, trackId, startFrame: dropStart };
-        newClips = [...carved, ...rightStubs, movedClip];
+        // BUG #5 fix: in the RIPPLE INSERT branch, linked partners were removed by
+        // the .filter((c) => !linkedIds.has(c.id)) above but only movedClip was
+        // re-added.  Re-add linked partners at their delta-adjusted positions.
+        const linkedPartners = linked.filter((c) => c.id !== clipId);
+        const partnerClips = linkedPartners.map((partner) => ({
+          ...partner,
+          startFrame: Math.max(0, partner.startFrame + (dropStart - clip.startFrame))
+        }));
+        newClips = [...carved, ...rightStubs, movedClip, ...partnerClips];
       } else {
         // ── FREE MOVE: no overlap — place exactly at dropStart ──
         newClips = state.project.sequence.clips.map((c) => {

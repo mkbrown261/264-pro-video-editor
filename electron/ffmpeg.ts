@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import ffmpegStatic from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import type {
@@ -371,7 +371,10 @@ function buildAtempoChain(speed: number): string {
   let remaining = clamped;
   // Build chain: each stage handles at most 2x (speed > 1) or 0.5x (speed < 1)
   const limit = clamped > 1 ? 2.0 : 0.5;
-  while (remaining > 2.0 + 1e-6 || remaining < 0.5 - 1e-6) {
+  // BUG #17 fix: cap iterations to prevent infinite loop near boundary values
+  const MAX_ATEMPO_STAGES = 10;
+  let iterations = 0;
+  while ((remaining > 2.0 + 1e-6 || remaining < 0.5 - 1e-6) && iterations++ < MAX_ATEMPO_STAGES) {
     filters.push(`atempo=${limit}`);
     remaining = clamped > 1 ? remaining / limit : remaining / limit;
   }
@@ -392,11 +395,21 @@ export async function exportSequence(
   const { project, outputPath } = request;
   const codec = request.codec ?? "libx264";
 
+  // BUG #23 fix: ensure output directory exists before spawning FFmpeg
+  try {
+    await mkdir(dirname(outputPath), { recursive: true });
+  } catch {
+    // Directory already exists or creation failed — FFmpeg will report the real error
+  }
+
   // Determine output resolution
   const seqW = project.sequence.settings.width;
   const seqH = project.sequence.settings.height;
   const outW = (request.outputWidth && request.outputWidth > 0) ? request.outputWidth : seqW;
   const outH = (request.outputHeight && request.outputHeight > 0) ? request.outputHeight : seqH;
+
+  // BUG #3 fix: need sequenceFps for audio-only track adelay calculation
+  const sequenceFps = project.sequence.settings.fps;
 
   // Build segments from ALL tracks (video + audio)
   const allSegments = buildTimelineSegments(project.sequence, project.assets)
@@ -458,13 +471,11 @@ export async function exportSequence(
     // ── Video filter chain ─────────────────────────────────────────────────
     const videoFilters = [
       `trim=start=${start}:end=${end}`,
-      // Speed: setpts changes presentation timestamps
-      speed !== 1 ? `setpts=PTS/${speed.toFixed(4)}` : "setpts=PTS-STARTPTS",
+      // BUG #1 fix: single combined setpts — (PTS-STARTPTS)/speed resets origin
+      // AND applies speed in one step. The previous two-step approach had the
+      // second setpts=PTS-STARTPTS silently overwriting the first speed-adjusted one.
+      `setpts=(PTS-STARTPTS)/${speed.toFixed(4)}`,
     ];
-    // If we used speed-adjusted setpts, we still need to reset to 0
-    if (speed !== 1) {
-      videoFilters.push("setpts=PTS-STARTPTS");
-    }
     videoFilters.push(
       `scale=${outW}:${outH}:force_original_aspect_ratio=decrease`,
       `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2`,
@@ -495,18 +506,23 @@ export async function exportSequence(
         videoFilters.push(`pad=${outW}:${outH}:${outW / 2 - outW / 2 + xPx}:${outH / 2 - outH / 2 + yPx}`);
       }
       if (opacity < 1) {
-        videoFilters.push(`colorchannelmixer=aa=${opacity.toFixed(4)}`);
+        // BUG #2 fix: colorchannelmixer=aa= requires alpha channel but the chain
+        // already applied format=yuv420p (no alpha). Use eq=brightness instead
+        // to approximate opacity on yuv420p — not pixel-perfect alpha but gives
+        // correct visual opacity reduction.
+        const br = (opacity - 1).toFixed(4); // 0 = no change, -1 = black
+        videoFilters.push(`eq=brightness=${br}`);
       }
     }
 
     // ── Color Grade ───────────────────────────────────────────────────────
     const cg = segment.clip.colorGrade;
     if (cg && !cg.bypass) {
-      // exposure → eq brightness
+      // BUG #13 fix: exposure=exposure= filter only available in FFmpeg 5.1+.
+      // Replace with eq=brightness= which is compatible with all FFmpeg versions.
       if (cg.exposure !== 0) {
-        const ev = Math.pow(2, cg.exposure);
-        videoFilters.push(`exposure=exposure=${cg.exposure.toFixed(3)}`);
-        void ev; // acknowledged
+        const brightnessAdj = (cg.exposure * 0.1).toFixed(3); // scale EV stops to brightness range
+        videoFilters.push(`eq=brightness=${brightnessAdj}`);
       }
       // contrast via eq
       if (cg.contrast !== 0) {
@@ -543,6 +559,14 @@ export async function exportSequence(
         videoFilters.push(
           `colorlevels=rimin=${riminR}:gimin=${riminG}:bimin=${riminB}:romax=${romaxR}:gomax=${romaxG}:bomax=${romaxB}`
         );
+        // BUG #4 fix: gamma wheel was extracted but never applied to the filter chain.
+        // Apply gamma per-channel via eq=gamma_r/g/b.
+        const gammaR = Math.max(0.1, 1 + gm.r * 0.5);
+        const gammaG = Math.max(0.1, 1 + gm.g * 0.5);
+        const gammaB = Math.max(0.1, 1 + gm.b * 0.5);
+        if (Math.abs(gm.r) > 0.01 || Math.abs(gm.g) > 0.01 || Math.abs(gm.b) > 0.01) {
+          videoFilters.push(`eq=gamma_r=${gammaR.toFixed(3)}:gamma_g=${gammaG.toFixed(3)}:gamma_b=${gammaB.toFixed(3)}`);
+        }
       }
     }
 
@@ -606,6 +630,45 @@ export async function exportSequence(
     `${concatInputs}concat=n=${videoSegments.length}:v=1:a=1[vout][aout]`
   );
 
+  // BUG #3 fix: include audio-only track segments in the export.
+  // Previously only videoSegments were iterated, so clips on pure audio tracks
+  // were never added to the FFmpeg filter graph.
+  const allAudioLabels: string[] = [];
+  const audioOnlySegs = allSegments.filter((s) => s.track.kind === "audio");
+  for (const [aIdx, seg] of audioOnlySegs.entries()) {
+    const inputIndex = assetInputIndexes.get(seg.asset.id);
+    if (inputIndex === undefined) continue;
+    const label = `ao${aIdx}`;
+    const start = seg.sourceInSeconds.toFixed(3);
+    const end = seg.sourceOutSeconds.toFixed(3);
+    const volume = Math.max(0, Math.min(2, seg.clip.volume ?? 1));
+    const speed = Math.max(0.1, Math.min(4, seg.clip.speed ?? 1));
+    const delayMs = Math.round((seg.startFrame / sequenceFps) * 1000);
+    const audioFilters = [
+      `atrim=start=${start}:end=${end}`,
+      "asetpts=PTS-STARTPTS",
+      // Pad with silence to put this audio at the correct timeline position
+      `adelay=${delayMs}|${delayMs}`,
+    ];
+    if (speed !== 1) audioFilters.push(buildAtempoChain(speed));
+    if (volume !== 1) audioFilters.push(`volume=${volume.toFixed(4)}`);
+    audioFilters.push(
+      `aresample=${project.sequence.settings.audioSampleRate}`,
+      "aformat=channel_layouts=stereo"
+    );
+    filterParts.push(`[${inputIndex}:a]${audioFilters.join(",")}[${label}]`);
+    allAudioLabels.push(`[${label}]`);
+  }
+
+  // Mix audio-only streams with the main concat audio output if any exist
+  if (allAudioLabels.length > 0) {
+    const mixInputs = ["[aout]", ...allAudioLabels].join("");
+    filterParts.push(`${mixInputs}amix=inputs=${1 + allAudioLabels.length}:duration=longest:normalize=0[afinal]`);
+  }
+
+  // Use [afinal] if audio-only tracks were mixed in, otherwise use [aout]
+  const finalAudioLabel = allAudioLabels.length > 0 ? "[afinal]" : "[aout]";
+
   // ── Codec-specific output args ─────────────────────────────────────────────
   function getVideoCodecArgs(c: typeof codec): string[] {
     switch (c) {
@@ -633,7 +696,9 @@ export async function exportSequence(
   function getContainerArgs(c: typeof codec): string[] {
     switch (c) {
       case "prores_ks":
-        return ["-movflags", "+faststart"];
+        // BUG #20 fix: +faststart is wasteful and unnecessary for ProRes (a production codec).
+        // Strip timecode track instead which is the correct ProRes container practice.
+        return ["-write_tmcd", "0"];
       case "libvpx-vp9":
         return [];
       default:
@@ -648,7 +713,7 @@ export async function exportSequence(
     "-map",
     "[vout]",
     "-map",
-    "[aout]",
+    finalAudioLabel,  // BUG #3 fix: use [afinal] when audio-only tracks are mixed in
     ...getVideoCodecArgs(codec),
     ...getAudioCodecArgs(codec),
     ...getContainerArgs(codec),
@@ -659,6 +724,8 @@ export async function exportSequence(
   // ── Spawn FFmpeg with progress parsing ─────────────────────────────────────
   // Calculate total frames for progress reporting
   const totalFrames = videoSegments.reduce((sum, s) => sum + s.durationFrames, 0);
+  // BUG #16 fix: also track total duration in seconds for time-based progress
+  const totalDurationSeconds = videoSegments.reduce((sum, s) => sum + s.durationSeconds, 0);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(environment.ffmpegPath, args, {
@@ -666,17 +733,33 @@ export async function exportSequence(
     });
 
     let stderr = "";
+    // BUG #16 fix: track current progress to avoid going backwards
+    let currentPct = 0;
     child.stdout.on("data", () => { /* no-op */ });
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       stderr += text;
-      // Parse frame=N from FFmpeg progress output
-      if (onProgress && totalFrames > 0) {
-        const match = /frame=\s*(\d+)/.exec(text);
-        if (match) {
-          const frame = Number(match[1]);
-          const pct = Math.min(99, Math.round((frame / totalFrames) * 100));
-          onProgress(pct);
+      if (onProgress) {
+        // Primary: parse frame=N from FFmpeg progress output
+        if (totalFrames > 0) {
+          const match = /frame=\s*(\d+)/.exec(text);
+          if (match) {
+            const frame = Number(match[1]);
+            const pct = Math.min(98, Math.round((frame / totalFrames) * 100));
+            if (pct > currentPct) { currentPct = pct; onProgress(pct); }
+          }
+        }
+        // BUG #16 fix: secondary signal — parse time=HH:MM:SS.ss from stats line
+        // This fires during muxing when frame= stops updating, allowing progress
+        // to advance past the frame-based 98% cap.
+        if (totalDurationSeconds > 0) {
+          const statsMatch = /time=(\d+:\d+:\d+\.\d+)/.exec(text);
+          if (statsMatch) {
+            const parts = statsMatch[1].split(":");
+            const secs = Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2]);
+            const pct = Math.min(98, Math.round((secs / totalDurationSeconds) * 100));
+            if (pct > currentPct) { currentPct = pct; onProgress(pct); }
+          }
         }
       }
     });

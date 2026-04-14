@@ -63,6 +63,8 @@ function getTargetCurrentTime(
   playheadFrame: number,
   sequenceFps: number
 ): number {
+  // BUG #25 fix: guard against division by zero when sequenceFps is 0 (corrupted project)
+  if (!sequenceFps || sequenceFps <= 0) return segment.sourceInSeconds;
   const segmentOffsetFrames = Math.max(0, playheadFrame - segment.startFrame);
   const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
   const sourceOffsetSeconds = framesToSeconds(segmentOffsetFrames, sequenceFps) * clipSpeed;
@@ -81,11 +83,21 @@ function getPlaybackErrorMessage(error: unknown): string {
 // ── Web Audio gain for video element volume > 100% ─────────────────────────
 const gainNodeMap = new WeakMap<HTMLMediaElement, { ctx: AudioContext; gain: GainNode }>();
 
+// BUG #18 fix: module-level singleton AudioContext to avoid hitting Safari's
+// ~6 concurrent AudioContext limit (previously created one per video element).
+let sharedAudioContext: AudioContext | null = null;
+function getSharedAudioContext(): AudioContext {
+  if (!sharedAudioContext || sharedAudioContext.state === "closed") {
+    sharedAudioContext = new AudioContext();
+  }
+  return sharedAudioContext;
+}
+
 function applyGain(media: HTMLMediaElement, volume: number): void {
   try {
     let entry = gainNodeMap.get(media);
     if (!entry) {
-      const ctx  = new AudioContext();
+      const ctx  = getSharedAudioContext(); // BUG #18 fix: use shared context
       const src  = ctx.createMediaElementSource(media);
       const gain = ctx.createGain();
       src.connect(gain);
@@ -608,6 +620,13 @@ export function usePlaybackController({
         totalFrames: total,
         activeSegment: seg
       } = stateRef.current;
+
+      // BUG #25 fix: guard against corrupted project with fps=0 which would
+      // produce Infinity/NaN in framesToSeconds and elapsedFrames calculations.
+      if (!fps || fps <= 0) {
+        rafRef.current = requestAnimationFrame(step);
+        return;
+      }
 
       // If playbackStartedAt is null, media is still loading — skip this
       // frame so the playhead doesn't drift forward during load/seek.
