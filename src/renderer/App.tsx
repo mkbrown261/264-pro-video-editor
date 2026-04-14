@@ -750,7 +750,7 @@ export default function App() {
       setFsTier(user.tier);
       setFsLinked(true);
       // Ping activity: project_opened
-      void window.flowstateAPI!.apiCall('/api/264pro/activity', 'POST', {
+      void window.flowstateAPI?.apiCall('/api/264pro/activity', 'POST', {
         event: 'project_opened',
         projectName: project.name ?? 'Untitled',
       });
@@ -1289,7 +1289,7 @@ export default function App() {
     if (!window.editorApi?.onBeforeClose) return;
     const unsub = window.editorApi.onBeforeClose(() => {
       if (!projectDirty) {
-        void window.editorApi!.confirmClose();
+        void window.editorApi?.confirmClose();
         return;
       }
       pendingActionRef.current = "close";

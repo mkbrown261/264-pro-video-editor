@@ -128,6 +128,12 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           onOpenCommandPalette?.();
           return;
         }
+        // Cmd+K / Ctrl+K → also opens command palette
+        if (key === "k" && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          onOpenCommandPalette?.();
+          return;
+        }
 
         // ── File Operations ──────────────────────────────────────────────────
         if (key === "z" && !event.shiftKey) {

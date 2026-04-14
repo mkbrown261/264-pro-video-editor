@@ -1566,14 +1566,14 @@ export function TimelinePanel({
             return (
               <React.Fragment key={layout.track.id}>
                 {/* Ghost row inserted immediately before this track row */}
-                {showGhostAbove && activeDragState && (
+                {showGhostAbove && activeDragState && ghostInfo && (
                   <div className="timeline-new-track-ghost" key={`ghost-${layout.track.id}`}>
-                    <div className="ghost-new-track-label">+ New {ghostInfo!.newTrackKind} track</div>
+                    <div className="ghost-new-track-label">+ New {ghostInfo.newTrackKind} track</div>
                     <div
                       className={`new-track-ghost-clip ${activeDragState.trackKind === "video" ? "video-clip" : "audio-clip"}`}
                       style={{
                         position: "absolute",
-                        left: LABEL_W + ghostInfo!.frame * pixelsPerFrame,
+                        left: LABEL_W + ghostInfo.frame * pixelsPerFrame,
                         width: Math.max(activeDragState.durationFrames * pixelsPerFrame, 24),
                         top: 2,
                         bottom: 2,
@@ -2087,6 +2087,38 @@ export function TimelinePanel({
                           )}
                         </div>
 
+                        {/* ── Speed badge (absolute top-right corner) ── */}
+                        {segment.clip.speed !== undefined && segment.clip.speed !== 1 && clipWidth > 40 && (
+                          <div style={{
+                            position: 'absolute',
+                            top: 3,
+                            right: 3,
+                            background: 'rgba(0,0,0,0.75)',
+                            color: 'white',
+                            fontSize: '9px',
+                            fontWeight: 800,
+                            borderRadius: '3px',
+                            padding: '1px 4px',
+                            letterSpacing: '0.02em',
+                            pointerEvents: 'none',
+                            zIndex: 2,
+                          }}>
+                            {segment.clip.speed < 1 ? `${segment.clip.speed}×` : `${segment.clip.speed}×`}
+                          </div>
+                        )}
+
+                        {/* ── Disabled overlay (diagonal stripe pattern) ── */}
+                        {!segment.clip.isEnabled && (
+                          <div style={{
+                            position: 'absolute',
+                            inset: 0,
+                            background: 'repeating-linear-gradient(45deg, rgba(0,0,0,0.4) 0px, rgba(0,0,0,0.4) 2px, transparent 2px, transparent 8px)',
+                            pointerEvents: 'none',
+                            borderRadius: 'inherit',
+                            zIndex: 1,
+                          }} />
+                        )}
+
                         {/* Transition out pill */}
                         {segment.clip.transitionOut && (
                           <span className="timeline-transition-pill out" title={`Out: ${segment.clip.transitionOut.type} (${getClipTransitionDurationFrames(segment.clip.transitionOut, segment.durationFrames)}f)`}>
@@ -2181,21 +2213,25 @@ export function TimelinePanel({
           })}
 
           {/* Ghost new-track indicator at the bottom (INSERT_BELOW_BOTTOM) */}
-          {ghostInfo?.intent === "INSERT_BELOW_BOTTOM" && (dragState ?? mpDragState) && (
+          {ghostInfo?.intent === "INSERT_BELOW_BOTTOM" && (dragState ?? mpDragState) && (() => {
+            const activeDrag = dragState ?? mpDragState;
+            if (!activeDrag) return null;
+            return (
             <div className="timeline-new-track-ghost">
               <div className="ghost-new-track-label">+ New {ghostInfo.newTrackKind} track</div>
               <div
-                className={`new-track-ghost-clip ${(dragState ?? mpDragState)!.trackKind === "video" ? "video-clip" : "audio-clip"}`}
+                className={`new-track-ghost-clip ${activeDrag.trackKind === "video" ? "video-clip" : "audio-clip"}`}
                 style={{
                   position: "absolute",
                   left: LABEL_W + ghostInfo.frame * pixelsPerFrame,
-                  width: Math.max((dragState ?? mpDragState)!.durationFrames * pixelsPerFrame, 24),
+                  width: Math.max(activeDrag.durationFrames * pixelsPerFrame, 24),
                   top: 2,
                   bottom: 2,
                 }}
               />
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>
 

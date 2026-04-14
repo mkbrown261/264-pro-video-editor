@@ -669,54 +669,74 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
 });
 
 ipcMain.handle("export:render", async (event, request: ExportRequest) => {
-  return exportSequence(request, (pct) => {
-    if (!event.sender.isDestroyed()) {
-      event.sender.send("export:progress", pct);
-    }
-  });
+  try {
+    return exportSequence(request, (pct) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("export:progress", pct);
+      }
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
+  }
 });
 
 // ── Project persistence (.264proj) ───────────────────────────────────────────
 
 ipcMain.handle("project:save", async (event, json: string, suggestedName: string) => {
-  const window = BrowserWindow.fromWebContents(event.sender);
-  const dialogOptions = {
-    title: "Save Project",
-    defaultPath: suggestedName.endsWith(".264proj") ? suggestedName : `${suggestedName}.264proj`,
-    filters: [
-      { name: "264 Pro Project", extensions: ["264proj"] },
-      { name: "All Files", extensions: ["*"] }
-    ]
-  };
-  const result = window
-    ? await dialog.showSaveDialog(window, dialogOptions)
-    : await dialog.showSaveDialog(dialogOptions);
-  if (result.canceled || !result.filePath) return null;
-  await writeFile(result.filePath, json, "utf-8");
-  return result.filePath;
+  try {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions = {
+      title: "Save Project",
+      defaultPath: suggestedName.endsWith(".264proj") ? suggestedName : `${suggestedName}.264proj`,
+      filters: [
+        { name: "264 Pro Project", extensions: ["264proj"] },
+        { name: "All Files", extensions: ["*"] }
+      ]
+    };
+    const result = window
+      ? await dialog.showSaveDialog(window, dialogOptions)
+      : await dialog.showSaveDialog(dialogOptions);
+    if (result.canceled || !result.filePath) return null;
+    await writeFile(result.filePath, json, "utf-8");
+    return result.filePath;
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
+  }
 });
 
 ipcMain.handle("project:open", async (event) => {
-  const window = BrowserWindow.fromWebContents(event.sender);
-  const dialogOptions = {
-    title: "Open Project",
-    properties: ["openFile"] as ("openFile" | "openDirectory" | "multiSelections")[],
-    filters: [
-      { name: "264 Pro Project", extensions: ["264proj"] },
-      { name: "All Files", extensions: ["*"] }
-    ]
-  };
-  const result = window
-    ? await dialog.showOpenDialog(window, dialogOptions)
-    : await dialog.showOpenDialog(dialogOptions);
-  if (result.canceled || !result.filePaths[0]) return null;
-  const json = await readFile(result.filePaths[0], "utf-8");
-  return { json, filePath: result.filePaths[0] };
+  try {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions = {
+      title: "Open Project",
+      properties: ["openFile"] as ("openFile" | "openDirectory" | "multiSelections")[],
+      filters: [
+        { name: "264 Pro Project", extensions: ["264proj"] },
+        { name: "All Files", extensions: ["*"] }
+      ]
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || !result.filePaths[0]) return null;
+    const json = await readFile(result.filePaths[0], "utf-8");
+    return { json, filePath: result.filePaths[0] };
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
+  }
 });
 
-ipcMain.handle("project:save-as", async (event, json: string, filePath: string) => {
-  await writeFile(filePath, json, "utf-8");
-  return filePath;
+ipcMain.handle("project:save-as", async (_event, json: string, filePath: string) => {
+  try {
+    await writeFile(filePath, json, "utf-8");
+    return filePath;
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
+  }
 });
 
 // ── App lifecycle IPC ─────────────────────────────────────────────────────────

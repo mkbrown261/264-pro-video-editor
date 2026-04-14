@@ -535,6 +535,48 @@ interface ExportPreset {
   container: string;
 }
 
+// ── User-saved export presets (Feature 5) ─────────────────────────────────────
+
+interface UserExportPreset {
+  id: string;
+  name: string;
+  codec: ExportCodec;
+  outputWidth: number;
+  outputHeight: number;
+  fps: number;
+  audioSampleRate: number;
+  createdAt: number;
+}
+
+const USER_PRESETS_KEY = '264pro_export_presets';
+
+function loadUserPresets(): UserExportPreset[] {
+  try {
+    const raw = localStorage.getItem(USER_PRESETS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as UserExportPreset[];
+  } catch {
+    return [];
+  }
+}
+
+function saveUserPresets(presets: UserExportPreset[]): void {
+  try {
+    localStorage.setItem(USER_PRESETS_KEY, JSON.stringify(presets));
+  } catch { /* ignore */ }
+}
+
+// Built-in presets for save/load system
+const BUILTIN_SAVE_PRESETS: UserExportPreset[] = [
+  { id: 'yt-4k',      name: 'YouTube 4K',          codec: 'libx264',   outputWidth: 3840, outputHeight: 2160, fps: 30, audioSampleRate: 48000, createdAt: 0 },
+  { id: 'yt-1080',    name: 'YouTube 1080p',        codec: 'libx264',   outputWidth: 1920, outputHeight: 1080, fps: 30, audioSampleRate: 48000, createdAt: 0 },
+  { id: 'ig-reel',    name: 'Instagram Reel',       codec: 'libx264',   outputWidth: 1080, outputHeight: 1920, fps: 30, audioSampleRate: 44100, createdAt: 0 },
+  { id: 'tiktok-bi',  name: 'TikTok',               codec: 'libx264',   outputWidth: 1080, outputHeight: 1920, fps: 30, audioSampleRate: 44100, createdAt: 0 },
+  { id: 'twitter',    name: 'Twitter/X',            codec: 'libx264',   outputWidth: 1280, outputHeight: 720,  fps: 30, audioSampleRate: 44100, createdAt: 0 },
+  { id: 'prores-422', name: 'ProRes 422 Master',    codec: 'prores_ks', outputWidth: 1920, outputHeight: 1080, fps: 24, audioSampleRate: 48000, createdAt: 0 },
+  { id: 'web-265',    name: 'Web H.265',            codec: 'libx265',   outputWidth: 1920, outputHeight: 1080, fps: 30, audioSampleRate: 44100, createdAt: 0 },
+];
+
 const EXPORT_PRESETS: ExportPreset[] = [
   {
     id: "youtube",
@@ -594,6 +636,54 @@ function ExportPresetPanel({
   const resPre = EXPORT_RESOLUTION_PRESETS[selectedResIdx] ?? EXPORT_RESOLUTION_PRESETS[0];
   const pct = exportProgress ?? 0;
 
+  // ── User preset save/load state ────────────────────────────────────────────
+  const [userPresets, setUserPresets] = useState<UserExportPreset[]>(loadUserPresets);
+  const [saveNameInput, setSaveNameInput] = useState("");
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [selectedBuiltinId, setSelectedBuiltinId] = useState<string | null>(null);
+
+  const applyBuiltinPreset = useCallback((p: UserExportPreset) => {
+    setSelectedBuiltinId(p.id);
+    setSelectedCodec(p.codec);
+    // Find matching resolution index or fall back to 0
+    const resIdx = EXPORT_RESOLUTION_PRESETS.findIndex(r => r.width === p.outputWidth && r.height === p.outputHeight);
+    if (resIdx >= 0) setSelectedResIdx(resIdx);
+    setSaveNameInput(p.name);
+  }, []);
+
+  const applyUserPreset = useCallback((p: UserExportPreset) => {
+    setSelectedCodec(p.codec);
+    const resIdx = EXPORT_RESOLUTION_PRESETS.findIndex(r => r.width === p.outputWidth && r.height === p.outputHeight);
+    if (resIdx >= 0) setSelectedResIdx(resIdx);
+    setSelectedBuiltinId(null);
+  }, []);
+
+  const handleSavePreset = useCallback(() => {
+    const name = saveNameInput.trim();
+    if (!name) return;
+    const newPreset: UserExportPreset = {
+      id: `user_${Date.now()}`,
+      name,
+      codec: selectedCodec,
+      outputWidth: resPre.width,
+      outputHeight: resPre.height,
+      fps: sequenceSettings.fps,
+      audioSampleRate: sequenceSettings.audioSampleRate,
+      createdAt: Date.now(),
+    };
+    const updated = [...userPresets, newPreset];
+    setUserPresets(updated);
+    saveUserPresets(updated);
+    setShowSaveInput(false);
+    setSaveNameInput("");
+  }, [saveNameInput, selectedCodec, resPre, sequenceSettings, userPresets]);
+
+  const handleDeleteUserPreset = useCallback((id: string) => {
+    const updated = userPresets.filter(p => p.id !== id);
+    setUserPresets(updated);
+    saveUserPresets(updated);
+  }, [userPresets]);
+
   const CODEC_OPTIONS: Array<{ value: ExportCodec; label: string }> = [
     { value: "libx264", label: "H.264 (libx264)" },
     { value: "libx265", label: "H.265 (libx265)" },
@@ -620,6 +710,75 @@ function ExportPresetPanel({
             </button>
           ))}
         </div>
+      </CollapsibleCard>
+
+      {/* ── Save/Load Presets (Feature 5) ── */}
+      <CollapsibleCard label="Save/Load Presets" defaultOpen>
+        {/* Built-in presets selector */}
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Built-in</div>
+          <select
+            value={selectedBuiltinId ?? ''}
+            onChange={(e) => {
+              const p = BUILTIN_SAVE_PRESETS.find(b => b.id === e.target.value);
+              if (p) applyBuiltinPreset(p);
+            }}
+            style={{ width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: '#e8e8e8', fontSize: 11, padding: '4px 6px' }}
+          >
+            <option value="">— Select built-in preset —</option>
+            {BUILTIN_SAVE_PRESETS.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+        {/* User presets */}
+        {userPresets.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Your Presets</div>
+            {userPresets.map(p => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => applyUserPreset(p)}
+                  style={{ flex: 1, textAlign: 'left', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4, color: '#e8e8e8', fontSize: 11, padding: '3px 7px', cursor: 'pointer' }}
+                  title={`${p.codec} · ${p.outputWidth}×${p.outputHeight}`}
+                >
+                  {p.name}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteUserPreset(p.id)}
+                  style={{ background: 'none', border: 'none', color: 'rgba(255,80,80,0.6)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 4px' }}
+                  title="Delete preset"
+                >🗑</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Save as preset */}
+        {showSaveInput ? (
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input
+              type="text"
+              value={saveNameInput}
+              onChange={(e) => setSaveNameInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSavePreset(); if (e.key === 'Escape') setShowSaveInput(false); }}
+              placeholder="Preset name…"
+              autoFocus
+              style={{ flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4, color: '#e8e8e8', fontSize: 11, padding: '4px 6px' }}
+            />
+            <button type="button" onClick={handleSavePreset} style={{ background: 'rgba(124,58,237,0.3)', border: '1px solid rgba(124,58,237,0.5)', borderRadius: 4, color: '#e8e8e8', fontSize: 11, padding: '3px 8px', cursor: 'pointer' }}>Save</button>
+            <button type="button" onClick={() => setShowSaveInput(false)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4, color: 'rgba(255,255,255,0.5)', fontSize: 11, padding: '3px 6px', cursor: 'pointer' }}>✕</button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowSaveInput(true)}
+            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 4, color: 'rgba(255,255,255,0.5)', fontSize: 11, padding: '5px', cursor: 'pointer', textAlign: 'center' }}
+          >
+            + Save Current Settings as Preset
+          </button>
+        )}
       </CollapsibleCard>
 
       <CollapsibleCard label="Codec &amp; Resolution" defaultOpen>

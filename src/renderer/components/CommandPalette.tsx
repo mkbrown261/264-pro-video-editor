@@ -85,7 +85,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
       setQuery("");
       setActiveIdx(0);
       setRecent(loadRecent());
-      setTimeout(() => inputRef.current?.focus(), 30);
+      const t = setTimeout(() => inputRef.current?.focus(), 30);
+      return () => clearTimeout(t);
     }
   }, [isOpen]);
 
