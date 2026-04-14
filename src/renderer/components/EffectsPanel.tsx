@@ -1167,6 +1167,59 @@ const EFFECT_LIBRARY: EffectDef[] = [
     paramDefs: [
       { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 }
     ]
+  },
+  // ── DaVinci-parity Professional Effects ──────────────────────────────────────
+  {
+    type: "noise_reduction",
+    label: "Noise Reduction",
+    category: "Professional",
+    icon: "⚡",
+    description: "Temporal + spatial noise reduction (hqdn3d on export)",
+    defaultParams: { spatialRadius: 5, temporalFrames: 3, strength: 0.5 },
+    paramDefs: [
+      { key: "spatialRadius", label: "Spatial Radius", type: "range", min: 0, max: 10, step: 0.5 },
+      { key: "temporalFrames", label: "Temporal Frames", type: "range", min: 1, max: 5, step: 1 },
+      { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 }
+    ]
+  },
+  {
+    type: "sharpening",
+    label: "Sharpening",
+    category: "Professional",
+    icon: "◆",
+    description: "Unsharp mask sharpening for crisp detail",
+    defaultParams: { amount: 1.0, radius: 2.5, threshold: 0 },
+    paramDefs: [
+      { key: "amount", label: "Amount", type: "range", min: 0, max: 2, step: 0.05 },
+      { key: "radius", label: "Radius", type: "range", min: 0.5, max: 5, step: 0.1 },
+      { key: "threshold", label: "Threshold", type: "range", min: 0, max: 100, step: 1 }
+    ]
+  },
+  {
+    type: "film_grain",
+    label: "Film Grain",
+    category: "Professional",
+    icon: "▤",
+    description: "Cinematic film grain texture",
+    defaultParams: { amount: 0.3, size: 3, roughness: 0.5, colorGrain: false },
+    paramDefs: [
+      { key: "amount", label: "Amount", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "size", label: "Size", type: "range", min: 1, max: 10, step: 0.5 },
+      { key: "roughness", label: "Roughness", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "colorGrain", label: "Color Grain", type: "toggle" }
+    ]
+  },
+  {
+    type: "lens_distortion",
+    label: "Lens Distortion",
+    category: "Professional",
+    icon: "◎",
+    description: "Barrel/pincushion lens correction or creative distortion",
+    defaultParams: { distortion: 0, anamorphic: 0 },
+    paramDefs: [
+      { key: "distortion", label: "Distortion", type: "range", min: -1, max: 1, step: 0.02 },
+      { key: "anamorphic", label: "Anamorphic", type: "range", min: 0, max: 1, step: 0.05 }
+    ]
   }
 ];
 

@@ -66,6 +66,8 @@ interface ViewerPanelProps {
   onStepFrames: (deltaFrames: number) => void;
   /** Called once with a ref to the AudioEngine so parent can control volume */
   onAudioEngineRef?: (ref: import("../lib/AudioScheduler").AudioEngine | null) => void;
+  /** Subtitle cues to overlay on the viewer */
+  subtitleCues?: import("../../shared/models").SubtitleCue[];
 }
 
 // ─── Transition helpers ───────────────────────────────────────────────────────
@@ -365,6 +367,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onSetPlayheadFrame,
     onStepFrames,
     onAudioEngineRef,
+    subtitleCues,
   }, ref) {
 
     const panelRef       = useRef<HTMLElement | null>(null);
@@ -784,6 +787,96 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
               onSelectMask={onSelectMask}
             />
           )}
+
+          {/* Subtitle overlay */}
+          {previewAsset && subtitleCues && subtitleCues.filter(c => c.startFrame <= playheadFrame && c.endFrame > playheadFrame).map(cue => (
+            <div key={cue.id} style={{
+              position: "absolute",
+              bottom: cue.style.position === "bottom" ? "8%" : undefined,
+              top: cue.style.position === "top" ? "8%" : (cue.style.position === "center" ? "50%" : undefined),
+              transform: cue.style.position === "center" ? "translateY(-50%) translateX(-50%)" : "translateX(-50%)",
+              left: "50%",
+              textAlign: cue.style.alignment,
+              color: cue.style.color,
+              fontSize: `${cue.style.fontSize}px`,
+              fontFamily: cue.style.fontFamily,
+              fontWeight: cue.style.bold ? "bold" : "normal",
+              fontStyle: cue.style.italic ? "italic" : "normal",
+              WebkitTextStroke: `${cue.style.outlineWidth}px ${cue.style.outlineColor}`,
+              textShadow: `${cue.style.shadowOffset}px ${cue.style.shadowOffset}px 4px rgba(0,0,0,0.8)`,
+              background: cue.style.backgroundColor !== "transparent"
+                ? `${cue.style.backgroundColor}${Math.round(cue.style.backgroundOpacity * 255).toString(16).padStart(2,"0")}`
+                : "transparent",
+              padding: "4px 12px",
+              borderRadius: 4,
+              pointerEvents: "none",
+              zIndex: 10,
+              maxWidth: "85%",
+              whiteSpace: "pre-wrap",
+              lineHeight: 1.3,
+            }}>
+              {cue.text}
+            </div>
+          ))}
+
+          {/* Title clip overlay */}
+          {previewAsset && (() => {
+            const activeTitleClips = segments
+              .filter(s => s.clip.titleConfig && s.startFrame <= playheadFrame && s.endFrame > playheadFrame);
+            return activeTitleClips.map(s => {
+              const title = s.clip.titleConfig!;
+              const clipProgress = s.durationFrames > 0 ? (playheadFrame - s.startFrame) / s.durationFrames : 0;
+              let translateX = "-50%";
+              let translateY = "0";
+              let opacity = 1;
+
+              // Animation in (first 20% of clip)
+              if (title.animationIn === "fade" && clipProgress < 0.2) {
+                opacity = clipProgress / 0.2;
+              } else if (title.animationIn === "slide_up" && clipProgress < 0.2) {
+                const t = clipProgress / 0.2;
+                translateY = `${(1 - t) * 40}px`;
+                opacity = t;
+              } else if (title.animationIn === "slide_right" && clipProgress < 0.2) {
+                const t = clipProgress / 0.2;
+                translateX = `calc(-50% + ${(1 - t) * -60}px)`;
+                opacity = t;
+              }
+
+              // Animation out (last 20% of clip)
+              if (title.animationOut === "fade" && clipProgress > 0.8) {
+                opacity = Math.min(opacity, (1 - clipProgress) / 0.2);
+              } else if (title.animationOut === "slide_down" && clipProgress > 0.8) {
+                const t = (clipProgress - 0.8) / 0.2;
+                translateY = `${t * 40}px`;
+                opacity = Math.min(opacity, 1 - t);
+              } else if (title.animationOut === "slide_left" && clipProgress > 0.8) {
+                const t = (clipProgress - 0.8) / 0.2;
+                translateX = `calc(-50% + ${t * -60}px)`;
+                opacity = Math.min(opacity, 1 - t);
+              }
+
+              return (
+                <div key={s.clip.id} style={{
+                  position: "absolute",
+                  left: `${title.posX * 100}%`,
+                  top: `${title.posY * 100}%`,
+                  transform: `translateX(${translateX}) translateY(${translateY})`,
+                  opacity,
+                  pointerEvents: "none",
+                  zIndex: 15,
+                  padding: "8px 16px",
+                  borderRadius: 4,
+                  background: title.bgOpacity > 0
+                    ? `${title.bgColor}${Math.round(title.bgOpacity * 255).toString(16).padStart(2,"0")}`
+                    : "transparent",
+                }}>
+                  <div style={{ fontWeight: 800, fontSize: title.fontSize, color: title.color, fontFamily: title.fontFamily }}>{title.mainText}</div>
+                  {title.subText && <div style={{ fontSize: title.fontSize * 0.6, color: title.color, fontFamily: title.fontFamily, opacity: 0.85 }}>{title.subText}</div>}
+                </div>
+              );
+            });
+          })()}
         </div>
 
         {/* Audio is fully managed by useMultiTrackAudio — no <audio> element needed here */}

@@ -313,7 +313,12 @@ export type EffectType =
   | "ai_face_enhance"
   | "ai_color_match"
   | "filmnoise"
-  | "chromatic_aberration";
+  | "chromatic_aberration"
+  // DaVinci-parity professional effects
+  | "noise_reduction"
+  | "sharpening"
+  | "film_grain"
+  | "lens_distortion";
 
 export interface ClipEffect {
   id: string;
@@ -390,6 +395,11 @@ export interface TimelineClip {
     scaleY?: KeyframeTrack<number>;
     rotation?: KeyframeTrack<number>;
   };
+  // Speed ramp (DaVinci Speed Warp)
+  speedRampKeyframes?: Array<{ frame: number; speed: number }>;
+  opticalFlow?: boolean;
+  // Title generator
+  titleConfig?: TitleClipConfig;
 }
 
 // ── Background Removal ────────────────────────────────────────────────────────
@@ -408,6 +418,25 @@ export interface BackgroundRemovalConfig {
 
 // ── Timeline Track ────────────────────────────────────────────────────────────
 
+export interface EQBand {
+  id: string;
+  type: 'highpass' | 'lowshelf' | 'peak' | 'highshelf' | 'lowpass' | 'notch';
+  frequency: number;       // 20-20000 Hz
+  gain: number;            // -18 to +18 dB
+  q: number;               // 0.1-10
+  enabled: boolean;
+}
+
+export interface CompressorSettings {
+  enabled: boolean;
+  threshold: number;   // -60 to 0 dB
+  ratio: number;       // 1:1 to 20:1
+  attack: number;      // ms
+  release: number;     // ms
+  makeupGain: number;  // 0 to 24 dB
+  knee: number;        // 0 to 10 dB soft knee
+}
+
 export interface TimelineTrack {
   id: string;
   name: string;
@@ -418,6 +447,8 @@ export interface TimelineTrack {
   height: number;  // px, user-resizable
   color: string;
   volume?: number;  // 0-2, track-level gain (1 = unity)
+  eq?: EQBand[];
+  compressor?: CompressorSettings;
 }
 
 export type TimelineTrackKind = "video" | "audio";
@@ -449,11 +480,70 @@ export interface TimelineMarker {
   color: string;
 }
 
+// ── Subtitles ─────────────────────────────────────────────────────────────────
+
+export interface SubtitleStyle {
+  fontFamily: string;
+  fontSize: number;
+  bold: boolean;
+  italic: boolean;
+  color: string;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  position: 'bottom' | 'top' | 'center';
+  alignment: 'left' | 'center' | 'right';
+  outlineWidth: number;
+  outlineColor: string;
+  shadowOffset: number;
+}
+
+export interface SubtitleCue {
+  id: string;
+  startFrame: number;
+  endFrame: number;
+  text: string;
+  style: SubtitleStyle;
+}
+
+export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
+  fontFamily: 'Arial', fontSize: 42, bold: false, italic: false,
+  color: '#ffffff', backgroundColor: 'transparent', backgroundOpacity: 0.6,
+  position: 'bottom', alignment: 'center', outlineWidth: 2, outlineColor: '#000000',
+  shadowOffset: 2,
+};
+
+// ── Title Generator ───────────────────────────────────────────────────────────
+
+export type TitlePreset =
+  | 'lower_third'
+  | 'full_screen'
+  | 'kinetic_text'
+  | 'minimal'
+  | 'broadcast'
+  | 'credits';
+
+export interface TitleClipConfig {
+  preset: TitlePreset;
+  mainText: string;
+  subText?: string;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  bgColor: string;
+  bgOpacity: number;
+  animationIn: 'fade' | 'slide_up' | 'slide_right' | 'typewriter' | 'none';
+  animationOut: 'fade' | 'slide_down' | 'slide_left' | 'none';
+  durationFrames: number;
+  posX: number;
+  posY: number;
+}
+
 export interface EditorProject {
   id: string;
   name: string;
   assets: MediaAsset[];
   sequence: TimelineSequence;
+  subtitleCues?: SubtitleCue[];
 }
 
 // ── Playback & Editor State ───────────────────────────────────────────────────

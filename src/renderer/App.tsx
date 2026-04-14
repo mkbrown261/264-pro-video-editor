@@ -34,11 +34,16 @@ import {
 import { serializeProject, deserializeProject } from "../shared/projectSerializer";
 import type { UpdaterStatus } from "./vite-env";
 import type { ClipMask } from "../shared/models";
-import { createEmptyProject } from "../shared/models";
+import { createEmptyProject, createId, createEmptyClip } from "../shared/models";
+import type { SubtitleCue, TitleClipConfig, MediaAsset } from "../shared/models";
 import type { MaskTool } from "./components/MaskingCanvas";
+import { FollowForFreebie } from "./components/FollowForFreebie";
+import { SubtitlesPanel } from "./components/SubtitlesPanel";
+import { TitleGeneratorPanel } from "./components/TitleGeneratorPanel";
+import { FairlightPanel } from "./components/FairlightPanel";
 
-// Pages: edit | color | fusion
-type AppPage = "edit" | "color" | "fusion";
+// Pages: edit | color | fusion | audio
+type AppPage = "edit" | "color" | "fusion" | "audio";
 type LayoutPreset = "edit" | "color" | "audio";
 
 interface ProjectSettings {
@@ -512,6 +517,9 @@ export default function App() {
   const redo = useEditorStore((s) => s.redo);
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
   const updateTrack = useEditorStore((s) => s.updateTrack);
+  const patchClip = useEditorStore((s) => s.patchClip);
+  const addAssetToPool = useEditorStore((s) => s.addAsset);
+  const insertClip = useEditorStore((s) => s.insertClip);
   const addTrack = useEditorStore((s) => s.addTrack);
   const removeTrack = useEditorStore((s) => s.removeTrack);
   const duplicateTrack = useEditorStore((s) => s.duplicateTrack);
@@ -655,6 +663,120 @@ export default function App() {
       return !v;
     });
   }, [mediaPoolOpen, inspectorOpen, timelineHeight]);
+
+  // ── New Feature State ──────────────────────────────────────────────────────
+  const [showFollowFreebie, setShowFollowFreebie] = useState(false);
+  const [aiCredits, setAiCredits] = useState<number>(() => {
+    try { return Number(localStorage.getItem("264pro_ai_credits") ?? "0") || 0; } catch { return 0; }
+  });
+  const addAICredits = useCallback((amount: number) => {
+    setAiCredits(prev => {
+      const next = prev + amount;
+      try { localStorage.setItem("264pro_ai_credits", String(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  // Auto-show Follow Freebie on first launch
+  useEffect(() => {
+    try {
+      const seen = localStorage.getItem("264pro_follow_modal_shown");
+      if (!seen) {
+        const t = setTimeout(() => {
+          setShowFollowFreebie(true);
+          localStorage.setItem("264pro_follow_modal_shown", "1");
+        }, 3500);
+        return () => clearTimeout(t);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Subtitle cues state
+  const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>(() => []);
+  const handleAddSubtitleCue = useCallback((cue: SubtitleCue) => {
+    setSubtitleCues(prev => [...prev, cue]);
+  }, []);
+  const handleUpdateSubtitleCue = useCallback((id: string, updates: Partial<SubtitleCue>) => {
+    setSubtitleCues(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+  }, []);
+  const handleRemoveSubtitleCue = useCallback((id: string) => {
+    setSubtitleCues(prev => prev.filter(c => c.id !== id));
+  }, []);
+
+  // Clawbot state
+  const [clawbotOpen, setClawbotOpen] = useState(false);
+  const [clawbotSuggestions, setClawbotSuggestions] = useState<string[]>([]);
+
+  const analyzeTimeline = useCallback(() => {
+    const fps = project.sequence.settings.fps;
+    const segs = buildTimelineSegments(project.sequence, project.assets);
+    const issues: string[] = [];
+    // Check for audio clipping
+    segs.filter(s => s.track.kind === "audio").forEach(s => {
+      if ((s.clip.volume ?? 1) > 1.5) issues.push(`⚠️ "${s.asset.name}" audio may clip (volume ${Math.round((s.clip.volume ?? 1) * 100)}%)`);
+    });
+    // Check for gaps
+    const videoSegs = segs.filter(s => s.track.kind === "video").sort((a, b) => a.startFrame - b.startFrame);
+    for (let i = 1; i < videoSegs.length; i++) {
+      if (videoSegs[i].startFrame > videoSegs[i - 1].endFrame + 2) {
+        const tc = (() => {
+          const f = videoSegs[i - 1].endFrame;
+          const s2 = Math.floor(f / fps) % 60;
+          const m2 = Math.floor(f / fps / 60);
+          return `${m2}:${String(s2).padStart(2, "0")}`;
+        })();
+        issues.push(`📍 Gap at ${tc} between clips`);
+      }
+    }
+    // Check for ungraded clips
+    const vSegs = segs.filter(s => s.track.kind === "video");
+    const ungraded = vSegs.filter(s => !s.clip.colorGrade || s.clip.colorGrade.bypass !== false).length;
+    if (ungraded > 0 && vSegs.length > 2) issues.push(`🎨 ${ungraded} clips have no color grade applied`);
+    // Check for very short clips
+    const shortClips = vSegs.filter(s => s.durationFrames < 15);
+    if (shortClips.length > 0) issues.push(`⚡ ${shortClips.length} very short clips (under 0.5s) — may cause flash cuts`);
+    setClawbotSuggestions(issues.length > 0 ? issues : ["✅ Timeline looks healthy! No obvious issues found."]);
+  }, [project]);
+
+  // Subtitles / Title panels
+  const [subtitlesPanelOpen, setSubtitlesPanelOpen] = useState(false);
+  const [titleGenPanelOpen, setTitleGenPanelOpen] = useState(false);
+
+  // Speed ramp handlers
+  const handleSetSpeedRampKeyframes = useCallback((kf: Array<{ frame: number; speed: number }>) => {
+    if (!selectedClipId) return;
+    patchClip(selectedClipId, { speedRampKeyframes: kf });
+  }, [selectedClipId, patchClip]);
+  const handleSetOpticalFlow = useCallback((enabled: boolean) => {
+    if (!selectedClipId) return;
+    patchClip(selectedClipId, { opticalFlow: enabled });
+  }, [selectedClipId, patchClip]);
+
+  // Title clip handler
+  const handleAddTitleToTimeline = useCallback((config: TitleClipConfig) => {
+    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
+    if (!firstVideoTrack) { toast.warning("Add a video track first"); return; }
+    // Create virtual asset
+    const virtualAssetId = createId();
+    const titleAsset: MediaAsset = {
+      id: virtualAssetId,
+      name: `Title: ${config.mainText}`,
+      sourcePath: "",
+      previewUrl: "",
+      thumbnailUrl: null,
+      durationSeconds: config.durationFrames / project.sequence.settings.fps,
+      nativeFps: project.sequence.settings.fps,
+      width: project.sequence.settings.width,
+      height: project.sequence.settings.height,
+      hasAudio: false,
+    };
+    addAssetToPool(titleAsset);
+    const titleClip = createEmptyClip(virtualAssetId, firstVideoTrack.id, playback.playheadFrame);
+    titleClip.titleConfig = config;
+    insertClip(titleClip);
+    toast.success(`Title "${config.mainText}" added to timeline`);
+    setTitleGenPanelOpen(false);
+  }, [project, playback.playheadFrame, addAssetToPool, insertClip]);
 
   // ── FlowState Panel ────────────────────────────────────────────────────────
   const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
@@ -1229,6 +1351,18 @@ export default function App() {
     onToggleStoryboard: () => setStoryboardOpen(v => !v),
     onToggleViewerMaximize: toggleViewerMaximize,
   });
+
+  // Clawbot keyboard shortcut: Ctrl/Cmd+Shift+A
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setClawbotOpen(v => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // ── Waveform peak extraction (background, per-asset) ─────────────────────
   useWaveformExtractor({ assets: project.assets, setAssetWaveform });
@@ -2225,7 +2359,7 @@ export default function App() {
 
         {/* Page tabs */}
         <nav className="page-tabs">
-          {(["edit", "color", "fusion"] as const).map((page) => (
+          {(["edit", "color", "audio", "fusion"] as const).map((page) => (
             <button
               key={page}
               className={`page-tab${activePage === page ? " active" : ""}${page === "fusion" ? " fusion-tab" : ""}`}
@@ -2241,9 +2375,9 @@ export default function App() {
                 }
               }}
               type="button"
-              title={page === "fusion" ? "Open Fusion node compositor" : undefined}
+              title={page === "fusion" ? "Open Fusion node compositor" : page === "audio" ? "Fairlight Audio Engineering" : undefined}
             >
-              {page === "fusion" ? "⬡ Fusion" : page.charAt(0).toUpperCase() + page.slice(1)}
+              {page === "fusion" ? "⬡ Fusion" : page === "audio" ? "🎚 Audio" : page.charAt(0).toUpperCase() + page.slice(1)}
             </button>
           ))}
         </nav>
@@ -2393,6 +2527,52 @@ export default function App() {
           >
             ⚡ AI Tools
           </button>
+
+          {/* Free Credits button */}
+          <button
+            className="panel-toggle-btn"
+            onClick={() => setShowFollowFreebie(true)}
+            title="Get free AI credits by following on social media"
+            type="button"
+            style={{ background: "rgba(124,58,237,0.15)", borderColor: "rgba(124,58,237,0.4)", color: "#c4b5fd" }}
+          >
+            🎁 {aiCredits > 0 ? `${aiCredits} Credits` : "Free Credits"}
+          </button>
+
+          {/* Clawbot button */}
+          <button
+            className={`panel-toggle-btn${clawbotOpen ? " on" : ""}`}
+            onClick={() => setClawbotOpen(v => !v)}
+            title="Clawbot AI Assistant (Ctrl+Shift+A)"
+            type="button"
+            style={{
+              background: clawbotOpen ? "rgba(124,58,237,0.25)" : undefined,
+              borderColor: clawbotOpen ? "rgba(124,58,237,0.5)" : undefined,
+              color: clawbotOpen ? "#c4b5fd" : undefined,
+            }}
+          >
+            🤖 Clawbot
+          </button>
+
+          {/* Subtitles button */}
+          <button
+            className={`panel-toggle-btn${subtitlesPanelOpen ? " on" : ""}`}
+            onClick={() => setSubtitlesPanelOpen(v => !v)}
+            title="Subtitles / Captions"
+            type="button"
+          >
+            📝 Subtitles
+          </button>
+
+          {/* Title Generator button */}
+          <button
+            className={`panel-toggle-btn${titleGenPanelOpen ? " on" : ""}`}
+            onClick={() => setTitleGenPanelOpen(v => !v)}
+            title="Title Generator"
+            type="button"
+          >
+            T Titles
+          </button>
         </div>
 
         <div className="menubar-status">
@@ -2519,6 +2699,7 @@ export default function App() {
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
                 onAudioEngineRef={(engine) => { audioEngineRef.current = engine; }}
+                subtitleCues={subtitleCues}
               />
             </div>
 
@@ -2579,6 +2760,8 @@ export default function App() {
               onRippleDelete={() => { pauseViewerPlayback(); removeSelectedClip(); }}
               onSetClipVolume={(vol) => { if (selectedClipId) setClipVolume(selectedClipId, vol); }}
               onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
+              onSetSpeedRampKeyframes={handleSetSpeedRampKeyframes}
+              onSetOpticalFlow={handleSetOpticalFlow}
               clipTransform={inspectorSegment?.clip.transform ?? null}
               onSetClipTransform={(updates) => { if (selectedClipId) setClipTransform(selectedClipId, updates); }}
               videoRef={viewerVideoRef}
@@ -3011,6 +3194,19 @@ export default function App() {
           </>
         )}
 
+        {/* ── AUDIO PAGE (Fairlight) ── */}
+        {activePage === "audio" && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <FairlightPanel
+              tracks={project.sequence.tracks}
+              fps={project.sequence.settings.fps}
+              onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
+              masterVolume={project.sequence.settings.masterVolume ?? 1}
+              onSetMasterVolume={(v) => updateSequenceSettings({ masterVolume: v })}
+            />
+          </div>
+        )}
+
         {/* ── FUSION PAGE ── */}
         {activePage === "fusion" && (() => {
           const fusClip = fusionClipId
@@ -3060,6 +3256,103 @@ export default function App() {
         isOpen={aiToolsPanelOpen}
         onClose={() => setAiToolsPanelOpen(false)}
       />
+
+      {/* ── FOLLOW FOR FREEBIE MODAL ── */}
+      {showFollowFreebie && (
+        <FollowForFreebie
+          onClose={() => setShowFollowFreebie(false)}
+          aiCredits={aiCredits}
+          onAddCredits={addAICredits}
+        />
+      )}
+
+      {/* ── CLAWBOT DRAWER ── */}
+      {clawbotOpen && (
+        <div style={{
+          position: "fixed", top: 60, right: 0, bottom: 0, width: 300,
+          background: "#0d1117", borderLeft: "1px solid rgba(255,255,255,0.1)",
+          display: "flex", flexDirection: "column", zIndex: 800,
+          boxShadow: "-8px 0 24px rgba(0,0,0,0.4)",
+        }}>
+          <div style={{ padding: "12px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>🤖 Clawbot</span>
+            <span style={{ fontSize: 11, color: "#64748b", flex: 1 }}>Your AI editing assistant</span>
+            <button onClick={() => setClawbotOpen(false)} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16 }}>✕</button>
+          </div>
+          <div style={{ padding: "10px 14px", flex: 1, overflowY: "auto" }}>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10, fontStyle: "italic" }}>"What should I work on?"</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+              {[
+                { label: "Analyze my timeline", action: () => analyzeTimeline() },
+                { label: "Suggest color grade", action: () => { setClawbotSuggestions(["🎨 Try a teal & orange grade for cinematic look", "💡 Boost contrast by 0.2 for punchy shadows", "🌡️ Warm up shadows slightly (+8 temp)"]); } },
+                { label: "Fix audio levels", action: () => { setClawbotSuggestions(["🎚 Set all audio tracks to -6dB for headroom", "🔊 A1 track is peaking — reduce volume to 80%", "🎙️ Use compressor (4:1 ratio) on voice tracks"]); } },
+                { label: "Generate B-roll ideas", action: () => { setClawbotSuggestions(["📸 Cut-away shots of hands typing", "🌆 Establishing cityscape b-roll at 1.5s each", "🔄 Insert reaction shots between interview cuts"]); } },
+                { label: "Write captions from audio", action: () => { setSubtitlesPanelOpen(true); setClawbotOpen(false); } },
+              ].map(item => (
+                <button key={item.label} onClick={item.action} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#e2e8f0", fontSize: 12, cursor: "pointer", textAlign: "left" }}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {clawbotSuggestions.length > 0 && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.08em", marginBottom: 8 }}>SUGGESTIONS</div>
+                {clawbotSuggestions.map((s, i) => (
+                  <div key={i} style={{ fontSize: 12, color: "#cbd5e1", padding: "6px 10px", marginBottom: 4, background: "rgba(255,255,255,0.04)", borderRadius: 6 }}>
+                    {s}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 10, color: "#475569" }}>
+            Ctrl+Shift+A to toggle
+          </div>
+        </div>
+      )}
+
+      {/* ── SUBTITLES PANEL (slide-in from bottom-right) ── */}
+      {subtitlesPanelOpen && (
+        <div style={{
+          position: "fixed", right: 0, bottom: 0, width: 420, height: 480,
+          background: "#0d1117", border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: "12px 0 0 0", zIndex: 800,
+          boxShadow: "-8px -8px 24px rgba(0,0,0,0.4)",
+          display: "flex", flexDirection: "column",
+        }}>
+          <SubtitlesPanel
+            cues={subtitleCues}
+            playheadFrame={playback.playheadFrame}
+            fps={project.sequence.settings.fps}
+            onAddCue={handleAddSubtitleCue}
+            onUpdateCue={handleUpdateSubtitleCue}
+            onRemoveCue={handleRemoveSubtitleCue}
+            onSeekToFrame={(frame) => setPlayheadFrame(frame)}
+          />
+          <button
+            onClick={() => setSubtitlesPanelOpen(false)}
+            style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16 }}
+          >✕</button>
+        </div>
+      )}
+
+      {/* ── TITLE GENERATOR PANEL ── */}
+      {titleGenPanelOpen && (
+        <div style={{
+          position: "fixed", right: 0, top: 60, width: 280, bottom: 0,
+          background: "#0d1117", borderLeft: "1px solid rgba(255,255,255,0.1)",
+          zIndex: 800, boxShadow: "-8px 0 24px rgba(0,0,0,0.4)",
+          display: "flex", flexDirection: "column",
+        }}>
+          <div style={{ position: "absolute", top: 10, right: 12 }}>
+            <button onClick={() => setTitleGenPanelOpen(false)} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 16 }}>✕</button>
+          </div>
+          <TitleGeneratorPanel
+            fps={project.sequence.settings.fps}
+            onAddTitleToTimeline={handleAddTitleToTimeline}
+          />
+        </div>
+      )}
 
       {/* ── Image-to-Video Modal ── */}
       {renderImageToVideoModal()}

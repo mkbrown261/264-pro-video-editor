@@ -570,6 +570,54 @@ export async function exportSequence(
       }
     }
 
+    // ── Clip effects (DaVinci-parity professional effects) ─────────────────
+    if (segment.clip.effects && segment.clip.effects.length > 0) {
+      for (const effect of segment.clip.effects.filter(e => e.enabled)) {
+        switch (effect.type) {
+          case "noise_reduction": {
+            const nr_r = Number(effect.params?.spatialRadius ?? 5);
+            videoFilters.push(`hqdn3d=${nr_r}:${nr_r}:${(nr_r * 1.5).toFixed(1)}:${(nr_r * 1.5).toFixed(1)}`);
+            break;
+          }
+          case "sharpening": {
+            const sh_amt = Number(effect.params?.amount ?? 1);
+            videoFilters.push(`unsharp=5:5:${sh_amt}:5:5:0`);
+            break;
+          }
+          case "vignette": {
+            const v_str = Number(effect.params?.strength ?? 0.5);
+            videoFilters.push(`vignette=angle=${(Math.PI * v_str / 2).toFixed(4)}:mode=backward`);
+            break;
+          }
+          case "film_grain": {
+            const fg_amt = Number(effect.params?.amount ?? 0.3);
+            videoFilters.push(`noise=c0s=${Math.round(fg_amt * 40)}:c0f=t+u`);
+            break;
+          }
+          case "lens_distortion": {
+            // barrel/pincushion via lenscorrection
+            const dist = Number(effect.params?.distortion ?? 0);
+            if (Math.abs(dist) > 0.01) {
+              videoFilters.push(`lenscorrection=k1=${dist.toFixed(3)}:k2=0`);
+            }
+            break;
+          }
+          case "blur": {
+            const blurAmt = Number(effect.params?.amount ?? 2);
+            videoFilters.push(`boxblur=${Math.round(blurAmt)}`);
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    }
+
+    // ── Optical Flow slow-mo ────────────────────────────────────────────────
+    if (segment.clip.opticalFlow && (segment.clip.speed ?? 1) < 1) {
+      videoFilters.push(`minterpolate='fps=60:mi_mode=mci:mc_mode=aobmc:me_algo=umh'`);
+    }
+
     if (Number(transitionInSeconds) > 0) {
       videoFilters.push(`fade=t=in:st=0:d=${transitionInSeconds}`);
     }

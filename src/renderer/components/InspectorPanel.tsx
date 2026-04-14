@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import type {
   BackgroundRemovalConfig,
   ClipEffect,
@@ -88,6 +88,9 @@ interface InspectorPanelProps {
   onRippleDelete: () => void;
   onSetClipVolume: (volume: number) => void;
   onSetClipSpeed: (speed: number) => void;
+  // Speed Ramp
+  onSetSpeedRampKeyframes?: (kf: Array<{ frame: number; speed: number }>) => void;
+  onSetOpticalFlow?: (enabled: boolean) => void;
 
   // Transform
   clipTransform?: ClipTransformValues | null;
@@ -328,6 +331,139 @@ function SpeedControl({
       <div className="range-labels">
         <span>0.25×</span><span>1×</span><span>2×</span><span>4×</span>
       </div>
+    </div>
+  );
+}
+
+// ── Speed Ramp ────────────────────────────────────────────────────────────────
+function SpeedRampSection({
+  clip,
+  onSetSpeedRampKeyframes,
+  onSetOpticalFlow,
+}: {
+  clip: import("../../shared/models").TimelineClip;
+  onSetSpeedRampKeyframes: (kf: Array<{ frame: number; speed: number }>) => void;
+  onSetOpticalFlow: (enabled: boolean) => void;
+}) {
+  const speedRampCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [speedRampMode, setSpeedRampMode] = useState<"constant" | "linear" | "ease">("linear");
+  const opticalFlowEnabled = clip.opticalFlow ?? false;
+  const keyframes = clip.speedRampKeyframes ?? [];
+
+  // Draw speed ramp canvas
+  useEffect(() => {
+    const canvas = speedRampCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 0.5;
+    [0.25, 0.5, 0.75].forEach(y => {
+      ctx.beginPath();
+      ctx.moveTo(0, y * H);
+      ctx.lineTo(W, y * H);
+      ctx.stroke();
+    });
+    // 1x speed line
+    ctx.strokeStyle = "rgba(124,58,237,0.3)";
+    ctx.setLineDash([3, 3]);
+    const oneX = H - ((1 - 0.1) / (4 - 0.1)) * H;
+    ctx.beginPath();
+    ctx.moveTo(0, oneX);
+    ctx.lineTo(W, oneX);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Plot keyframes
+    if (keyframes.length > 0) {
+      ctx.strokeStyle = "#a855f7";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      keyframes.forEach((kf, i) => {
+        const x = (kf.frame / 300) * W;
+        const y = H - ((kf.speed - 0.1) / (4 - 0.1)) * H;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      keyframes.forEach(kf => {
+        const x = (kf.frame / 300) * W;
+        const y = H - ((kf.speed - 0.1) / (4 - 0.1)) * H;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#a855f7";
+        ctx.fill();
+      });
+    }
+
+    // Labels
+    ctx.fillStyle = "rgba(100,116,139,0.8)";
+    ctx.font = "8px system-ui";
+    ctx.fillText("4×", 2, 10);
+    ctx.fillText("1×", 2, oneX - 2);
+    ctx.fillText("0.1×", 2, H - 2);
+  }, [keyframes]);
+
+  function handleSpeedRampClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    const canvas = speedRampCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const W = rect.width;
+    const H = rect.height;
+    const frame = Math.round((x / W) * 300);
+    const speed = 0.1 + ((H - y) / H) * (4 - 0.1);
+    const clamped = Math.max(0.1, Math.min(4, speed));
+    const newKf = [...keyframes.filter(k => Math.abs(k.frame - frame) > 5), { frame, speed: clamped }]
+      .sort((a, b) => a.frame - b.frame);
+    onSetSpeedRampKeyframes(newKf);
+  }
+
+  return (
+    <div style={{ marginTop: 16, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+        Speed Ramp
+      </div>
+      <canvas
+        ref={speedRampCanvasRef}
+        width={240} height={60}
+        style={{ width: "100%", height: 60, borderRadius: 6, background: "#0f172a", cursor: "crosshair", display: "block" }}
+        onClick={handleSpeedRampClick}
+        title="Click to add speed keyframe. Drag to adjust."
+      />
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        {(["constant", "linear", "ease"] as const).map(mode => (
+          <button key={mode} onClick={() => setSpeedRampMode(mode)} style={{
+            flex: 1, padding: "4px 0", borderRadius: 5, border: "none",
+            background: speedRampMode === mode ? "#7c3aed" : "rgba(255,255,255,0.07)",
+            color: "white", fontSize: 10, fontWeight: 600, cursor: "pointer",
+            textTransform: "capitalize" as const,
+          }}>
+            {mode}
+          </button>
+        ))}
+      </div>
+      {keyframes.length > 0 && (
+        <button
+          onClick={() => onSetSpeedRampKeyframes([])}
+          style={{ marginTop: 6, width: "100%", padding: "3px", borderRadius: 5, border: "none", background: "rgba(239,68,68,0.12)", color: "#f87171", fontSize: 10, cursor: "pointer" }}
+        >
+          Clear Keyframes
+        </button>
+      )}
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={opticalFlowEnabled} onChange={e => onSetOpticalFlow(e.target.checked)}
+          style={{ accentColor: "#7c3aed" }} />
+        <span style={{ fontSize: 12, color: "#cbd5e1" }}>Optical Flow (smooth slow-mo)</span>
+        <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>On export</span>
+      </label>
     </div>
   );
 }
@@ -924,6 +1060,8 @@ export function InspectorPanel({
   onRippleDelete,
   onSetClipVolume,
   onSetClipSpeed,
+  onSetSpeedRampKeyframes,
+  onSetOpticalFlow,
   clipTransform,
   onSetClipTransform,
   onToggleVoiceListening,
@@ -1289,6 +1427,13 @@ export function InspectorPanel({
                   value={selectedSegment.clip.speed ?? 1}
                   onChange={onSetClipSpeed}
                 />
+                {onSetSpeedRampKeyframes && onSetOpticalFlow && (
+                  <SpeedRampSection
+                    clip={selectedSegment.clip}
+                    onSetSpeedRampKeyframes={onSetSpeedRampKeyframes}
+                    onSetOpticalFlow={onSetOpticalFlow}
+                  />
+                )}
                 {selectedSegment.asset.hasAudio && (
                   <button className="panel-action muted" onClick={onExtractAudio} type="button">
                     Extract Audio to Track

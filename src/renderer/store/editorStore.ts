@@ -152,6 +152,12 @@ interface EditorStore {
   removeTrack: (trackId: string) => void;
   updateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   duplicateTrack: (trackId: string) => void;
+  /** Patch any fields on a TimelineClip directly (used for new features like speedRamp, titleConfig) */
+  patchClip: (clipId: string, updates: Partial<import("../../shared/models").TimelineClip>) => void;
+  /** Add an asset to the project pool without appending to timeline */
+  addAsset: (asset: import("../../shared/models").MediaAsset) => void;
+  /** Directly insert a clip (already constructed) into the timeline */
+  insertClip: (clip: import("../../shared/models").TimelineClip) => void;
   /**
    * Atomically: create a new video track (+ paired audio track if the clip
    * has linked audio), move the dragged clip group into those new tracks,
@@ -1784,6 +1790,32 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           )
         }
       }
+    })));
+  },
+
+  patchClip: (clipId, updates) => {
+    set(withUndo("Patch Clip", (state) => updateClipInState(state, clipId, (c) => ({ ...c, ...updates }))));
+  },
+
+  addAsset: (asset) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        assets: [...state.project.assets, asset],
+      }
+    }));
+  },
+
+  insertClip: (clip) => {
+    set(withUndo("Insert Clip", (state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          clips: [...state.project.sequence.clips, clip],
+        }
+      },
+      selectedClipId: clip.id,
     })));
   },
 
