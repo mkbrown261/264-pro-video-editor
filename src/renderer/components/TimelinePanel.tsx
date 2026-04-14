@@ -179,6 +179,10 @@ interface TimelinePanelProps {
   onAutoLayout?: () => void;
   // Phase 8: Adjustment Layers
   onAddAdjustmentLayer?: (startFrame: number, durationFrames: number) => void;
+  // Phase 9: Higgsfield inline B-Roll
+  onGenerateBRollForClip?: (clipId: string, startFrame: number, endFrame: number, subtitleText?: string) => void;
+  onGenerateBRollForGap?: (gapStartFrame: number, gapEndFrame: number) => void;
+  onGenerateAITransition?: (startFrame: number, endFrame: number) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -242,6 +246,9 @@ export function TimelinePanel({
   onNestClips,
   onAutoLayout,
   onAddAdjustmentLayer,
+  onGenerateBRollForClip,
+  onGenerateBRollForGap,
+  onGenerateAITransition,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -1290,6 +1297,27 @@ export function TimelinePanel({
               close();
             }}>
               <span className="ctx-icon">📦</span> Nest as Compound Clip
+            </div>
+          </>
+        )}
+
+        {/* ── Section: Higgsfield AI B-Roll (Phase 9) ── */}
+        {clipKind === "video" && onGenerateBRollForClip && (
+          <>
+            <div className="ctx-menu-sep" />
+            <div className="ctx-section-label">HIGGSFIELD AI</div>
+            <div className="ctx-menu-item" onClick={() => {
+              // Get the segment for this clip to find its frame range
+              let segStartFrame = 0;
+              let segEndFrame = 0;
+              for (const tl of trackLayouts) {
+                const seg = tl.segments.find((s) => s.clip.id === clipId);
+                if (seg) { segStartFrame = seg.startFrame; segEndFrame = seg.startFrame + seg.durationFrames; break; }
+              }
+              onGenerateBRollForClip(clipId, segStartFrame, segEndFrame);
+              close();
+            }}>
+              <span className="ctx-icon">⚡</span> Generate B-Roll for this clip
             </div>
           </>
         )}
@@ -2355,9 +2383,58 @@ export function TimelinePanel({
                     );
                   })}
 
+                  {/* Phase 9: Gap pills for Higgsfield B-Roll generation */}
+                  {layout.track.kind === "video" && onGenerateBRollForGap && (() => {
+                    const sortedSegs = [...layout.segments].sort((a, b) => a.startFrame - b.startFrame);
+                    const pills: React.ReactNode[] = [];
+                    for (let gi = 1; gi < sortedSegs.length; gi++) {
+                      const prevEnd = sortedSegs[gi - 1].startFrame + sortedSegs[gi - 1].durationFrames;
+                      const nextStart = sortedSegs[gi].startFrame;
+                      const gapFrames = nextStart - prevEnd;
+                      // Only show pill if gap > 0.5 seconds and wide enough to be visible
+                      if (gapFrames > sequenceFps * 0.5) {
+                        const gapLeft = prevEnd * pixelsPerFrame;
+                        const gapW = gapFrames * pixelsPerFrame;
+                        const gStartFrame = prevEnd;
+                        const gEndFrame = nextStart;
+                        if (gapW >= 60) {
+                          pills.push(
+                            <div
+                              key={`gap-pill-${gi}`}
+                              onClick={(e) => { e.stopPropagation(); onGenerateBRollForGap(gStartFrame, gEndFrame); }}
+                              title={`Gap: ${(gapFrames / sequenceFps).toFixed(1)}s — Click to generate B-Roll`}
+                              style={{
+                                position: 'absolute',
+                                left: gapLeft + Math.max(0, (gapW - 120) / 2),
+                                top: '50%',
+                                transform: 'translateY(-50%)',
+                                background: 'rgba(124,58,237,0.2)',
+                                border: '1px dashed #7c3aed',
+                                borderRadius: 12,
+                                padding: '2px 8px',
+                                cursor: 'pointer',
+                                zIndex: 5,
+                                fontSize: 10,
+                                color: '#a78bfa',
+                                whiteSpace: 'nowrap',
+                                pointerEvents: 'all',
+                                userSelect: 'none',
+                                maxWidth: gapW - 8,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              ⚡ Generate B-Roll
+                            </div>
+                          );
+                        }
+                      }
+                    }
+                    return pills;
+                  })()}
+
                   {/* BUG 5: Ghost clip preview while dragging — shows origin as shadow at 0.4 opacity */}
-                  {dragState && layout.segments.some((s) => s.clip.id === dragState.clipId) && (() => {
-                    const seg = layout.segments.find((s) => s.clip.id === dragState.clipId);
+                  {dragState && layout.segments.some((s) => s.clip.id === dragState.clipId) && (() => {                    const seg = layout.segments.find((s) => s.clip.id === dragState.clipId);
                     if (!seg) return null;
                     const w = Math.max(seg.durationFrames * pixelsPerFrame, 24);
                     const isAudio = seg.track.kind === "audio";

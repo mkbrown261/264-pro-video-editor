@@ -57,9 +57,16 @@ import { BeatSyncPanel } from "./components/BeatSyncPanel";
 // Phase 6 new imports
 import OnboardingModal from "./components/OnboardingModal";
 import { SettingsPanel } from "./components/SettingsPanel";
+// Phase 9 ClawFlow Intelligence
+import { useClawFlowAmbient } from "./hooks/useClawFlowAmbient";
+import { useVoiceCommands } from "./hooks/useVoiceCommands";
+import { updateFromCut, updateFromGrade, updateFromTransition } from "./lib/ClawFlowStyleProfile";
+import { StyleProfilePanel } from "./components/StyleProfilePanel";
+import { ClawFlowPublishPanel } from "./components/ClawFlowPublishPanel";
+import { ProjectIntelligencePanel } from "./components/ProjectIntelligencePanel";
 
-// Pages: edit | color | fusion | audio
-type AppPage = "edit" | "color" | "fusion" | "audio";
+// Pages: edit | color | fusion | audio | publish
+type AppPage = "edit" | "color" | "fusion" | "audio" | "publish";
 type LayoutPreset = "edit" | "color" | "audio";
 
 interface ProjectSettings {
@@ -823,6 +830,9 @@ export default function App() {
   const [beatSyncOpen, setBeatSyncOpen] = useState(false);
   // Settings panel (Phase 6)
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
+  // Phase 9 ClawFlow Intelligence state
+  const [styleProfileOpen, setStyleProfileOpen] = useState(false);
+  const [intelligenceOpen, setIntelligenceOpen] = useState(false);
 
   // Speed ramp handlers
   const handleSetSpeedRampKeyframes = useCallback((kf: Array<{ frame: number; speed: number }>) => {
@@ -1137,6 +1147,9 @@ export default function App() {
     if (!target) return false;
     pauseViewerPlayback();
     splitClipAtFrame(target.clip.id, frame);
+    // Phase 9: record cut duration for style learning
+    const durationSec = target.durationFrames / project.sequence.settings.fps;
+    updateFromCut(durationSec);
     return true;
   }
 
@@ -1524,6 +1537,42 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
         setSettingsPanelOpen(v => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ── Phase 9: ClawFlow Ambient Hook ────────────────────────────────────────
+  const { suggestions: ambientSuggestions, dismissSuggestion: dismissAmbient, actOnSuggestion: actAmbient } = useClawFlowAmbient({
+    project,
+    fps: project.sequence.settings.fps,
+    onAutoColorMatch: autoColorMatch,
+    onNormalizeAudio: normalizeAudioLevels,
+    onCloseAllGaps: closeAllGaps,
+    onOpenBeatSync: () => setBeatSyncOpen(true),
+  });
+
+  // ── Phase 9: Voice Commands Hook ──────────────────────────────────────────
+  const voice = useVoiceCommands({
+    splitAtPlayhead: () => { if (selectedClipId) splitClipAtFrame(selectedClipId, playback.playheadFrame); },
+    undo,
+    redo,
+    normalizeAudio: () => normalizeAudioLevels(-14),
+    autoColorMatch,
+    closeGaps: closeAllGaps,
+    applyWarm: () => { /* warm preset — placeholder */ },
+    applyCool: () => { /* cool preset — placeholder */ },
+    addMarker: () => addMarker({ frame: playback.playheadFrame, label: 'Marker', color: '#f59e0b' }),
+    setActivePage: (page: string) => setActivePage(page as AppPage),
+  });
+
+  // ── Phase 9: Intelligence keyboard shortcut Cmd+Shift+I ───────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        setIntelligenceOpen(v => !v);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -2580,6 +2629,15 @@ export default function App() {
               {page === "fusion" ? "⬡ Fusion" : page === "audio" ? "🎚 Audio" : page.charAt(0).toUpperCase() + page.slice(1)}
             </button>
           ))}
+          <button
+            className={`page-tab${activePage === "publish" ? " active" : ""}`}
+            onClick={() => setActivePage("publish")}
+            type="button"
+            style={{ color: activePage === "publish" ? "#c4b5fd" : undefined }}
+            title="ClawFlow Publish — publish to YouTube, TikTok, Instagram"
+          >
+            🚀 Publish
+          </button>
         </nav>
 
         {/* Imp 4: Large centered timecode */}
@@ -2739,6 +2797,56 @@ export default function App() {
             🎁 {aiCredits > 0 ? `${aiCredits} Credits` : "Free Credits"}
           </button>
 
+          {/* Phase 9: Voice Command button */}
+          <button
+            className="panel-toggle-btn"
+            onClick={voice.listening ? voice.stop : voice.start}
+            title={voice.listening ? "Listening… (click to stop)" : "Voice command (click to speak)"}
+            type="button"
+            style={{
+              background: voice.listening ? "rgba(220,38,38,0.25)" : undefined,
+              borderColor: voice.listening ? "rgba(220,38,38,0.5)" : undefined,
+              color: voice.listening ? "#fca5a5" : undefined,
+            }}
+          >
+            🎤 {voice.listening ? "Listening…" : "Voice"}
+          </button>
+          {voice.lastCommand && (
+            <span style={{ fontSize: 11, color: "#94a3b8", padding: "0 4px", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {voice.lastCommand}
+            </span>
+          )}
+
+          {/* Phase 9: Style Profile button */}
+          <button
+            className={`panel-toggle-btn${styleProfileOpen ? " on" : ""}`}
+            onClick={() => setStyleProfileOpen(v => !v)}
+            title="ClawFlow Style Profile — learned edit style"
+            type="button"
+            style={{
+              background: styleProfileOpen ? "rgba(124,58,237,0.25)" : undefined,
+              borderColor: styleProfileOpen ? "rgba(124,58,237,0.4)" : undefined,
+              color: styleProfileOpen ? "#c4b5fd" : undefined,
+            }}
+          >
+            ⚡ Style
+          </button>
+
+          {/* Phase 9: Project Intelligence button */}
+          <button
+            className={`panel-toggle-btn${intelligenceOpen ? " on" : ""}`}
+            onClick={() => setIntelligenceOpen(v => !v)}
+            title="Project Intelligence Dashboard (⌘⇧I)"
+            type="button"
+            style={{
+              background: intelligenceOpen ? "rgba(124,58,237,0.25)" : undefined,
+              borderColor: intelligenceOpen ? "rgba(124,58,237,0.4)" : undefined,
+              color: intelligenceOpen ? "#c4b5fd" : undefined,
+            }}
+          >
+            📊 Intel
+          </button>
+
           {/* Clawbot button */}
           <button
             className={`panel-toggle-btn${clawbotOpen ? " on" : ""}`}
@@ -2845,6 +2953,28 @@ export default function App() {
 
       {/* ── MAIN WORKSPACE ── */}
       <main ref={appShellRef} className={`app-shell page-${activePage}`} style={shellStyle}>
+
+        {/* ── Phase 9: ClawFlow Ambient Banner (shown on any non-fusion page) ── */}
+        {activePage !== "fusion" && ambientSuggestions.length > 0 && (() => {
+          const s = ambientSuggestions[0];
+          return (
+            <div style={{
+              height: 36, background: "linear-gradient(90deg, #1e1b4b, #312e81)",
+              borderBottom: "1px solid #4c1d95", display: "flex", alignItems: "center",
+              padding: "0 16px", gap: 12, flexShrink: 0, zIndex: 50,
+            }}>
+              <span style={{ fontSize: 11, color: "#c4b5fd", fontWeight: 700 }}>⚡ ClawFlow</span>
+              <span style={{ fontSize: 12, color: "#e2e8f0", flex: 1 }}>{s.message}</span>
+              <button onClick={() => actAmbient(s.id)} style={{
+                padding: "4px 12px", borderRadius: 6, border: "none",
+                background: "#7c3aed", color: "white", fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}>{s.actionLabel}</button>
+              <button onClick={() => dismissAmbient(s.id)} style={{
+                background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 14,
+              }}>✕</button>
+            </div>
+          );
+        })()}
 
         {/* ── EDIT PAGE ── */}
         {activePage === "edit" && (
@@ -3289,6 +3419,7 @@ export default function App() {
                 selectClip(clipId);
                 const msg1 = setSelectedClipTransitionType(edge, transType as import("../shared/models").ClipTransitionType);
                 setTransitionMessage(msg1);
+                updateFromTransition(transType);
               }}
               assets={project.assets}
               markers={project.sequence.markers}
@@ -3304,6 +3435,11 @@ export default function App() {
               onRestoreClipSnapshot={(clipId, snapshotId) => restoreClipSnapshot(clipId, snapshotId)}
               clipHistoryMap={Object.fromEntries(project.sequence.clips.filter(c => c.clipHistory && c.clipHistory.length > 0).map(c => [c.id, c.clipHistory!]))}
               onAddAdjustmentLayer={addAdjustmentLayer}
+              onGenerateBRollForGap={(_start, _end) => { setAiToolsPanelOpen(true); }}
+              onGenerateBRollForClip={(clipId) => {
+                selectClip(clipId);
+                setAiToolsPanelOpen(true);
+              }}
             />
 
             {/* Audio Mixer Panel */}
@@ -3337,7 +3473,10 @@ export default function App() {
                   if (selectedClipId) enableColorGrade(selectedClipId);
                 }}
                 onUpdateGrade={(grade) => {
-                  if (selectedClipId) setColorGrade(selectedClipId, grade);
+                  if (selectedClipId) {
+                    setColorGrade(selectedClipId, grade);
+                    updateFromGrade(grade);
+                  }
                 }}
                 onResetGrade={() => {
                   if (selectedClipId) resetColorGrade(selectedClipId);
@@ -3526,6 +3665,14 @@ export default function App() {
               onSetDuckingSettings={setDuckingSettings}
             />
           </div>
+        )}
+
+        {/* ── PUBLISH PAGE ── */}
+        {activePage === "publish" && (
+          <ClawFlowPublishPanel
+            projectName={project.name ?? "Untitled Project"}
+            totalDurationSeconds={totalFrames / project.sequence.settings.fps}
+          />
         )}
 
         {/* ── FUSION PAGE ── */}
@@ -3969,6 +4116,43 @@ export default function App() {
       {/* ── SETTINGS PANEL (Phase 6) ── */}
       {settingsPanelOpen && (
         <SettingsPanel onClose={() => setSettingsPanelOpen(false)} />
+      )}
+
+      {/* ── Phase 9: Style Profile Panel ── */}
+      {styleProfileOpen && (
+        <StyleProfilePanel
+          onClose={() => setStyleProfileOpen(false)}
+          onApplyStyle={(grade) => {
+            // Apply learned style to all ungraded clips
+            project.sequence.clips.forEach((clip) => {
+              const cg = clip.colorGrade;
+              if (!cg || (cg.exposure === 0 && cg.contrast === 0)) {
+                setColorGrade(clip.id, grade);
+              }
+            });
+            toast.success("✨ Applied your style profile to ungraded clips");
+            setStyleProfileOpen(false);
+          }}
+        />
+      )}
+
+      {/* ── Phase 9: Project Intelligence Panel ── */}
+      {intelligenceOpen && (
+        <ProjectIntelligencePanel
+          project={project}
+          fps={project.sequence.settings.fps}
+          onClose={() => setIntelligenceOpen(false)}
+          onAutoFixAll={() => {
+            autoColorMatch();
+            normalizeAudioLevels(-14);
+            closeAllGaps();
+            toast.success("🔧 Auto-fix applied: color match + normalize + close gaps");
+          }}
+          onGoToPublish={() => { setActivePage("publish"); setIntelligenceOpen(false); }}
+          onAutoColorMatch={autoColorMatch}
+          onNormalizeAudio={() => normalizeAudioLevels(-14)}
+          onCloseGaps={closeAllGaps}
+        />
       )}
     </div>
   );

@@ -319,12 +319,22 @@ const CATEGORY_LABELS: Record<string, string> = {
 // All AI tools require ClawFlow — sign-in + subscription gated at click-time via AuthGateModal
 
 // ── Main Component ─────────────────────────────────────────────────────────────
+export interface InlineModeConfig {
+  active: boolean;
+  targetStartFrame: number;
+  targetEndFrame: number;
+  suggestedPrompt: string;
+  suggestedDuration: number;
+  onPlaced: (clipId: string) => void;
+}
+
 interface AIToolsPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  inlineMode?: InlineModeConfig;
 }
 
-export function AIToolsPanel({ isOpen, onClose }: AIToolsPanelProps) {
+export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps) {
   // Read selected clip from editor — auto-fills the media input
   const selectedClipId = useEditorStore((s) => s.selectedClipId);
   const selectedAssetId = useEditorStore((s) => s.selectedAssetId);

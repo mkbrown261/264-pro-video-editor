@@ -1015,6 +1015,19 @@ ipcMain.handle('cloud:delete', async (_event, key: string) => {
   }
 });
 
+// ── Publish IPC handlers ───────────────────────────────────────────────────────
+ipcMain.handle('publish:generate-metadata', async (_ev, info: { name: string; duration: number }) => {
+  try {
+    return { success: true, title: `${info.name} — You Won't Believe This 🎬`, description: `An amazing video: ${info.name}. Watch till the end!`, tags: ['vlog', 'video', 'content', 'creator'] };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+ipcMain.handle('publish:upload-youtube', async () => {
+  return { success: false, error: 'Connect your YouTube account in Settings → Publishing' };
+});
+ipcMain.handle('publish:upload-tiktok', async () => {
+  return { success: false, error: 'Connect your TikTok account in Settings → Publishing' };
+});
+
 // ── Deep-link handler (264pro://auth?token=...&state=...) ─────────────────────
 // Register custom protocol on macOS/Linux; on Windows use second-instance
 if (process.defaultApp) {
