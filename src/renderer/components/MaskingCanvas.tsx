@@ -399,9 +399,11 @@ export function MaskingCanvas({
   // ── Mouse helpers ──────────────────────────────────────────────────────────
 
   function getCanvasXY(e: React.MouseEvent<HTMLCanvasElement>): [number, number] {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const scaleX = (canvasRef.current?.width ?? 1)  / rect.width;
-    const scaleY = (canvasRef.current?.height ?? 1) / rect.height;
+    const canvas = canvasRef.current;
+    if (!canvas) return [0, 0];
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
     return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
   }
 

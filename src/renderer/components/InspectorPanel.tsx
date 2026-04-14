@@ -194,6 +194,10 @@ const TRANSITION_ICONS: Record<ClipTransitionType, string> = {
   oldFilm:          "📽",
   vhsRewind:        "⏪",
   chromaShift:      "⧖",
+  // Phase 3+ transitions
+  whip_smear:           "⟹",
+  light_leak_dissolve:  "☀",
+  digital_shatter:      "⊞",
 };
 
 // Fallback icon for any unknown transition (safety)

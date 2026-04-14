@@ -391,20 +391,21 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       return;
     }
 
-    if (dragRef.current) {
+    const drag = dragRef.current;
+    if (drag) {
       // BUG 3A: Correct drag offset using getBoundingClientRect-based world coords.
       // ox/oy = click position within node (in world coords), so:
       //   newNodePos = currentMouseWorld - clickOffset
       const wx = (mx - pan.x) / zoom;
       const wy = (my - pan.y) / zoom;
-      const rawX = wx - dragRef.current.ox;
-      const rawY = wy - dragRef.current.oy;
+      const rawX = wx - drag.ox;
+      const rawY = wy - drag.oy;
       const snappedX = Math.round(rawX / GRID_SIZE) * GRID_SIZE;
       const snappedY = Math.round(rawY / GRID_SIZE) * GRID_SIZE;
       onUpdateGraph({
         ...graph,
         nodes: graph.nodes.map(n =>
-          n.id === dragRef.current!.nodeId
+          n.id === drag.nodeId
             ? { ...n, x: snappedX, y: snappedY }
             : n
         ),

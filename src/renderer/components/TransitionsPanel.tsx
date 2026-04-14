@@ -74,6 +74,10 @@ function getThumbClass(value: ClipTransitionType): string {
   if (value.startsWith("iris") || value === "diamond" || value.startsWith("reveal")) return "thumb-iris";
   if (value === "whiteFlash" || value === "filmFlash" || value === "exposure") return "thumb-white-flash";
   if (value === "blackFlash") return "thumb-black-flash";
+  // Phase 6: Signature transitions
+  if (value === "whip_smear") return "thumb-zoom";
+  if (value === "light_leak_dissolve") return "thumb-burn";
+  if (value === "digital_shatter") return "thumb-glitch";
   return "thumb-fade";
 }
 

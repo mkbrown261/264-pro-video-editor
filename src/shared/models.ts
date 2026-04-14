@@ -116,7 +116,11 @@ export type ClipTransitionType =
   | "exposure"        // Overexpose then cut
   | "oldFilm"         // Flicker + grain + cut (WebGL)
   | "vhsRewind"       // VHS rewind effect (WebGL)
-  | "chromaShift";    // Chromatic aberration sweep
+  | "chromaShift"     // Chromatic aberration sweep
+  // Phase 6: Signature transitions
+  | "whip_smear"      // Whip pan motion blur smear
+  | "light_leak_dissolve" // Light bloom dissolve
+  | "digital_shatter";    // Tile shatter reveal
 
 export interface ClipTransition {
   type: ClipTransitionType;
@@ -370,7 +374,11 @@ export type EffectType =
   | "sharpening"
   | "film_grain"
   | "lens_distortion"
-  | "film_look_creator";
+  | "film_look_creator"
+  // Phase 6: Signature effects
+  | "glitch_storm"
+  | "analog_dream"
+  | "clawflow_style";
 
 export interface ClipEffect {
   id: string;
@@ -738,7 +746,8 @@ export function createDefaultColorGrade(): ColorGrade {
     lutIntensity: 1,
     maskIds: [],
     keyframes: {},
-    bypass: false
+    bypass: false,
+    colorSlice: createDefaultColorSlice()
   };
 }
 
@@ -891,4 +900,8 @@ export const ALL_TRANSITION_TYPES: Array<{ label: string; value: ClipTransitionT
   { label: "Old Film",          value: "oldFilm",          category: "Cinematic", webgl: true },
   { label: "VHS Rewind",        value: "vhsRewind",        category: "Cinematic", webgl: true },
   { label: "Chroma Shift",      value: "chromaShift",      category: "Cinematic" },
+  // Phase 6: Signature transitions
+  { label: "Whip Smear",        value: "whip_smear",       category: "Stylized" },
+  { label: "Light Leak Dissolve",value: "light_leak_dissolve", category: "Cinematic" },
+  { label: "Digital Shatter",   value: "digital_shatter",  category: "Stylized" },
 ];

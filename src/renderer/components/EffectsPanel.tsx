@@ -1269,6 +1269,72 @@ const EFFECT_LIBRARY: EffectDef[] = [
       { key: "fadeBlacks", label: "Fade Blacks", type: "range", min: 0, max: 1, step: 0.05 },
       { key: "colorShift", label: "Color Shift", type: "range", min: 0, max: 1, step: 0.05 },
     ]
+  },
+  // ── Phase 6: Signature Effects ────────────────────────────────────────────
+  {
+    type: "glitch_storm",
+    label: "Glitch Storm",
+    category: "Distortion",
+    icon: "⚡",
+    description: "High-energy digital glitch — RGB channel split, scan-line tears, block displacement",
+    defaultParams: {
+      intensity: 0.5,
+      rgbSplit: 0.3,
+      scanLineTear: 0.4,
+      blockSize: 16,
+      speed: "medium",
+      holdFrames: 5,
+    },
+    paramDefs: [
+      { key: "intensity", label: "Intensity", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "rgbSplit", label: "RGB Split", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "scanLineTear", label: "Scan Tear", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "blockSize", label: "Block Size", type: "range", min: 4, max: 64, step: 4 },
+      { key: "speed", label: "Speed", type: "select", options: ["slow", "medium", "fast", "erratic"] },
+      { key: "holdFrames", label: "Hold Frames", type: "range", min: 1, max: 30, step: 1 },
+    ]
+  },
+  {
+    type: "analog_dream",
+    label: "Analog Dream",
+    category: "Film",
+    icon: "📽",
+    description: "Super 8/16mm analog film look — grain, light leaks, dust, frame jitter, flicker",
+    defaultParams: {
+      era: "1970s",
+      grainAmount: 0.5,
+      lightLeak: 0.4,
+      dustScratches: 0.3,
+      frameJitter: 0.2,
+      colorShift: "warm",
+      flickerRate: 0.3,
+    },
+    paramDefs: [
+      { key: "era", label: "Era Preset", type: "select", options: ["1960s", "1970s", "1980s", "super8", "16mm"] },
+      { key: "grainAmount", label: "Grain", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "lightLeak", label: "Light Leak", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "dustScratches", label: "Dust & Scratches", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "frameJitter", label: "Frame Jitter", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "colorShift", label: "Color", type: "select", options: ["warm", "cool", "faded", "saturated"] },
+      { key: "flickerRate", label: "Flicker", type: "range", min: 0, max: 1, step: 0.05 },
+    ]
+  },
+  {
+    type: "clawflow_style",
+    label: "ClawFlow Style Transfer ⚡",
+    category: "AI",
+    icon: "🎨",
+    description: "AI-powered style transfer — Anime, Oil Paint, Neon Noir, Watercolor, Cyberpunk, B&W (requires API key)",
+    defaultParams: {
+      style: "anime",
+      strength: 0.8,
+      frameRate: "every",
+    },
+    paramDefs: [
+      { key: "style", label: "Style", type: "select", options: ["anime", "oil_painting", "neon_noir", "watercolor", "cyberpunk", "cinematic_bw"] },
+      { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "frameRate", label: "Processing", type: "select", options: ["every", "keyframes", "once"] },
+    ]
   }
 ];
 

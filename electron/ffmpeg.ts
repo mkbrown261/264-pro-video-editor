@@ -607,6 +607,47 @@ export async function exportSequence(
             videoFilters.push(`boxblur=${Math.round(blurAmt)}`);
             break;
           }
+          // Phase 6: Signature effects
+          case "glitch_storm": {
+            const rgbOffset = Math.round(Number(effect.params?.rgbSplit ?? 0.3) * 20);
+            const noiseAmt = Math.round(Number(effect.params?.intensity ?? 0.5) * 40);
+            if (rgbOffset > 0) {
+              // RGB split approximation: shift red channel and add noise
+              videoFilters.push(`rgbashift=rh=${rgbOffset}:bh=-${rgbOffset}`);
+            }
+            videoFilters.push(`noise=alls=${noiseAmt}:allf=t`);
+            break;
+          }
+          case "analog_dream": {
+            const grain = Math.round(Number(effect.params?.grainAmount ?? 0.5) * 30);
+            const colorShift = String(effect.params?.colorShift ?? "warm");
+            const warmth = colorShift === "warm" ? 0.15 : colorShift === "cool" ? -0.1 : 0.05;
+            const sat = colorShift === "faded" ? 0.6 : 1.1;
+            videoFilters.push(`noise=alls=${grain}:allf=t`);
+            videoFilters.push(`hue=s=${sat}`);
+            videoFilters.push(`eq=brightness=${warmth.toFixed(3)}:contrast=1.05:gamma_r=${(1 + warmth).toFixed(3)}:gamma_b=${(1 - warmth * 0.5).toFixed(3)}`);
+            videoFilters.push(`vignette=PI/4`);
+            break;
+          }
+          case "clawflow_style": {
+            // Stub: ClawFlow AI style transfer requires Higgsfield/Replicate API
+            // Apply a basic approximation based on style for offline preview
+            const style = String(effect.params?.style ?? "anime");
+            if (style === "cinematic_bw") {
+              videoFilters.push(`hue=s=0`);
+              videoFilters.push(`eq=contrast=1.3:brightness=-0.05`);
+            } else if (style === "cyberpunk") {
+              videoFilters.push(`hue=h=210:s=1.5`);
+              videoFilters.push(`eq=contrast=1.2`);
+            } else if (style === "neon_noir") {
+              videoFilters.push(`hue=s=1.3`);
+              videoFilters.push(`eq=brightness=-0.1:contrast=1.3`);
+            } else {
+              // General artistic approximation
+              videoFilters.push(`edgedetect=mode=colormix:high=0.1`);
+            }
+            break;
+          }
           default:
             break;
         }

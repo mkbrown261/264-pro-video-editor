@@ -829,8 +829,8 @@ ipcMain.handle("flowstate:api-call", async (_event, path: string, method: string
       body: body ? JSON.stringify(body) : undefined,
     });
     return res.json();
-  } catch (e: any) {
-    return { error: e.message };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -852,8 +852,8 @@ ipcMain.handle("flowstate:ai-tool", async (_event, tool: string, options: {
       body: JSON.stringify({ tool, ...options }),
     });
     return res.json();
-  } catch (e: any) {
-    return { error: e.message };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -866,8 +866,8 @@ ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) =>
       headers: { 'Authorization': `Bearer ${token}` },
     });
     return res.json();
-  } catch (e: any) {
-    return { error: e.message };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -896,8 +896,8 @@ ipcMain.handle("flowstate:video-gen", async (_event, params: {
       body: JSON.stringify(params),
     });
     return res.json();
-  } catch (e: any) {
-    return { error: e.message };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -911,8 +911,8 @@ ipcMain.handle("flowstate:video-gen-poll", async (_event, requestId: string, pro
       headers: { 'Authorization': `Bearer ${token}` },
     });
     return res.json();
-  } catch (e: any) {
-    return { error: e.message };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -922,8 +922,8 @@ ipcMain.handle("flowstate:sign-out", async () => {
   try {
     await writeFile(tokenPath, '', 'utf8');
     return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -959,8 +959,8 @@ ipcMain.handle('cloud:save', async (_event, projectData: unknown) => {
     });
     const data = await res.json() as any;
     return data.ok ? { ok: true, key: data.key, url: `${FS_BASE_URL}${data.url}` } : { ok: false, error: data.error || 'Upload failed' };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -973,8 +973,8 @@ ipcMain.handle('cloud:list', async () => {
     });
     const data = await res.json() as any;
     return { ok: true, files: data.files ?? [] };
-  } catch (e: any) {
-    return { ok: false, error: e.message, files: [] };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e), files: [] };
   }
 });
 
@@ -988,8 +988,8 @@ ipcMain.handle('cloud:load', async (_event, key: string) => {
     if (!res.ok) return { ok: false, error: `Download failed: ${res.status}` };
     const text = await res.text();
     return { ok: true, data: JSON.parse(text) };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
 
@@ -1003,8 +1003,8 @@ ipcMain.handle('cloud:delete', async (_event, key: string) => {
     });
     const data = await res.json() as any;
     return { ok: data.ok };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
 

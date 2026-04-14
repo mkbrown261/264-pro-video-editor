@@ -881,39 +881,39 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       // Industry-standard behaviour: the dropped clip occupies exactly its
       // natural duration.  Existing clips are either trimmed or split so they
       // continue playing BEFORE and AFTER the dropped clip's span.
-      let updatedClips = nextProject.sequence.clips.map((c) => {
-        if (c.trackId !== trackId) return c;
+      // BUG fix: replace as-any __splitRight piggyback with flatMap so the
+      // split-inside-clip case returns both left + right stubs type-safely.
+      const updatedClips: TimelineClip[] = nextProject.sequence.clips.flatMap((c) => {
+        if (c.trackId !== trackId) return [c];
         const cAsset = nextProject.assets.find((a) => a.id === c.assetId);
-        if (!cAsset) return c;
+        if (!cAsset) return [c];
         const cDur   = getClipDurationFrames(c, cAsset, fps);
         const cStart = c.startFrame;
         const cEnd   = cStart + cDur;
 
-        if (cEnd <= dropStart || cStart >= dropEnd) return c;  // no overlap
+        if (cEnd <= dropStart || cStart >= dropEnd) return [c];  // no overlap
 
-        // Clip completely swallowed → remove (return null below)
-        if (cStart >= dropStart && cEnd <= dropEnd) return null as unknown as TimelineClip;
+        // Clip completely swallowed → remove
+        if (cStart >= dropStart && cEnd <= dropEnd) return [];
 
         // Clip straddles the left edge → trim its end
         if (cStart < dropStart && cEnd > dropStart && cEnd <= dropEnd) {
           const framesKept = dropStart - cStart;
           const framesLost = cDur - framesKept;
-          return { ...c, trimEndFrames: c.trimEndFrames + framesLost };
+          return [{ ...c, trimEndFrames: c.trimEndFrames + framesLost }];
         }
 
         // Clip straddles the right edge → trim its start & move startFrame
         if (cStart >= dropStart && cStart < dropEnd && cEnd > dropEnd) {
           const framesLost = dropEnd - cStart;
-          return { ...c, startFrame: dropEnd, trimStartFrames: c.trimStartFrames + framesLost };
+          return [{ ...c, startFrame: dropEnd, trimStartFrames: c.trimStartFrames + framesLost }];
         }
 
         // Drop zone is INSIDE the clip → split into left stub + right stub
         if (cStart < dropStart && cEnd > dropEnd) {
-          // Left part: keep as-is but trim end
           const leftFramesKept = dropStart - cStart;
           const leftFramesLost = cDur - leftFramesKept;
           const leftClip: TimelineClip = { ...c, trimEndFrames: c.trimEndFrames + leftFramesLost };
-          // Right part: new clip starting after the drop zone
           const rightFramesLost = dropEnd - cStart;
           const rightClip: TimelineClip = {
             ...c,
@@ -922,23 +922,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             trimStartFrames: c.trimStartFrames + rightFramesLost,
             linkedGroupId: c.linkedGroupId,
           };
-          // Return left and right as two clips — handled below
-          (c as any).__splitRight = rightClip;
-          return leftClip;
+          return [leftClip, rightClip];
         }
 
-        return c;
-      }).filter(Boolean);
-
-      // Collect any split-right stubs
-      const rightStubs: TimelineClip[] = [];
-      for (const c of updatedClips) {
-        if ((c as any).__splitRight) {
-          rightStubs.push((c as any).__splitRight as TimelineClip);
-          delete (c as any).__splitRight;
-        }
-      }
-      updatedClips = [...updatedClips, ...rightStubs];
+        return [c];
+      });
 
       // ── Create the new clip ─────────────────────────────────────────────
       const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;

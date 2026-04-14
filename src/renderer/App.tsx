@@ -54,6 +54,9 @@ import { SmartSuggestionsBar } from "./components/SmartSuggestionsBar";
 import { type BatchPreset } from "./components/RenderQueuePanel";
 // Phase 5 new imports
 import { BeatSyncPanel } from "./components/BeatSyncPanel";
+// Phase 6 new imports
+import OnboardingModal from "./components/OnboardingModal";
+import { SettingsPanel } from "./components/SettingsPanel";
 
 // Pages: edit | color | fusion | audio
 type AppPage = "edit" | "color" | "fusion" | "audio";
@@ -813,6 +816,8 @@ export default function App() {
   const [shortcutsPanelOpen, setShortcutsPanelOpen] = useState(false);
   // Beat Sync panel
   const [beatSyncOpen, setBeatSyncOpen] = useState(false);
+  // Settings panel (Phase 6)
+  const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
 
   // Speed ramp handlers
   const handleSetSpeedRampKeyframes = useCallback((kf: Array<{ frame: number; speed: number }>) => {
@@ -1502,6 +1507,18 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         setProjectNotesPanelOpen(v => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Settings keyboard shortcut: Cmd/Ctrl+, (Phase 6)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsPanelOpen(v => !v);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -2502,6 +2519,12 @@ export default function App() {
               </button>
               <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShortcutsPanelOpen(true); }} type="button">
                 <span className="fmi-icon">⌨️</span> Keyboard Shortcuts…
+              </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setSettingsPanelOpen(true); }} type="button">
+                <span className="fmi-icon">🤖</span> AI & API Keys… (⌘,)
+              </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); window.dispatchEvent(new CustomEvent("264pro:show-onboarding")); }} type="button">
+                <span className="fmi-icon">❓</span> Feature Tour…
               </button>
             </div>
           )}
@@ -3591,9 +3614,51 @@ export default function App() {
                 ))}
               </div>
             )}
+
+            {/* Revenue-aware suggestions (Phase 6) */}
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", letterSpacing: "0.08em", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
+                <span>⚡</span> CLAWFLOW POWER MOVES
+              </div>
+              {[
+                { text: "Auto-match all clip exposures", action: () => { autoColorMatch(); toast.success("🎨 Auto Color Match applied"); } },
+                { text: "Normalize audio to -14 LUFS (streaming)", action: () => { normalizeAudioLevels(-14); toast.success("🎚 Audio normalized to -14 LUFS"); } },
+                { text: "Detect beats + auto-cut to music", action: () => { setBeatSyncOpen(true); setClawbotOpen(false); } },
+                { text: "Close all timeline gaps", action: () => { closeAllGaps(); toast.success("✅ All gaps closed"); } },
+              ].map(item => (
+                <button
+                  key={item.text}
+                  type="button"
+                  onClick={item.action}
+                  style={{ width: "100%", marginBottom: 4, padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(124,58,237,0.3)", background: "rgba(124,58,237,0.08)", color: "#c4b5fd", fontSize: 11, cursor: "pointer", textAlign: "left" }}
+                >
+                  ⚡ {item.text}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#ec4899", letterSpacing: "0.08em", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
+                <span>🎬</span> ENHANCE WITH HIGGSFIELD AI
+              </div>
+              {[
+                { text: "Generate a cinematic AI intro", prompt: "Cinematic film intro, dramatic lighting, slow motion reveal" },
+                { text: "Generate B-roll for talking head", prompt: "Relevant b-roll footage to accompany interview, professional setting" },
+                { text: "Generate abstract transition", prompt: "Abstract purple particles forming a logo, looping, dark background" },
+              ].map(item => (
+                <button
+                  key={item.text}
+                  type="button"
+                  onClick={() => { setAiToolsPanelOpen(true); setClawbotOpen(false); }}
+                  style={{ width: "100%", marginBottom: 4, padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.08)", color: "#f9a8d4", fontSize: 11, cursor: "pointer", textAlign: "left" }}
+                >
+                  🎬 {item.text}
+                </button>
+              ))}
+            </div>
           </div>
           <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 10, color: "#475569" }}>
-            Ctrl+Shift+A to toggle
+            Ctrl+Shift+A to toggle · Cmd+, for Settings
           </div>
         </div>
       )}
@@ -3876,6 +3941,21 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── ONBOARDING MODAL (Phase 6) ── */}
+      <OnboardingModal
+        onFinish={() => {/* already handled internally */}}
+        onOpenClawFlow={() => { setClawbotOpen(true); setActivePage("edit"); }}
+        onOpenHiggsfield={() => setAiToolsPanelOpen(true)}
+        onOpenColor={() => setActivePage("color")}
+        onOpenAudio={() => setActivePage("audio")}
+        onOpenExport={() => setRenderQueueOpen(true)}
+      />
+
+      {/* ── SETTINGS PANEL (Phase 6) ── */}
+      {settingsPanelOpen && (
+        <SettingsPanel onClose={() => setSettingsPanelOpen(false)} />
       )}
     </div>
   );
