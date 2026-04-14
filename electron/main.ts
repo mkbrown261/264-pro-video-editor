@@ -4,7 +4,7 @@ const { autoUpdater } = pkg;
 import { createReadStream } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { ExportRequest } from "../src/shared/models.js";
 import {
@@ -641,7 +641,7 @@ ipcMain.handle("ai:pick-media-file", async (event) => {
   if (result.canceled || !result.filePaths.length) return null;
   const filePath = result.filePaths[0];
   // Return local path — renderer will convert to media:// URL
-  return { filePath, name: require("path").basename(filePath) };
+  return { filePath, name: basename(filePath) };
 });
 
 ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {

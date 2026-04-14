@@ -679,10 +679,12 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
       if (isCtrl && e.key === "c") { e.preventDefault(); copySelected(); return; }
       // Ctrl+V → paste clipboard
       if (isCtrl && e.key === "v") { e.preventDefault(); pasteClipboard(); return; }
-      // Ctrl+G → group selected (stub)
+      // Ctrl+G → group selected nodes
       if (isCtrl && e.key === "g") {
         e.preventDefault();
-        // Group: wrap selected nodes into a group (placeholder)
+        if (selectedNodeIds.length > 0 && onGroupNodes) {
+          onGroupNodes(selectedNodeIds, "Group");
+        }
         return;
       }
       // Ctrl+F → fit to view / frame selected
