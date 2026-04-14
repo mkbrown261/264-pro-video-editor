@@ -24,6 +24,7 @@ import {
 import type { ColorGrade, ColorStill, ColorSliceState, CurvePoint, RGBValue, VectorAdjustment } from "../../shared/models";
 import { createDefaultColorGrade, createDefaultColorSlice, createDefaultVectorAdjustment, createId } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
+import { toast } from "../lib/toast";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -868,6 +869,17 @@ export function ColorGradingPanel({
     onUpdateGrade(partial);
   }, [colorGrade, onEnableGrade, onUpdateGrade]);
 
+  // ── LUT export ──────────────────────────────────────────────────────────────
+  const handleExportLut = async () => {
+    if (!selectedSegment) { toast.warning('Select a clip first'); return; }
+    const gradeToExport = colorGrade ?? createDefaultColorGrade();
+    const assetName = selectedSegment.asset?.name ?? 'grade';
+    const result = await (window as any).electronAPI?.exportLut?.({ grade: gradeToExport as unknown as Record<string, number>, name: assetName });
+    if (result?.canceled) return;
+    if (result?.success) toast.success(`LUT saved: ${result.filePath}`);
+    else toast.error(result?.error ?? 'Export failed');
+  };
+
   // ── Working grade — always derived, never stale ──
   const grade = colorGrade ?? createDefaultColorGrade();
 
@@ -1202,6 +1214,14 @@ export function ColorGradingPanel({
                   {p.name}
                 </button>
               ))}
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <button onClick={handleExportLut} type="button" style={{
+                padding: '6px 14px', borderRadius: 6, border: '1px solid #334155',
+                background: '#1e293b', color: '#94a3b8', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}>
+                ⬇ Export LUT
+              </button>
             </div>
           </div>
         )}
