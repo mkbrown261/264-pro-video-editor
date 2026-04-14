@@ -11,6 +11,7 @@ interface Props {
   playheadFrame: number;
   sequenceFps: number;
   onCutToAngle: (clipId: string, trackId: string, frame: number) => void;
+  onSyncByAudio?: (clipIds: string[], offsets: number[]) => void;
   onClose: () => void;
 }
 
@@ -24,9 +25,11 @@ interface SyncAngle {
   endFrame: number;
 }
 
-export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAngle, onClose }: Props) {
+export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAngle, onSyncByAudio, onClose }: Props) {
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState<2 | 4 | 9>(4);
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('');
 
   // Find clips that overlap at the current playhead
   const activeAngles = useMemo<SyncAngle[]>(() => {
@@ -73,6 +76,49 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
     onCutToAngle(angle.clipId, angle.trackId, playheadFrame);
   }
 
+  async function handleSyncByAudio() {
+    setSyncing(true);
+    setSyncStatus('Analyzing audio…');
+
+    try {
+      // Get asset paths from segments for each angle
+      const clipsWithPaths = allVideoAngles.map(a => {
+        const seg = segments.find(s => s.clip.id === a.clipId);
+        return {
+          clipId: a.clipId,
+          assetPath: seg?.asset.sourcePath ?? '',
+          trimStartSeconds: (seg?.clip.trimStartFrames ?? 0) / (sequenceFps || 30),
+          durationSeconds: Math.min(30, seg?.asset.durationSeconds ?? 30),
+        };
+      }).filter(c => c.assetPath);
+
+      if (clipsWithPaths.length < 2) {
+        setSyncStatus('Need 2+ clips with audio to sync');
+        setTimeout(() => setSyncStatus(''), 3000);
+        return;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (window as any).electronAPI?.syncMulticamByAudio?.({ clips: clipsWithPaths }) as { success: boolean; offsets?: number[]; error?: string } | undefined;
+
+      if (!result?.success) {
+        setSyncStatus(`Sync failed: ${result?.error ?? 'unknown error'}`);
+        setTimeout(() => setSyncStatus(''), 4000);
+        return;
+      }
+
+      const clipIds = clipsWithPaths.map(c => c.clipId);
+      onSyncByAudio?.(clipIds, result.offsets ?? []);
+      setSyncStatus(`✅ Synced ${clipIds.length} angles`);
+      setTimeout(() => setSyncStatus(''), 3000);
+    } catch (err) {
+      setSyncStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      setTimeout(() => setSyncStatus(''), 4000);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const tc = (f: number) => {
     const fps = sequenceFps || 30;
     const s = Math.floor(f / fps);
@@ -97,6 +143,29 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {/* Auto-Sync Audio button */}
+            <button
+              onClick={handleSyncByAudio}
+              disabled={syncing || allVideoAngles.length < 2}
+              style={{
+                padding: "3px 10px",
+                borderRadius: 5,
+                border: "1px solid rgba(129,199,132,0.5)",
+                background: syncing ? "rgba(129,199,132,0.1)" : "rgba(129,199,132,0.15)",
+                color: syncing || allVideoAngles.length < 2 ? "rgba(129,199,132,0.35)" : "#81c784",
+                fontSize: 11,
+                cursor: syncing || allVideoAngles.length < 2 ? "not-allowed" : "pointer",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+              type="button"
+              title="Analyze audio waveforms and align clips by audio correlation"
+            >
+              {syncing ? "⏳ Syncing…" : "🎵 Auto-Sync Audio"}
+            </button>
+
             {([2, 4, 9] as const).map(n => (
               <button
                 key={n}
@@ -176,9 +245,26 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
           )}
         </div>
 
+        {/* Sync status bar */}
+        {syncStatus && (
+          <div style={{
+            padding: "6px 16px",
+            borderTop: "1px solid rgba(255,255,255,0.06)",
+            fontSize: 11,
+            fontWeight: 500,
+            color: syncStatus.startsWith('✅')
+              ? "#81c784"
+              : (syncStatus.startsWith('Sync failed') || syncStatus.startsWith('Error'))
+                ? "#ef9a9a"
+                : "rgba(255,255,255,0.5)",
+          }}>
+            {syncStatus}
+          </div>
+        )}
+
         {/* Footer instructions */}
         <div style={{ padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)", fontSize: 10, color: "rgba(255,255,255,0.3)" }}>
-          Click an angle to cut to that camera at the current playhead position. The cut is inserted into the timeline.
+          Click an angle to cut to that camera at the current playhead position. Use 🎵 Auto-Sync Audio to align clips by audio waveform correlation.
         </div>
       </div>
     </div>

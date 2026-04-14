@@ -279,6 +279,8 @@ interface EditorStore {
   autoColorMatch: () => void;
   normalizeAudioLevels: (targetDb: -14 | -23) => void;
   closeAllGaps: () => void;
+  // ── Multicam Audio Sync ──
+  syncMulticamClips: (clipIds: string[], offsetsSeconds: number[]) => void;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -3024,6 +3026,28 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           cursorByTrack.set(clip.trackId, cursor + duration);
           return { ...clip, startFrame: cursor };
         });
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, clips: newClips },
+        },
+      };
+    }));
+  },
+
+  syncMulticamClips: (clipIds, offsetsSeconds) => {
+    set(withUndo("Sync Multicam by Audio", (state) => {
+      const fps = state.project.sequence.settings.fps;
+      // Normalize so the earliest clip doesn't go negative
+      const minOffset = Math.min(...offsetsSeconds);
+      const normalizedOffsets = offsetsSeconds.map(o => o - minOffset);
+      const newClips = state.project.sequence.clips.map(c => {
+        const idx = clipIds.indexOf(c.id);
+        if (idx === -1) return c;
+        const deltaFrames = Math.round(normalizedOffsets[idx] * fps);
+        return { ...c, startFrame: Math.max(0, c.startFrame + deltaFrames) };
+      });
       return {
         ...state,
         project: {

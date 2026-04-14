@@ -16,6 +16,9 @@ import {
   probeMediaFiles
 } from "./ffmpeg.js";
 
+// In-memory token store (survives app session, cleared on quit)
+const oauthTokens: Record<string, { accessToken: string; refreshToken?: string; expiresAt: number }> = {};
+
 // ── FlowState Integration Constants ──────────────────────────────────────────
 const DEV_BYPASS_KEY  = 'DEV-FS264-MKBROWN-2026-BYPASS';
 const FS_BASE_URL     = 'https://flowstate-67g.pages.dev';
@@ -1022,12 +1025,6 @@ ipcMain.handle('publish:generate-metadata', async (_ev, info: { name: string; du
     return { success: true, title: `${info.name} — You Won't Believe This 🎬`, description: `An amazing video: ${info.name}. Watch till the end!`, tags: ['vlog', 'video', 'content', 'creator'] };
   } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
-ipcMain.handle('publish:upload-youtube', async () => {
-  return { success: false, error: 'Connect your YouTube account in Settings → Publishing' };
-});
-ipcMain.handle('publish:upload-tiktok', async () => {
-  return { success: false, error: 'Connect your TikTok account in Settings → Publishing' };
-});
 
 // ── Deep-link handler (264pro://auth?token=...&state=...) ─────────────────────
 // Register custom protocol on macOS/Linux; on Windows use second-instance
@@ -1039,31 +1036,196 @@ if (process.defaultApp) {
   app.setAsDefaultProtocolClient('264pro');
 }
 
-// ── Phase 9: Publish IPC (stub — returns mock metadata) ──────────────────────
-ipcMain.handle('publish:generate-metadata', async (_event, params: {
-  projectName: string;
-  durationSeconds: number;
-  platforms: string[];
+// ── YouTube OAuth + Upload ─────────────────────────────────────────────────────
+ipcMain.handle('publish:connect-youtube', async (_ev) => {
+  try {
+    const { shell: shellM, app: appM } = await import('electron');
+    void appM; // unused but satisfies import
+    const clientId = process.env.YOUTUBE_CLIENT_ID ?? '264pro-youtube-oauth';
+    const redirectUri = 'http://localhost:8642/oauth/youtube';
+    const scope = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&access_type=offline&prompt=consent`;
+
+    const http = await import('http');
+    const urlModule = await import('url');
+
+    const code = await new Promise<string | null>((resolve) => {
+      const server = http.createServer((req, res) => {
+        const parsed = urlModule.parse(req.url ?? '', true);
+        const code = parsed.query.code as string;
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0"><h2>✅ Connected to YouTube!</h2><p>You can close this window and return to 264 Pro.</p></body></html>');
+        server.close();
+        resolve(code ?? null);
+      });
+      server.listen(8642, 'localhost');
+      setTimeout(() => { server.close(); resolve(null); }, 120000);
+      void shellM.openExternal(authUrl);
+    });
+
+    if (!code) return { success: false, error: 'OAuth cancelled or timed out' };
+
+    if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
+      oauthTokens['youtube'] = { accessToken: 'demo_token_' + Date.now(), expiresAt: Date.now() + 3600000 };
+      return { success: true, demo: true, message: 'Connected (demo mode — add YOUTUBE_CLIENT_ID/SECRET for real uploads)' };
+    }
+
+    const fetchM = (await import('node-fetch')).default;
+    const tokenResp = await fetchM('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: process.env.YOUTUBE_CLIENT_ID,
+        client_secret: process.env.YOUTUBE_CLIENT_SECRET,
+        redirect_uri: redirectUri, grant_type: 'authorization_code',
+      }).toString(),
+    });
+    const tokenData = await tokenResp.json() as any;
+    if (!tokenData.access_token) return { success: false, error: tokenData.error_description ?? 'Token exchange failed' };
+    oauthTokens['youtube'] = { accessToken: tokenData.access_token, refreshToken: tokenData.refresh_token, expiresAt: Date.now() + (tokenData.expires_in ?? 3600) * 1000 };
+    return { success: true };
+  } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+ipcMain.handle('publish:upload-youtube', async (_ev, args: {
+  videoPath: string;
+  title: string;
+  description: string;
+  tags: string[];
+  privacyStatus?: 'public' | 'private' | 'unlisted';
 }) => {
-  // Stub: generate mock metadata for the publish wizard
-  const { projectName, durationSeconds, platforms } = params;
-  const dur = Math.round(durationSeconds);
-  return {
-    title: `${projectName} — ${dur}s Edit`,
-    description: `A ${dur}-second video project created with 264 Pro.\n\nEdited with ClawFlow Intelligence.\n\n#264Pro #VideoEditing`,
-    tags: ['264pro', 'videoediting', 'clawflow', 'edit', projectName.toLowerCase().replace(/\s+/g, '')],
-    platforms,
-  };
+  try {
+    const token = oauthTokens['youtube'];
+    if (!token) return { success: false, error: 'Not connected to YouTube. Click "Connect YouTube" first.' };
+
+    if (token.accessToken.startsWith('demo_token_')) {
+      return { success: false, error: 'Demo mode: add YOUTUBE_CLIENT_ID + YOUTUBE_CLIENT_SECRET environment variables for real uploads.' };
+    }
+
+    const fsM = await import('fs');
+    const fetchM = (await import('node-fetch')).default;
+
+    if (!fsM.existsSync(args.videoPath)) return { success: false, error: `Video file not found: ${args.videoPath}` };
+
+    const initResp = await fetchM(
+      'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token.accessToken}`,
+          'Content-Type': 'application/json',
+          'X-Upload-Content-Type': 'video/mp4',
+        },
+        body: JSON.stringify({
+          snippet: { title: args.title, description: args.description, tags: args.tags },
+          status: { privacyStatus: args.privacyStatus ?? 'private' },
+        }),
+      }
+    );
+    if (!initResp.ok) {
+      const err = await initResp.text();
+      return { success: false, error: `YouTube init error ${initResp.status}: ${err.slice(0, 200)}` };
+    }
+    const uploadUrl = initResp.headers.get('location');
+    if (!uploadUrl) return { success: false, error: 'No upload URL returned' };
+
+    const videoData = fsM.readFileSync(args.videoPath);
+    const uploadResp = await fetchM(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token.accessToken}`,
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(videoData.length),
+      },
+      body: videoData,
+    });
+    if (!uploadResp.ok) {
+      const err = await uploadResp.text();
+      return { success: false, error: `Upload failed ${uploadResp.status}: ${err.slice(0, 200)}` };
+    }
+    const videoData2 = await uploadResp.json() as any;
+    return { success: true, videoId: videoData2.id, url: `https://youtube.com/watch?v=${videoData2.id}` };
+  } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
 
-ipcMain.handle('publish:upload-youtube', async (_event, _params: unknown) => {
-  // Stub: connect to YouTube upload flow
-  return { ok: false, error: 'YouTube upload requires OAuth setup. Connect your account in Settings.' };
+// ── TikTok OAuth + Upload ──────────────────────────────────────────────────────
+ipcMain.handle('publish:connect-tiktok', async () => {
+  try {
+    const { shell: shellM } = await import('electron');
+    const http = await import('http');
+    const urlModule = await import('url');
+
+    const clientKey = process.env.TIKTOK_CLIENT_KEY ?? '264pro-tiktok';
+    const redirectUri = 'http://localhost:8643/oauth/tiktok';
+    const scope = 'video.upload,video.publish';
+    const csrfState = Math.random().toString(36).slice(2);
+    const authUrl = `https://www.tiktok.com/v2/auth/authorize?client_key=${encodeURIComponent(clientKey)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${csrfState}`;
+
+    const code = await new Promise<string | null>((resolve) => {
+      const server = http.createServer((req, res) => {
+        const parsed = urlModule.parse(req.url ?? '', true);
+        const code = parsed.query.code as string;
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0"><h2>✅ Connected to TikTok!</h2><p>You can close this window and return to 264 Pro.</p></body></html>');
+        server.close();
+        resolve(code ?? null);
+      });
+      server.listen(8643, 'localhost');
+      setTimeout(() => { server.close(); resolve(null); }, 120000);
+      void shellM.openExternal(authUrl);
+    });
+
+    if (!code) return { success: false, error: 'OAuth cancelled or timed out' };
+    if (!process.env.TIKTOK_CLIENT_KEY || !process.env.TIKTOK_CLIENT_SECRET) {
+      oauthTokens['tiktok'] = { accessToken: 'demo_token_' + Date.now(), expiresAt: Date.now() + 3600000 };
+      return { success: true, demo: true, message: 'Connected (demo mode — add TIKTOK_CLIENT_KEY/SECRET for real uploads)' };
+    }
+    const fetchM = (await import('node-fetch')).default;
+    const tokenResp = await fetchM('https://open.tiktokapis.com/v2/oauth/token/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_key: process.env.TIKTOK_CLIENT_KEY, client_secret: process.env.TIKTOK_CLIENT_SECRET, redirect_uri: redirectUri, grant_type: 'authorization_code' }).toString(),
+    });
+    const td = await tokenResp.json() as any;
+    if (!td.access_token) return { success: false, error: td.error_description ?? 'Token exchange failed' };
+    oauthTokens['tiktok'] = { accessToken: td.access_token, expiresAt: Date.now() + (td.expires_in ?? 86400) * 1000 };
+    return { success: true };
+  } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
 
-ipcMain.handle('publish:upload-tiktok', async (_event, _params: unknown) => {
-  // Stub: connect to TikTok upload flow
-  return { ok: false, error: 'TikTok upload requires OAuth setup. Connect your account in Settings.' };
+ipcMain.handle('publish:upload-tiktok', async (_ev, args: { videoPath: string; title: string; privacyLevel?: string }) => {
+  try {
+    const token = oauthTokens['tiktok'];
+    if (!token) return { success: false, error: 'Not connected to TikTok. Click "Connect TikTok" first.' };
+    if (token.accessToken.startsWith('demo_token_')) {
+      return { success: false, error: 'Demo mode: add TIKTOK_CLIENT_KEY + TIKTOK_CLIENT_SECRET for real uploads.' };
+    }
+    const fsM = await import('fs');
+    const fetchM = (await import('node-fetch')).default;
+    if (!fsM.existsSync(args.videoPath)) return { success: false, error: `File not found: ${args.videoPath}` };
+    const fileSize = fsM.statSync(args.videoPath).size;
+    const initResp = await fetchM('https://open.tiktokapis.com/v2/post/publish/video/init/', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token.accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify({ post_info: { title: args.title, privacy_level: args.privacyLevel ?? 'SELF_ONLY', disable_duet: false, disable_stitch: false, disable_comment: false, video_cover_timestamp_ms: 1000 }, source_info: { source: 'FILE_UPLOAD', video_size: fileSize, chunk_size: fileSize, total_chunk_count: 1 } }),
+    });
+    const initData = await initResp.json() as any;
+    if (!initData.data?.upload_url) return { success: false, error: JSON.stringify(initData).slice(0, 200) };
+    const videoBuffer = fsM.readFileSync(args.videoPath);
+    const uploadResp = await fetchM(initData.data.upload_url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`, 'Content-Type': 'video/mp4' }, body: videoBuffer });
+    if (!uploadResp.ok) return { success: false, error: `TikTok upload failed: ${uploadResp.status}` };
+    return { success: true, publishId: initData.data.publish_id };
+  } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+ipcMain.handle('publish:check-connection', async (_ev, platform: string) => {
+  const token = oauthTokens[platform];
+  return { connected: !!token && token.expiresAt > Date.now(), demo: token?.accessToken?.startsWith('demo_token_') ?? false };
+});
+
+ipcMain.handle('publish:disconnect', async (_ev, platform: string) => {
+  delete oauthTokens[platform];
+  return { success: true };
 });
 
 // ── Whisper AI Transcription via Groq ─────────────────────────────────────────
@@ -1380,6 +1542,130 @@ ipcMain.handle('export:fcpxml', async (_ev, project: unknown) => {
     fsM.writeFileSync(filePath, xml, 'utf8');
     return { success: true, filePath };
   } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// ── Multicam Audio Sync ───────────────────────────────────────────────────────
+ipcMain.handle('multicam:sync-by-audio', async (_ev, args: {
+  clips: Array<{ clipId: string; assetPath: string; trimStartSeconds: number; durationSeconds: number }>;
+}) => {
+  try {
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const osM = await import('os');
+    const { spawn } = await import('child_process');
+
+    // Get ffmpeg path
+    let ffmpegBin = 'ffmpeg';
+    try {
+      const ffmpegStatic = require('ffmpeg-static');
+      const p = (ffmpegStatic as { default?: string }).default ?? (ffmpegStatic as string);
+      if (typeof p === 'string' && p) ffmpegBin = p;
+    } catch { /* use system ffmpeg */ }
+
+    const tmpDir = pathM.join(osM.tmpdir(), '264pro-multicam-sync');
+    fsM.mkdirSync(tmpDir, { recursive: true });
+
+    // Step 1: Extract mono 8kHz audio PCM for each clip (fast, low memory)
+    const pcmFiles: string[] = [];
+    for (let i = 0; i < args.clips.length; i++) {
+      const clip = args.clips[i];
+      const outPcm = pathM.join(tmpDir, `clip_${i}.pcm`);
+      pcmFiles.push(outPcm);
+
+      await new Promise<void>((resolve, reject) => {
+        const proc = spawn(ffmpegBin, [
+          '-y',
+          '-ss', clip.trimStartSeconds.toFixed(3),
+          '-i', clip.assetPath,
+          '-t', Math.min(clip.durationSeconds, 60).toFixed(3), // max 60s for correlation
+          '-vn',
+          '-ac', '1',        // mono
+          '-ar', '8000',     // 8kHz — enough for correlation
+          '-f', 'f32le',     // raw 32-bit float PCM
+          outPcm,
+        ]);
+        proc.on('close', (code: number) => code === 0 ? resolve() : reject(new Error(`FFmpeg exit ${code}`)));
+        proc.on('error', reject);
+        setTimeout(() => { proc.kill(); reject(new Error('timeout')); }, 30000);
+      });
+    }
+
+    if (pcmFiles.length < 2) {
+      return { success: false, error: 'Need at least 2 clips to sync' };
+    }
+
+    // Step 2: Read PCM data
+    const sampleRate = 8000;
+    const waveforms: Float32Array[] = pcmFiles.map(f => {
+      const buf = fsM.readFileSync(f);
+      const arr = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+      return arr;
+    });
+
+    // Step 3: Cross-correlate each clip against the reference (clip 0)
+    // Find the lag that maximizes correlation → that's the sync offset
+    const reference = waveforms[0];
+    const offsets: number[] = [0]; // reference is 0 offset
+
+    for (let i = 1; i < waveforms.length; i++) {
+      const target = waveforms[i];
+      const maxLagSamples = sampleRate * 30; // search up to ±30 seconds
+      const refLen = Math.min(reference.length, sampleRate * 30);
+      const tgtLen = Math.min(target.length, sampleRate * 30);
+
+      let bestLag = 0;
+      let bestScore = -Infinity;
+
+      // Normalized cross-correlation via sliding window
+      // Use step size of 100 samples (12.5ms at 8kHz) for speed, then refine
+      const step = 100;
+      for (let lag = -maxLagSamples; lag <= maxLagSamples; lag += step) {
+        let score = 0;
+        const samples = Math.min(refLen, tgtLen, 4000); // use 0.5s window
+        for (let j = 0; j < samples; j++) {
+          const ri = j;
+          const ti = j + lag;
+          if (ti < 0 || ti >= target.length || ri >= reference.length) continue;
+          score += reference[ri] * target[ti];
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestLag = lag;
+        }
+      }
+
+      // Refine around best lag with step 1
+      for (let lag = bestLag - step; lag <= bestLag + step; lag++) {
+        let score = 0;
+        const samples = Math.min(refLen, tgtLen, 8000);
+        for (let j = 0; j < samples; j++) {
+          const ri = j;
+          const ti = j + lag;
+          if (ti < 0 || ti >= target.length || ri >= reference.length) continue;
+          score += reference[ri] * target[ti];
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestLag = lag;
+        }
+      }
+
+      // Convert lag in samples to seconds
+      offsets.push(bestLag / sampleRate);
+    }
+
+    // Clean up temp files
+    try { pcmFiles.forEach(f => fsM.unlinkSync(f)); } catch { /* ignore */ }
+
+    return {
+      success: true,
+      offsets, // offsets[i] = seconds to shift clip i relative to clip 0
+      // Positive offset = clip i starts later than reference
+      // Negative offset = clip i starts earlier than reference
+    };
+  } catch(e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
 });

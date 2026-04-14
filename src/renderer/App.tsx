@@ -611,6 +611,7 @@ export default function App() {
   const autoColorMatch        = useEditorStore((s) => s.autoColorMatch);
   const normalizeAudioLevels  = useEditorStore((s) => s.normalizeAudioLevels);
   const closeAllGaps          = useEditorStore((s) => s.closeAllGaps);
+  const syncMulticamClips     = useEditorStore((s) => s.syncMulticamClips);
 
   // Phase 8: DaVinci parity
   const addAdjustmentLayer    = useEditorStore((s) => s.addAdjustmentLayer);
@@ -634,6 +635,7 @@ export default function App() {
   const [importBusy,  setImportBusy]  = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<number>(0);
+  const [lastExportedPath, setLastExportedPath] = useState<string | null>(null);
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null);
   const [bridgeReady, setBridgeReady] = useState(
     typeof window !== "undefined" && Boolean(window.editorApi)
@@ -1861,6 +1863,7 @@ export default function App() {
         });
         setExportProgress(100);
         setExportMessage(`✓ Rendered to ${result.outputPath}`);
+        setLastExportedPath(result.outputPath);
         // Notify FlowState of export activity
         if (window.flowstateAPI && fsLinked) {
           void window.flowstateAPI.apiCall('/api/264pro/activity', 'POST', {
@@ -3781,6 +3784,7 @@ export default function App() {
           <ClawFlowPublishPanel
             projectName={project.name ?? "Untitled Project"}
             totalDurationSeconds={totalFrames / project.sequence.settings.fps}
+            lastExportedPath={lastExportedPath}
           />
         )}
 
@@ -4025,6 +4029,10 @@ export default function App() {
             selectClip(clipId);
             setPlayheadFrame(frame);
             toast.info(`Cut to angle at frame ${frame}`);
+          }}
+          onSyncByAudio={(clipIds, offsets) => {
+            syncMulticamClips(clipIds, offsets);
+            toast.success(`🎵 Synced ${clipIds.length} angles by audio`);
           }}
           onClose={() => setMulticamOpen(false)}
         />

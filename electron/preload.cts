@@ -140,6 +140,18 @@ const electronAPI = {
     error?: string;
   }> =>
     ipcRenderer.invoke('export:stems', args),
+  // ── Multicam Audio Sync ───────────────────────────────────────────────────
+  syncMulticamByAudio: (args: { clips: Array<{ clipId: string; assetPath: string; trimStartSeconds: number; durationSeconds: number }> }) =>
+    ipcRenderer.invoke('multicam:sync-by-audio', args),
+  // ── Publish OAuth ─────────────────────────────────────────────────────────
+  connectYouTube: () => ipcRenderer.invoke('publish:connect-youtube'),
+  connectTikTok: () => ipcRenderer.invoke('publish:connect-tiktok'),
+  checkPublishConnection: (platform: string) => ipcRenderer.invoke('publish:check-connection', platform),
+  disconnectPublish: (platform: string) => ipcRenderer.invoke('publish:disconnect', platform),
+  uploadYouTube: (args: { videoPath: string; title: string; description: string; tags: string[]; privacyStatus?: string }) =>
+    ipcRenderer.invoke('publish:upload-youtube', args),
+  uploadTikTok: (args: { videoPath: string; title: string; privacyLevel?: string }) =>
+    ipcRenderer.invoke('publish:upload-tiktok', args),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 
