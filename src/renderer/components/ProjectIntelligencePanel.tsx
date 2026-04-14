@@ -19,15 +19,26 @@ interface ProjectIntelligencePanelProps {
   onCloseGaps: () => void;
 }
 
+function getClipDurationFrames(clip: any, assets: any[], fps: number): number {
+  const asset = assets?.find((a: any) => a.id === clip.assetId);
+  const totalFrames = asset ? Math.round(asset.durationSeconds * fps) : 0;
+  return Math.max(0, totalFrames - (clip.trimStartFrames ?? 0) - (clip.trimEndFrames ?? 0));
+}
+
 function analyzeProject(project: any, fps: number) {
   if (!project?.sequence?.tracks) {
     return { score: 100, issues: [], checks: [] };
   }
 
+  const assets: any[] = project.assets ?? [];
+  const allClips: any[] = project.sequence.clips ?? [];
+
   const videoTracks = project.sequence.tracks.filter((t: any) => t.kind === 'video');
   const audioTracks = project.sequence.tracks.filter((t: any) => t.kind === 'audio');
-  const allVideoClips = videoTracks.flatMap((t: any) => t.clips ?? []);
-  const allAudioClips = audioTracks.flatMap((t: any) => t.clips ?? []);
+  const videoTrackIds = new Set<string>(videoTracks.map((t: any) => t.id));
+  const audioTrackIds = new Set<string>(audioTracks.map((t: any) => t.id));
+  const allVideoClips = allClips.filter((c: any) => videoTrackIds.has(c.trackId));
+  const allAudioClips = allClips.filter((c: any) => audioTrackIds.has(c.trackId));
 
   const issues: Array<{ severity: 'high' | 'medium' | 'low'; label: string; detail: string; fixLabel: string }> = [];
   const checks: string[] = [];
@@ -62,14 +73,15 @@ function analyzeProject(project: any, fps: number) {
 
   // Gaps
   const sortedVideoClips = [...allVideoClips].sort(
-    (a: any, b: any) => (a._startFrame ?? 0) - (b._startFrame ?? 0)
+    (a: any, b: any) => (a.startFrame ?? 0) - (b.startFrame ?? 0)
   );
   let gapCount = 0;
   for (let i = 1; i < sortedVideoClips.length; i++) {
     const prev = sortedVideoClips[i - 1];
     const curr = sortedVideoClips[i];
-    const prevEnd = (prev._startFrame ?? 0) + (prev.durationFrames ?? 0);
-    if ((curr._startFrame ?? 0) > prevEnd + 5) gapCount++;
+    const prevDur = getClipDurationFrames(prev, assets, fps);
+    const prevEnd = (prev.startFrame ?? 0) + prevDur;
+    if ((curr.startFrame ?? 0) > prevEnd + 5) gapCount++;
   }
   if (gapCount > 0) {
     issues.push({
@@ -84,7 +96,7 @@ function analyzeProject(project: any, fps: number) {
 
   // Avg cut duration
   if (allVideoClips.length >= 3) {
-    const avgCutSec = allVideoClips.reduce((sum: number, c: any) => sum + ((c.durationFrames ?? 0) / fps), 0) / allVideoClips.length;
+    const avgCutSec = allVideoClips.reduce((sum: number, c: any) => sum + (getClipDurationFrames(c, assets, fps) / fps), 0) / allVideoClips.length;
     if (avgCutSec > 6) {
       issues.push({
         severity: 'medium',
@@ -142,9 +154,13 @@ export function ProjectIntelligencePanel({
 
   const projectName = project?.name ?? 'Untitled Project';
   const clipCount = project?.sequence?.clips?.length ?? 0;
-  const totalDurationFrames = project?.sequence?.tracks
-    ? project.sequence.tracks.flatMap((t: any) => t.clips ?? [])
-        .reduce((max: number, c: any) => Math.max(max, (c._startFrame ?? 0) + (c.durationFrames ?? 0)), 0)
+  const allProjectClips: any[] = project?.sequence?.clips ?? [];
+  const projectAssets: any[] = project?.assets ?? [];
+  const totalDurationFrames = allProjectClips.length > 0
+    ? allProjectClips.reduce((max: number, c: any) => {
+        const dur = getClipDurationFrames(c, projectAssets, fps);
+        return Math.max(max, (c.startFrame ?? 0) + dur);
+      }, 0)
     : 0;
   const totalMinutes = Math.floor(totalDurationFrames / fps / 60);
   const totalSeconds = Math.floor((totalDurationFrames / fps) % 60);

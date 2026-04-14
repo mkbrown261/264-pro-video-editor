@@ -250,7 +250,7 @@ export interface ColorSliceState {
 }
 
 export function createDefaultVectorAdjustment(): VectorAdjustment {
-  return { hue: 0, saturation: 0, luminance: 0, softness: 0.3 };
+  return { hue: 0, saturation: 0, luminance: 0, softness: 0.5 };
 }
 
 export function createDefaultColorSlice(): ColorSliceState {

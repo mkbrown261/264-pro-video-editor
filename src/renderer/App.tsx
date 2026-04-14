@@ -1561,8 +1561,20 @@ export default function App() {
     normalizeAudio: () => normalizeAudioLevels(-14),
     autoColorMatch,
     closeGaps: closeAllGaps,
-    applyWarm: () => { /* warm preset — placeholder */ },
-    applyCool: () => { /* cool preset — placeholder */ },
+    applyWarm: () => {
+      if (!selectedClipId) return;
+      const warmGrade = { temperature: 25, tint: 5, saturation: 1.1 };
+      enableColorGrade(selectedClipId);
+      setColorGrade(selectedClipId, warmGrade);
+      updateFromGrade(warmGrade);
+    },
+    applyCool: () => {
+      if (!selectedClipId) return;
+      const coolGrade = { temperature: -20, tint: -5, saturation: 0.95 };
+      enableColorGrade(selectedClipId);
+      setColorGrade(selectedClipId, coolGrade);
+      updateFromGrade(coolGrade);
+    },
     addMarker: () => addMarker({ frame: playback.playheadFrame, label: 'Marker', color: '#f59e0b' }),
     setActivePage: (page: string) => setActivePage(page as AppPage),
   });
