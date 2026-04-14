@@ -62,6 +62,21 @@ declare global {
       getCacheDir?: (projectId: string) => Promise<string>;
       clearRenderCache?: (projectId: string) => Promise<{ success: boolean; error?: string }>;
       detectHWEncoder?: () => Promise<{ success: boolean; encoder: string | null }>;
+      // ── EDL / FCP XML Exchange Formats ──────────────────────────────────
+      exportEDL?: (project: unknown) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
+      exportFCPXML?: (project: unknown) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
+      /** Export audio stems (Dialogue / Music / SFX / Full Mix) as WAV/AIFF/MP3/AAC */
+      exportStems?: (args: {
+        project: unknown;
+        format: string;
+        sampleRate: number;
+        stems: string[];
+      }) => Promise<{
+        success: boolean;
+        files?: Array<{ stem: string; path: string }>;
+        canceled?: boolean;
+        error?: string;
+      }>;
     };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;

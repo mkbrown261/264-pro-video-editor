@@ -127,6 +127,19 @@ const electronAPI = {
   clearRenderCache: (projectId: string) => ipcRenderer.invoke('render-cache:clear', projectId),
   detectHWEncoder: (): Promise<{ success: boolean; encoder: string | null }> =>
     ipcRenderer.invoke('export:detect-hw-encoder'),
+  // ── EDL / FCP XML Exchange Formats ────────────────────────────────────────
+  exportEDL: (project: unknown): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('export:edl', project),
+  exportFCPXML: (project: unknown): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('export:fcpxml', project),
+  // ── Audio Stems Export ────────────────────────────────────────────────────
+  exportStems: (args: { project: unknown; format: string; sampleRate: number; stems: string[] }): Promise<{
+    success: boolean;
+    files?: Array<{ stem: string; path: string }>;
+    canceled?: boolean;
+    error?: string;
+  }> =>
+    ipcRenderer.invoke('export:stems', args),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 

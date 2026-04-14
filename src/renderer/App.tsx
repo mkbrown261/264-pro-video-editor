@@ -2506,6 +2506,7 @@ export default function App() {
             onRevealOutput={(outputPath) => { void window.editorApi?.showInFolder?.(outputPath); }}
             onClose={() => setRenderQueueOpen(false)}
             projectName={project.name}
+            project={project}
             onDeliveryPackage={handleDeliveryPackage}
             onAddBatchJobs={(presets: BatchPreset[]) => {
               const newJobs = presets.map(p => ({

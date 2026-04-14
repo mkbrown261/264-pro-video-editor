@@ -7,7 +7,8 @@
  */
 
 import React, { useState, useEffect } from "react";
-import type { ExportCodec } from "../../shared/models";
+import type { EditorProject, ExportCodec } from "../../shared/models";
+import { toast } from "../lib/toast";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ interface RenderQueuePanelProps {
   onAddBatchJobs?: (presets: BatchPreset[]) => void;
   onDeliveryPackage?: () => void;
   projectName?: string;
+  /** Full project object — used for EDL / FCP XML exchange export */
+  project?: EditorProject;
 }
 
 const STATUS_ICONS: Record<RenderJobStatus, string> = {
@@ -90,6 +93,7 @@ export function RenderQueuePanel({
   onAddBatchJobs,
   onDeliveryPackage,
   projectName = "Project",
+  project,
 }: RenderQueuePanelProps) {
   const [showBatch, setShowBatch] = useState(false);
   const [selectedPresets, setSelectedPresets] = useState<Set<string>>(new Set(["youtube", "prores"]));
@@ -117,6 +121,24 @@ export function RenderQueuePanel({
     const presets = BATCH_PRESETS.filter(p => selectedPresets.has(p.id));
     onAddBatchJobs(presets);
     setShowBatch(false);
+  }
+
+  async function handleExportEDL() {
+    if (!project) { toast.warning("No project loaded"); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (window as any).electronAPI?.exportEDL?.(project);
+    if (!result || result.canceled) return;
+    if (result.success) toast.success(`✅ EDL saved: ${result.filePath}`);
+    else toast.error(result.error ?? "EDL export failed");
+  }
+
+  async function handleExportFCPXML() {
+    if (!project) { toast.warning("No project loaded"); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (window as any).electronAPI?.exportFCPXML?.(project);
+    if (!result || result.canceled) return;
+    if (result.success) toast.success(`✅ FCP XML saved: ${result.filePath}`);
+    else toast.error(result.error ?? "XML export failed");
   }
 
   return (
@@ -305,6 +327,39 @@ export function RenderQueuePanel({
           </button>
         </div>
       )}
+
+      {/* Exchange Formats */}
+      <div style={{ margin: "0 12px 12px", paddingTop: 12, borderTop: "1px solid #1e293b" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
+          Exchange Formats
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => { void handleExportEDL(); }}
+            type="button"
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 6, border: "1px solid #334155",
+              background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 600,
+            }}
+            title="Export CMX 3600 EDL for DaVinci Resolve and Premiere Pro"
+          >
+            📋 Export EDL
+            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>DaVinci · Premiere</div>
+          </button>
+          <button
+            onClick={() => { void handleExportFCPXML(); }}
+            type="button"
+            style={{
+              flex: 1, padding: "8px 0", borderRadius: 6, border: "1px solid #334155",
+              background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 600,
+            }}
+            title="Export FCPXML 1.10 for Final Cut Pro X"
+          >
+            🎬 Export FCP XML
+            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>Final Cut Pro X</div>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

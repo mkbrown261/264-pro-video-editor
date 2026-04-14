@@ -1336,6 +1336,84 @@ ipcMain.handle('export:detect-hw-encoder', async () => {
   }
 });
 
+// ── EDL Export ────────────────────────────────────────────────────────────────
+ipcMain.handle('export:edl', async (_ev, project: unknown) => {
+  try {
+    const fsM   = await import('fs');
+    const pathM = await import('path');
+    const { generateEDL } = await import('./edl-export.js');
+
+    const proj = project as { name?: string };
+    const defaultName = `${(proj.name ?? 'Untitled').replace(/[^a-zA-Z0-9_-]/g, '_')}.edl`;
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export EDL',
+      defaultPath: pathM.join(app.getPath('documents'), defaultName),
+      filters: [{ name: 'EDL Files', extensions: ['edl'] }],
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+
+    const edl = generateEDL(project as Parameters<typeof generateEDL>[0]);
+    fsM.writeFileSync(filePath, edl, 'utf8');
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// ── FCP XML Export ────────────────────────────────────────────────────────────
+ipcMain.handle('export:fcpxml', async (_ev, project: unknown) => {
+  try {
+    const fsM   = await import('fs');
+    const pathM = await import('path');
+    const { generateFCPXML } = await import('./edl-export.js');
+
+    const proj = project as { name?: string };
+    const defaultName = `${(proj.name ?? 'Untitled').replace(/[^a-zA-Z0-9_-]/g, '_')}.fcpxml`;
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export FCP XML',
+      defaultPath: pathM.join(app.getPath('documents'), defaultName),
+      filters: [{ name: 'FCP XML', extensions: ['fcpxml', 'xml'] }],
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+
+    const xml = generateFCPXML(project as Parameters<typeof generateFCPXML>[0]);
+    fsM.writeFileSync(filePath, xml, 'utf8');
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// ── Audio Stems Export ────────────────────────────────────────────────────────
+ipcMain.handle('export:stems', async (_ev, args: {
+  project: unknown;
+  format: 'wav' | 'aiff' | 'mp3' | 'aac';
+  sampleRate: number;
+  stems: string[];
+}) => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Choose Output Folder for Stems',
+      defaultPath: app.getPath('documents'),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (canceled || !filePaths[0]) return { success: false, canceled: true, files: [] };
+
+    const { exportStems } = await import('./stems-export.js');
+    const result = await exportStems({
+      project: args.project as Parameters<typeof exportStems>[0]['project'],
+      outputDir: filePaths[0],
+      format: args.format,
+      sampleRate: args.sampleRate || 48000,
+      stems: args.stems as ('dialogue' | 'music' | 'sfx' | 'mix')[],
+    });
+
+    return result;
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e), files: [] };
+  }
+});
+
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();
