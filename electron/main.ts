@@ -1070,8 +1070,7 @@ ipcMain.handle('publish:connect-youtube', async (_ev) => {
       return { success: true, demo: true, message: 'Connected (demo mode — add YOUTUBE_CLIENT_ID/SECRET for real uploads)' };
     }
 
-    const fetchM = (await import('node-fetch')).default;
-    const tokenResp = await fetchM('https://oauth2.googleapis.com/token', {
+    const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -1103,11 +1102,10 @@ ipcMain.handle('publish:upload-youtube', async (_ev, args: {
     }
 
     const fsM = await import('fs');
-    const fetchM = (await import('node-fetch')).default;
 
     if (!fsM.existsSync(args.videoPath)) return { success: false, error: `Video file not found: ${args.videoPath}` };
 
-    const initResp = await fetchM(
+    const initResp = await fetch(
       'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
       {
         method: 'POST',
@@ -1130,7 +1128,7 @@ ipcMain.handle('publish:upload-youtube', async (_ev, args: {
     if (!uploadUrl) return { success: false, error: 'No upload URL returned' };
 
     const videoData = fsM.readFileSync(args.videoPath);
-    const uploadResp = await fetchM(uploadUrl, {
+    const uploadResp = await fetch(uploadUrl, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token.accessToken}`,
@@ -1180,8 +1178,7 @@ ipcMain.handle('publish:connect-tiktok', async () => {
       oauthTokens['tiktok'] = { accessToken: 'demo_token_' + Date.now(), expiresAt: Date.now() + 3600000 };
       return { success: true, demo: true, message: 'Connected (demo mode — add TIKTOK_CLIENT_KEY/SECRET for real uploads)' };
     }
-    const fetchM = (await import('node-fetch')).default;
-    const tokenResp = await fetchM('https://open.tiktokapis.com/v2/oauth/token/', {
+    const tokenResp = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ code, client_key: process.env.TIKTOK_CLIENT_KEY, client_secret: process.env.TIKTOK_CLIENT_SECRET, redirect_uri: redirectUri, grant_type: 'authorization_code' }).toString(),
@@ -1201,10 +1198,9 @@ ipcMain.handle('publish:upload-tiktok', async (_ev, args: { videoPath: string; t
       return { success: false, error: 'Demo mode: add TIKTOK_CLIENT_KEY + TIKTOK_CLIENT_SECRET for real uploads.' };
     }
     const fsM = await import('fs');
-    const fetchM = (await import('node-fetch')).default;
     if (!fsM.existsSync(args.videoPath)) return { success: false, error: `File not found: ${args.videoPath}` };
     const fileSize = fsM.statSync(args.videoPath).size;
-    const initResp = await fetchM('https://open.tiktokapis.com/v2/post/publish/video/init/', {
+    const initResp = await fetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token.accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
       body: JSON.stringify({ post_info: { title: args.title, privacy_level: args.privacyLevel ?? 'SELF_ONLY', disable_duet: false, disable_stitch: false, disable_comment: false, video_cover_timestamp_ms: 1000 }, source_info: { source: 'FILE_UPLOAD', video_size: fileSize, chunk_size: fileSize, total_chunk_count: 1 } }),
@@ -1212,7 +1208,7 @@ ipcMain.handle('publish:upload-tiktok', async (_ev, args: { videoPath: string; t
     const initData = await initResp.json() as any;
     if (!initData.data?.upload_url) return { success: false, error: JSON.stringify(initData).slice(0, 200) };
     const videoBuffer = fsM.readFileSync(args.videoPath);
-    const uploadResp = await fetchM(initData.data.upload_url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`, 'Content-Type': 'video/mp4' }, body: videoBuffer });
+    const uploadResp = await fetch(initData.data.upload_url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`, 'Content-Type': 'video/mp4' }, body: videoBuffer });
     if (!uploadResp.ok) return { success: false, error: `TikTok upload failed: ${uploadResp.status}` };
     return { success: true, publishId: initData.data.publish_id };
   } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
