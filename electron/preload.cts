@@ -113,6 +113,18 @@ const electronAPI = {
   transcribeAudio: (args: { filePath: string; language?: string }) =>
     ipcRenderer.invoke('ai:transcribe', args),
   exportLut: (args: { grade: Record<string, number>; name: string }) => ipcRenderer.invoke('lut:export', args),
+  // ── Render Cache ─────────────────────────────────────────────────────────
+  renderCacheSegment: (args: {
+    projectId: string;
+    segmentHash: string;
+    inputPath: string;
+    startSeconds: number;
+    durationSeconds: number;
+    grade: Record<string, number>;
+    speed: number;
+  }) => ipcRenderer.invoke('render-cache:render-segment', args),
+  getCacheDir: (projectId: string) => ipcRenderer.invoke('render-cache:get-cache-dir', projectId),
+  clearRenderCache: (projectId: string) => ipcRenderer.invoke('render-cache:clear', projectId),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 

@@ -49,6 +49,18 @@ declare global {
       /** Whisper AI transcription via Groq */
       transcribeAudio?: (args: { filePath: string; language?: string }) => Promise<{ success: boolean; segments?: Array<{ startMs: number; endMs: number; text: string }>; error?: string }>;
       exportLut?: (args: { grade: Record<string, number>; name: string }) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
+      // ── Render Cache ────────────────────────────────────────────────────
+      renderCacheSegment?: (args: {
+        projectId: string;
+        segmentHash: string;
+        inputPath: string;
+        startSeconds: number;
+        durationSeconds: number;
+        grade: Record<string, number>;
+        speed: number;
+      }) => Promise<{ success: boolean; filePath?: string; cached?: boolean; error?: string }>;
+      getCacheDir?: (projectId: string) => Promise<string>;
+      clearRenderCache?: (projectId: string) => Promise<{ success: boolean; error?: string }>;
     };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;

@@ -8,6 +8,7 @@ import {
 } from "../../shared/timeline";
 import { formatDuration, formatTimecode } from "../lib/format";
 import { TRANSITION_DRAG_TYPE } from "./TransitionsPanel";
+import { computeSegmentHash } from "../hooks/useRenderCache";
 
 type TrimEdge = "start" | "end";
 
@@ -183,6 +184,9 @@ interface TimelinePanelProps {
   onGenerateBRollForClip?: (clipId: string, startFrame: number, endFrame: number, subtitleText?: string) => void;
   onGenerateBRollForGap?: (gapStartFrame: number, gapEndFrame: number) => void;
   onGenerateAITransition?: (startFrame: number, endFrame: number) => void;
+  // Render cache
+  renderCacheEntries?: Record<string, import('../../shared/models').RenderCacheEntry>;
+  renderingSegments?: Set<string>;
 }
 
 const MIN_PPF = 1.5;
@@ -249,6 +253,8 @@ export function TimelinePanel({
   onGenerateBRollForClip,
   onGenerateBRollForGap,
   onGenerateAITransition,
+  renderCacheEntries,
+  renderingSegments,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -2357,6 +2363,25 @@ export function TimelinePanel({
                             });
                           }}
                         />
+
+                        {/* ── Render cache status bar ─────────────────────── */}
+                        {segment.track.kind === 'video' && (() => {
+                          const hash = computeSegmentHash(segment.clip);
+                          const cached = renderCacheEntries?.[hash]?.valid;
+                          const rendering = renderingSegments?.has(segment.clip.id);
+                          if (!cached && !rendering) return null;
+                          return (
+                            <div style={{
+                              position: 'absolute',
+                              bottom: 0, left: 0, right: 0,
+                              height: 3,
+                              background: rendering ? '#f59e0b' : '#22c55e',
+                              borderRadius: '0 0 3px 3px',
+                              pointerEvents: 'none',
+                              zIndex: 3,
+                            }} />
+                          );
+                        })()}
 
                         {/* ── Fade-out overlay (only when fade is set) ── */}
                         {fadeOutFrames > 0 && (

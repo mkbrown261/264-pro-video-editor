@@ -565,6 +565,18 @@ export interface TimelineMarker {
   color: string;
 }
 
+// ── Render Cache ──────────────────────────────────────────────────────────────
+
+export interface RenderCacheEntry {
+  segmentHash: string;    // hash of clipId + grade + effects + trim
+  filePath: string;       // absolute path to cached .mp4
+  startFrame: number;
+  endFrame: number;
+  fps: number;
+  createdAt: number;      // Date.now()
+  valid: boolean;
+}
+
 // ── Subtitles ─────────────────────────────────────────────────────────────────
 
 export interface SubtitleStyle {
@@ -684,6 +696,9 @@ export interface EditorProject {
   compoundNodes?: Array<{ id: string; label: string; nodeIds: string[] }>;
   /** Phase 8: Audio ducking configurations */
   duckingSettings?: DuckingSettings[];
+  /** Render cache — pre-rendered segments baked with grades + effects */
+  renderCacheEnabled?: boolean;
+  renderCacheEntries?: Record<string, RenderCacheEntry>; // key = segmentHash
 }
 
 // ── Playback & Editor State ───────────────────────────────────────────────────

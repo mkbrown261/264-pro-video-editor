@@ -74,6 +74,8 @@ interface ViewerPanelProps {
   onInsertAtPlayhead?: (assetId: string, inFrame: number, outFrame: number) => void;
   /** Overwrite at playhead with selected asset (trimmed to in/out) */
   onOverwriteAtPlayhead?: (assetId: string, inFrame: number, outFrame: number) => void;
+  /** Optional: return a cached file path for a clip (from useRenderCache) */
+  getCachedVideoPath?: (clipId: string) => string | null;
 }
 
 // ─── Transition helpers ───────────────────────────────────────────────────────
@@ -376,6 +378,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     subtitleCues,
     onInsertAtPlayhead,
     onOverwriteAtPlayhead,
+    getCachedVideoPath,
   }, ref) {
 
     const panelRef       = useRef<HTMLElement | null>(null);
@@ -463,15 +466,32 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     // Build a patched version of activeSegment that overrides previewUrl
     // based on proxyMode. When using original, we construct the media:// URL
     // from the asset's sourcePath (same pattern as probeMediaFile returns).
+    // Also: if a render-cached file exists for this clip, use it instead —
+    // sourceInSeconds/sourceOutSeconds are reset to 0/duration because the
+    // cached file is a pre-trimmed, pre-graded render from the start.
     const patchedActiveSegment = useMemo(() => {
       if (!activeSegment) return null;
+
+      // Check render cache first — it takes priority
+      const cachedPath = getCachedVideoPath?.(activeSegment.clip.id);
+      if (cachedPath) {
+        const cachedUrl = `file://${cachedPath}`;
+        const durSecs = activeSegment.sourceOutSeconds - activeSegment.sourceInSeconds;
+        return {
+          ...activeSegment,
+          sourceInSeconds: 0,
+          sourceOutSeconds: durSecs,
+          asset: { ...activeSegment.asset, previewUrl: cachedUrl },
+        };
+      }
+
       if (proxyMode) return activeSegment;
       const originalUrl = `media://asset?path=${encodeURIComponent(activeSegment.asset.sourcePath)}`;
       return {
         ...activeSegment,
         asset: { ...activeSegment.asset, previewUrl: originalUrl },
       };
-    }, [activeSegment, proxyMode]);
+    }, [activeSegment, proxyMode, getCachedVideoPath]);
 
     const patchedSelectedAsset = useMemo(() => {
       if (!selectedAsset) return null;

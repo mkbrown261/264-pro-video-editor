@@ -58,6 +58,8 @@ import { BeatSyncPanel } from "./components/BeatSyncPanel";
 // Phase 6 new imports
 import OnboardingModal from "./components/OnboardingModal";
 import { SettingsPanel } from "./components/SettingsPanel";
+// Render cache
+import { useRenderCache } from "./hooks/useRenderCache";
 // Phase 9 ClawFlow Intelligence
 import { useClawFlowAmbient } from "./hooks/useClawFlowAmbient";
 import { useVoiceCommands } from "./hooks/useVoiceCommands";
@@ -622,6 +624,9 @@ export default function App() {
   // ── Active page – driven by store so openFusion() triggers re-render ────────
   const activePage    = useEditorStore((s) => s.activePage) as AppPage;
   const setActivePage = useEditorStore((s) => s.setActivePage) as (page: AppPage) => void;
+
+  // ── Render cache ──────────────────────────────────────────────────────────
+  const renderCache = useRenderCache(project);
 
   // ── Local UI state ─────────────────────────────────────────────────────────
   const [exportBusy,  setExportBusy]  = useState(false);
@@ -2775,6 +2780,27 @@ export default function App() {
             )}
           </button>
 
+          {/* 🎬 Render Cache button */}
+          <button
+            className="panel-toggle-btn"
+            onClick={renderCache.progress > 0 ? renderCache.abort : () => void renderCache.renderAll()}
+            title="Pre-render timeline segments to disk for smooth playback"
+            type="button"
+            style={{
+              padding: '5px 12px', borderRadius: 6, border: '1px solid #334155',
+              background: renderCache.progress > 0 ? '#1a2744' : '#0f172a',
+              color: renderCache.progress > 0 ? '#60a5fa' : '#94a3b8',
+              cursor: 'pointer', fontSize: 11, fontWeight: 600,
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {renderCache.progress > 0 ? (
+              <>🎬 Rendering… {renderCache.progress}%</>
+            ) : (
+              <>🎬 Render Cache</>
+            )}
+          </button>
+
           {/* FlowState Panel toggle */}
           <button
             className={`panel-toggle-btn${flowstatePanelOpen ? " on" : ""}`}
@@ -3134,6 +3160,7 @@ export default function App() {
                 subtitleCues={subtitleCues}
                 onInsertAtPlayhead={handleInsertAtPlayhead}
                 onOverwriteAtPlayhead={handleOverwriteAtPlayhead}
+                getCachedVideoPath={renderCache.getCachedPath}
               />
             </div>
 
@@ -3503,6 +3530,8 @@ export default function App() {
                 selectClip(clipId);
                 setAiToolsPanelOpen(true);
               }}
+              renderCacheEntries={renderCache.entries}
+              renderingSegments={renderCache.renderingSegments}
             />
 
             {/* Audio Mixer Panel */}
@@ -3705,6 +3734,8 @@ export default function App() {
               onRestoreClipSnapshot={(clipId, snapshotId) => restoreClipSnapshot(clipId, snapshotId)}
               clipHistoryMap={Object.fromEntries(project.sequence.clips.filter(c => c.clipHistory && c.clipHistory.length > 0).map(c => [c.id, c.clipHistory!]))}
               onAddAdjustmentLayer={addAdjustmentLayer}
+              renderCacheEntries={renderCache.entries}
+              renderingSegments={renderCache.renderingSegments}
               />
             </div>
           </>

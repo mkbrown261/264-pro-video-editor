@@ -1223,6 +1223,108 @@ app.on('second-instance', (_event, argv) => {
   if (wins[0]) { if (wins[0].isMinimized()) wins[0].restore(); wins[0].focus(); }
 });
 
+// ── Render Cache IPC ──────────────────────────────────────────────────────────
+
+ipcMain.handle('render-cache:render-segment', async (_ev, args: {
+  projectId: string;
+  segmentHash: string;
+  inputPath: string;
+  startSeconds: number;
+  durationSeconds: number;
+  grade: Record<string, number>;
+  speed: number;
+}) => {
+  try {
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const { spawn } = await import('child_process');
+
+    const cacheDir = pathM.join(app.getPath('userData'), 'render-cache', args.projectId);
+    fsM.mkdirSync(cacheDir, { recursive: true });
+    const outPath = pathM.join(cacheDir, `${args.segmentHash}.mp4`);
+
+    if (fsM.existsSync(outPath)) return { success: true, filePath: outPath, cached: true };
+
+    // Build grade filter
+    const g = args.grade;
+    const exposure = g.exposure ?? 0;
+    const contrast = g.contrast ?? 0;
+    const brightness = 1 + exposure * 0.3;
+    const contrastVal = 1 + contrast * 0.5;
+    const saturation = g.saturation ?? 1;
+    const temperature = (g.temperature ?? 0) / 200;
+
+    const filters: string[] = [];
+
+    // Speed ramp
+    if (args.speed !== 1) filters.push(`setpts=${(1 / args.speed).toFixed(4)}*PTS`);
+
+    // Color grade via eq + colorchannelmixer
+    filters.push(`eq=brightness=${(brightness - 1).toFixed(3)}:contrast=${contrastVal.toFixed(3)}:saturation=${saturation.toFixed(3)}`);
+    if (Math.abs(temperature) > 0.001) {
+      const rBoost = (1 + temperature).toFixed(3);
+      const bBoost = (1 - temperature).toFixed(3);
+      filters.push(`colorchannelmixer=rr=${rBoost}:bb=${bBoost}`);
+    }
+
+    // Resolve ffmpeg — same logic as getFfmpegPath() in ffmpeg.ts
+    let ffmpegBin: string;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ffmpegStaticMod: any = await import('ffmpeg-static');
+      const resolved: string | null =
+        process.env.FFMPEG_PATH ||
+        (typeof ffmpegStaticMod === 'string' ? ffmpegStaticMod : null) ||
+        (typeof ffmpegStaticMod?.default === 'string' ? ffmpegStaticMod.default : null);
+      ffmpegBin = resolved ?? 'ffmpeg';
+    } catch {
+      ffmpegBin = 'ffmpeg';
+    }
+
+    const spawnArgs: string[] = [
+      '-y',
+      '-ss', args.startSeconds.toFixed(3),
+      '-i', args.inputPath,
+      '-t', args.durationSeconds.toFixed(3),
+      ...(filters.length ? ['-vf', filters.join(',')] : []),
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18',
+      '-c:a', 'aac', '-b:a', '128k',
+      '-movflags', '+faststart',
+      outPath,
+    ];
+
+    return new Promise<{ success: boolean; filePath?: string; cached?: boolean; error?: string }>((resolve) => {
+      const proc = spawn(ffmpegBin, spawnArgs);
+      let stderr = '';
+      proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('close', (code: number) => {
+        if (code === 0) resolve({ success: true, filePath: outPath });
+        else resolve({ success: false, error: stderr.slice(-300) });
+      });
+      proc.on('error', (e: Error) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('render-cache:get-cache-dir', (_ev, projectId: string) => {
+  const pathM = require('path') as typeof import('path');
+  return pathM.join(app.getPath('userData'), 'render-cache', projectId);
+});
+
+ipcMain.handle('render-cache:clear', async (_ev, projectId: string) => {
+  try {
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const dir = pathM.join(app.getPath('userData'), 'render-cache', projectId);
+    if (fsM.existsSync(dir)) fsM.rmSync(dir, { recursive: true, force: true });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();
