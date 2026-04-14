@@ -519,6 +519,7 @@ export default function App() {
   const removeSelectedClip = useEditorStore((s) => s.removeSelectedClip);
   const removeClipById = useEditorStore((s) => s.removeClipById);
   const duplicateClip = useEditorStore((s) => s.duplicateClip);
+  const reorderClips = useEditorStore((s) => s.reorderClips);
   const toggleClipEnabled = useEditorStore((s) => s.toggleClipEnabled);
   const detachLinkedClips = useEditorStore((s) => s.detachLinkedClips);
   const relinkClips = useEditorStore((s) => s.relinkClips);
@@ -3375,6 +3376,7 @@ export default function App() {
                   onDeleteClip={(clipId) => { pauseViewerPlayback(); removeClipById(clipId); }}
                   onDuplicateClip={(clipId) => { pauseViewerPlayback(); duplicateClip(clipId); }}
                   onSplitClip={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
+                  onReorderClips={reorderClips}
                 />
               </div>
             )}

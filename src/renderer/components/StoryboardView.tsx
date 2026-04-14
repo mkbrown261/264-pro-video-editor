@@ -17,6 +17,7 @@ interface StoryboardViewProps {
   onDeleteClip?: (clipId: string) => void;
   onDuplicateClip?: (clipId: string) => void;
   onSplitClip?: (clipId: string, frame: number) => void;
+  onReorderClips?: (draggedId: string, targetId: string) => void;
 }
 
 interface SBContextMenu {
@@ -35,6 +36,7 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
   onDeleteClip,
   onDuplicateClip,
   onSplitClip,
+  onReorderClips,
 }) => {
   const [contextMenu, setContextMenu] = useState<SBContextMenu | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -59,10 +61,12 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({
 
   const handleDrop = useCallback((e: React.DragEvent, targetClipId: string) => {
     e.preventDefault();
-    // TODO: swap clips in timeline when store action is wired
+    if (draggedId && draggedId !== targetClipId && onReorderClips) {
+      onReorderClips(draggedId, targetClipId);
+    }
     setDraggedId(null);
     setDragOverId(null);
-  }, []);
+  }, [draggedId, onReorderClips]);
 
   const handleDragEnd = useCallback(() => {
     setDraggedId(null);

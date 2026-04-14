@@ -191,6 +191,9 @@ interface EditorStore {
   /** Reorder a track by moving it to a new index in sequence.tracks[]. */
   reorderTrack: (trackId: string, toIndex: number) => void;
 
+  /** Swap two clips in the storyboard by exchanging their startFrame (and trackId). */
+  reorderClips: (draggedClipId: string, targetClipId: string) => void;
+
   // ── Markers ──
   addMarker: (marker: Omit<TimelineMarker, "id">) => void;
   removeMarker: (markerId: string) => void;
@@ -2205,6 +2208,21 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           []
         )
       };
+    }));
+  },
+
+  reorderClips: (draggedClipId, targetClipId) => {
+    set(withUndo("Reorder Clips", (state) => {
+      const clips = state.project.sequence.clips;
+      const dragIdx = clips.findIndex(c => c.id === draggedClipId);
+      const targIdx = clips.findIndex(c => c.id === targetClipId);
+      if (dragIdx === -1 || targIdx === -1 || dragIdx === targIdx) return state;
+      const newClips = clips.map((c, i) => {
+        if (i === dragIdx) return { ...c, startFrame: clips[targIdx].startFrame, trackId: clips[targIdx].trackId };
+        if (i === targIdx) return { ...c, startFrame: clips[dragIdx].startFrame, trackId: clips[dragIdx].trackId };
+        return c;
+      });
+      return { project: { ...state.project, sequence: { ...state.project.sequence, clips: newClips } } };
     }));
   },
 
