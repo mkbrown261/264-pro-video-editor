@@ -41,6 +41,8 @@ import { FollowForFreebie } from "./components/FollowForFreebie";
 import { SubtitlesPanel } from "./components/SubtitlesPanel";
 import { TitleGeneratorPanel } from "./components/TitleGeneratorPanel";
 import { FairlightPanel } from "./components/FairlightPanel";
+import { TextBasedEditingPanel } from "./components/TextBasedEditingPanel";
+import { ShortcutsPanel } from "./components/ShortcutsPanel";
 
 // Pages: edit | color | fusion | audio
 type AppPage = "edit" | "color" | "fusion" | "audio";
@@ -554,6 +556,15 @@ export default function App() {
   const resetColorGrade = useEditorStore((s) => s.resetColorGrade);
   const updateSequenceSettings = useEditorStore((s) => s.updateSequenceSettings);
 
+  // Phase 3 additions
+  const rippleDelete = useEditorStore((s) => s.rippleDelete);
+  const fixedPlayheadMode = useEditorStore((s) => s.fixedPlayheadMode);
+  const toggleFixedPlayheadMode = useEditorStore((s) => s.toggleFixedPlayheadMode);
+  const setTranscript = useEditorStore((s) => s.setTranscript);
+  const addColorStill = useEditorStore((s) => s.addColorStill);
+  const removeColorStill = useEditorStore((s) => s.removeColorStill);
+  const renameColorStill = useEditorStore((s) => s.renameColorStill);
+
   // ── Fusion store actions ────────────────────────────────────────────────────
   const fusionClipId = useEditorStore((s) => s.fusionClipId);
   const openFusion   = useEditorStore((s) => s.openFusion);
@@ -741,6 +752,10 @@ export default function App() {
   // Subtitles / Title panels
   const [subtitlesPanelOpen, setSubtitlesPanelOpen] = useState(false);
   const [titleGenPanelOpen, setTitleGenPanelOpen] = useState(false);
+  // Text-Based Editing panel
+  const [textEditPanelOpen, setTextEditPanelOpen] = useState(false);
+  // Keyboard Shortcuts panel
+  const [shortcutsPanelOpen, setShortcutsPanelOpen] = useState(false);
 
   // Speed ramp handlers
   const handleSetSpeedRampKeyframes = useCallback((kf: Array<{ frame: number; speed: number }>) => {
@@ -780,6 +795,24 @@ export default function App() {
 
   // ── FlowState Panel ────────────────────────────────────────────────────────
   const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
+
+  // Text-Based Editing: add clip from transcript selection
+  const handleAddClipFromTranscript = useCallback((assetId: string, startMs: number, endMs: number) => {
+    const asset = project.assets.find(a => a.id === assetId);
+    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
+    if (!asset || !firstVideoTrack) { toast.warning("No video track found"); return; }
+    const fps = project.sequence.settings.fps;
+    const nativeFps = asset.nativeFps ?? fps;
+    const trimStart = Math.round((startMs / 1000) * nativeFps);
+    const totalNativeFrames = Math.round(asset.durationSeconds * nativeFps);
+    const clipEndNativeFrame = Math.round((endMs / 1000) * nativeFps);
+    const trimEnd = Math.max(0, totalNativeFrames - clipEndNativeFrame);
+    const clip = createEmptyClip(assetId, firstVideoTrack.id, playback.playheadFrame);
+    clip.trimStartFrames = trimStart;
+    clip.trimEndFrames = trimEnd;
+    insertClip(clip);
+    toast.success(`Added ${asset.name} clip from transcript (${((endMs - startMs) / 1000).toFixed(2)}s)`);
+  }, [project, playback.playheadFrame, insertClip]);
 
   // ── AI Tools Panel ─────────────────────────────────────────────────────────
   const [aiToolsPanelOpen, setAiToolsPanelOpen] = useState(false);
@@ -1339,7 +1372,7 @@ export default function App() {
       }
     },
     onRippleDelete: () => {
-      if (selectedClipId) { pauseViewerPlayback(); removeClipById(selectedClipId); }
+      if (selectedClipId) { pauseViewerPlayback(); rippleDelete(selectedClipId); }
     },
     onDetachAudio: () => {
       if (selectedClipId) { pauseViewerPlayback(); detachLinkedClips(selectedClipId); }
@@ -2331,6 +2364,9 @@ export default function App() {
               <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShowSettings(true); }} type="button">
                 <span className="fmi-icon">⚙️</span> Settings…
               </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShortcutsPanelOpen(true); }} type="button">
+                <span className="fmi-icon">⌨️</span> Keyboard Shortcuts…
+              </button>
             </div>
           )}
         </div>
@@ -2564,6 +2600,16 @@ export default function App() {
             📝 Subtitles
           </button>
 
+          {/* Text-Based Editing button */}
+          <button
+            className={`panel-toggle-btn${textEditPanelOpen ? " on" : ""}`}
+            onClick={() => setTextEditPanelOpen(v => !v)}
+            title="Text-Based Editing — edit by transcript"
+            type="button"
+          >
+            📝 Text Edit
+          </button>
+
           {/* Title Generator button */}
           <button
             className={`panel-toggle-btn${titleGenPanelOpen ? " on" : ""}`}
@@ -2757,7 +2803,7 @@ export default function App() {
                 setTransitionMessage(setSelectedClipTransitionDuration(edge, dur));
               }}
               onExtractAudio={() => { pauseViewerPlayback(); setTransitionMessage(extractAudioFromSelectedClip()); }}
-              onRippleDelete={() => { pauseViewerPlayback(); removeSelectedClip(); }}
+              onRippleDelete={() => { if (selectedClipId) { pauseViewerPlayback(); rippleDelete(selectedClipId); } }}
               onSetClipVolume={(vol) => { if (selectedClipId) setClipVolume(selectedClipId, vol); }}
               onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
               onSetSpeedRampKeyframes={handleSetSpeedRampKeyframes}
@@ -3032,6 +3078,8 @@ export default function App() {
               onRemoveMarker={(id) => removeMarker(id)}
               onUpdateMarker={(id, updates) => updateMarker(id, updates)}
               onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
+              fixedPlayheadMode={fixedPlayheadMode}
+              onToggleFixedPlayheadMode={toggleFixedPlayheadMode}
             />
 
             {/* Audio Mixer Panel */}
@@ -3070,6 +3118,11 @@ export default function App() {
                 onResetGrade={() => {
                   if (selectedClipId) resetColorGrade(selectedClipId);
                 }}
+                colorStills={project.colorStills ?? []}
+                selectedClipId={selectedClipId}
+                onAddColorStill={addColorStill}
+                onRemoveColorStill={removeColorStill}
+                onRenameColorStill={renameColorStill}
               />
               {/* Open in Fusion button */}
               {selectedClipId && (
@@ -3189,6 +3242,8 @@ export default function App() {
               onRemoveMarker={(id) => removeMarker(id)}
               onUpdateMarker={(id, updates) => updateMarker(id, updates)}
               onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
+              fixedPlayheadMode={fixedPlayheadMode}
+              onToggleFixedPlayheadMode={toggleFixedPlayheadMode}
               />
             </div>
           </>
@@ -3203,6 +3258,7 @@ export default function App() {
               onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
               masterVolume={project.sequence.settings.masterVolume ?? 1}
               onSetMasterVolume={(v) => updateSequenceSettings({ masterVolume: v })}
+              selectedClipId={selectedClipId}
             />
           </div>
         )}
@@ -3352,6 +3408,26 @@ export default function App() {
             onAddTitleToTimeline={handleAddTitleToTimeline}
           />
         </div>
+      )}
+
+      {/* ── KEYBOARD SHORTCUTS PANEL ── */}
+      {shortcutsPanelOpen && (
+        <ShortcutsPanel onClose={() => setShortcutsPanelOpen(false)} />
+      )}
+
+      {/* ── TEXT-BASED EDITING PANEL ── */}
+      {textEditPanelOpen && (
+        <TextBasedEditingPanel
+          assets={project.assets}
+          transcripts={project.transcripts ?? {}}
+          playheadFrame={playback.playheadFrame}
+          sequenceFps={project.sequence.settings.fps}
+          isPlaying={playback.isPlaying}
+          onSetTranscript={setTranscript}
+          onSetPlayheadFrame={setPlayheadFrame}
+          onAddClipToTimeline={handleAddClipFromTranscript}
+          onClose={() => setTextEditPanelOpen(false)}
+        />
       )}
 
       {/* ── Image-to-Video Modal ── */}

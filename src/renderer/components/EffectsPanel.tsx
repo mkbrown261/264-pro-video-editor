@@ -569,6 +569,31 @@ export function computeCssFilterFromEffects(effects: ClipEffect[]): string {
         parts.push(`contrast(${1 + gi * 0.2}) hue-rotate(${gi * 10}deg)`);
         break;
       }
+      case "film_look_creator": {
+        // CSS approximation of film look — noise/grain via contrast+brightness,
+        // halation via a warm brightness boost, faded blacks via brightness lift
+        const stock = String(p.filmStock ?? "kodachrome");
+        const grain  = Number(p.grainAmount ?? 0.3);
+        const fade   = Number(p.fadeBlacks ?? 0.15);
+        const colorShift = Number(p.colorShift ?? 0.2);
+        // Stock-specific tones
+        const stockTints: Record<string, string> = {
+          kodachrome:   `saturate(1.3) hue-rotate(5deg)`,
+          ektachrome:   `saturate(1.15) hue-rotate(-5deg)`,
+          velvia:       `saturate(1.5) contrast(1.1)`,
+          portra:       `saturate(0.85) brightness(1.05)`,
+          tri_x_bw:     `grayscale(1) contrast(1.2)`,
+          cinestill_800t: `saturate(0.9) hue-rotate(-10deg) brightness(0.95)`,
+        };
+        const tint = stockTints[stock] ?? `saturate(1.1)`;
+        parts.push(
+          tint,
+          `brightness(${1 + fade * 0.3})`,
+          `contrast(${1 - grain * 0.1})`,
+          `hue-rotate(${colorShift * 8}deg)`,
+        );
+        break;
+      }
       default:
         break;
     }
@@ -1219,6 +1244,30 @@ const EFFECT_LIBRARY: EffectDef[] = [
     paramDefs: [
       { key: "distortion", label: "Distortion", type: "range", min: -1, max: 1, step: 0.02 },
       { key: "anamorphic", label: "Anamorphic", type: "range", min: 0, max: 1, step: 0.05 }
+    ]
+  },
+  // ── GAP 6B: Film Look Creator ─────────────────────────────────────────────
+  {
+    type: "film_look_creator",
+    label: "Film Look Creator",
+    category: "Film",
+    icon: "🎞",
+    description: "Simulate classic film stocks with grain, halation, gate weave, and faded blacks",
+    defaultParams: {
+      filmStock: "kodachrome",
+      grainAmount: 0.3,
+      halation: 0.2,
+      gateWeave: 0.1,
+      fadeBlacks: 0.15,
+      colorShift: 0.2,
+    },
+    paramDefs: [
+      { key: "filmStock", label: "Film Stock", type: "select", options: ["kodachrome", "ektachrome", "velvia", "portra", "tri_x_bw", "cinestill_800t"] },
+      { key: "grainAmount", label: "Grain Amount", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "halation", label: "Halation", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "gateWeave", label: "Gate Weave", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "fadeBlacks", label: "Fade Blacks", type: "range", min: 0, max: 1, step: 0.05 },
+      { key: "colorShift", label: "Color Shift", type: "range", min: 0, max: 1, step: 0.05 },
     ]
   }
 ];

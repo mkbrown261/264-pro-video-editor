@@ -21,8 +21,8 @@ import {
   useState,
   type MouseEvent as RMouseEvent,
 } from "react";
-import type { ColorGrade, CurvePoint, RGBValue } from "../../shared/models";
-import { createDefaultColorGrade, createId } from "../../shared/models";
+import type { ColorGrade, ColorStill, ColorSliceState, CurvePoint, RGBValue, VectorAdjustment } from "../../shared/models";
+import { createDefaultColorGrade, createDefaultColorSlice, createDefaultVectorAdjustment, createId } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -34,10 +34,16 @@ export interface ColorGradingPanelProps {
   onEnableGrade: () => void;
   onUpdateGrade: (grade: Partial<ColorGrade>) => void;
   onResetGrade: () => void;
+  // GAP 7: Color stills gallery
+  colorStills?: ColorStill[];
+  selectedClipId?: string | null;
+  onAddColorStill?: (still: ColorStill) => void;
+  onRemoveColorStill?: (stillId: string) => void;
+  onRenameColorStill?: (stillId: string, label: string) => void;
 }
 
 type ActiveScope   = "waveform" | "vectorscope" | "histogram" | "parade";
-type ActivePanel   = "primary" | "curves" | "lut" | "scopes";
+type ActivePanel   = "primary" | "curves" | "lut" | "colorslice" | "gallery" | "scopes";
 type WheelKey      = "lift" | "gamma" | "gain" | "offset";
 type CurveChannel  = "master" | "red" | "green" | "blue" | "hueVsHue" | "hueVsSat";
 
@@ -708,12 +714,23 @@ export function ColorGradingPanel({
   onEnableGrade,
   onUpdateGrade,
   onResetGrade,
+  colorStills = [],
+  selectedClipId = null,
+  onAddColorStill,
+  onRemoveColorStill,
+  onRenameColorStill,
 }: ColorGradingPanelProps) {
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("primary");
   const [activeScope,  setActiveScope] = useState<ActiveScope>("waveform");
   const [activeCurve, setActiveCurve] = useState<CurveChannel>("master");
   const [showScopes,  setShowScopes]  = useState(true);
+  // GAP 2: ColorSlice selected vector
+  const [activeVector, setActiveVector] = useState<keyof ColorSliceState['vectors']>('red');
+  // GAP 7: Still gallery context menu
+  const [stillContextMenu, setStillContextMenu] = useState<{ stillId: string; x: number; y: number } | null>(null);
+  const [renamingStillId, setRenamingStillId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const [nodes, setNodes] = useState<ColorNode[]>([
     { id: "node-1", label: "Corrector 1", type: "corrector", enabled: true, active: true },
@@ -825,16 +842,18 @@ export function ColorGradingPanel({
 
       {/* ── Tab strip ── */}
       <div className="cgp-tabs">
-        {(["primary", "curves", "lut", "scopes"] as ActivePanel[]).map((id) => (
+        {(["primary", "curves", "colorslice", "lut", "gallery", "scopes"] as ActivePanel[]).map((id) => (
           <button
             key={id}
             className={`cgp-tab${activePanel === id ? " active" : ""}`}
             onClick={() => setActivePanel(id)}
             type="button"
           >
-            {id === "primary" ? "Primary"
-              : id === "curves" ? "Curves"
-              : id === "lut"    ? "LUT"
+            {id === "primary"    ? "Primary"
+              : id === "curves"  ? "Curves"
+              : id === "colorslice" ? "ColorSlice"
+              : id === "lut"     ? "LUT"
+              : id === "gallery" ? "Gallery"
               : "Scopes"}
           </button>
         ))}
@@ -980,10 +999,10 @@ export function ColorGradingPanel({
               {grade.lutPath ? (
                 <div className="cgp-lut-active-row">
                   <span className="cgp-lut-dot active" />
-                  <span className="cgp-lut-name">{grade.lutPath.split(/[\\/]/).pop()}</span>
+                  <span className="cgp-lut-name">{grade.lutName ?? grade.lutPath?.split(/[\\/]/).pop()}</span>
                   <button
                     className="cgp-btn danger"
-                    onClick={() => handleUpdate({ lutPath: null })}
+                    onClick={() => handleUpdate({ lutPath: null, lutName: undefined })}
                     type="button"
                   >
                     Remove
@@ -1023,26 +1042,237 @@ export function ColorGradingPanel({
               />
             </div>
 
-            <div className="cgp-section-label" style={{ marginTop: 12 }}>PRESET LUTS</div>
+            <div className="cgp-section-label" style={{ marginTop: 12 }}>BUILT-IN LUTS</div>
             <div className="cgp-lut-preset-grid">
               {[
-                { name: "Log → Rec.709",  path: "luts/log_to_rec709.cube" },
-                { name: "Cinematic",       path: "luts/cinematic.cube"     },
-                { name: "Warm Vintage",    path: "luts/warm_vintage.cube"  },
-                { name: "Cool Teal",       path: "luts/cool_teal.cube"     },
-                { name: "High Contrast",   path: "luts/high_contrast.cube" },
-                { name: "Faded Film",      path: "luts/faded_film.cube"    },
+                { name: "Rec.709",       path: "luts/log_to_rec709.cube" },
+                { name: "Cinematic",     path: "luts/cinematic.cube"     },
+                { name: "Warm Vintage",  path: "luts/warm_vintage.cube"  },
+                { name: "Cool Teal",     path: "luts/cool_teal.cube"     },
+                { name: "High Contrast", path: "luts/high_contrast.cube" },
+                { name: "Faded Film",    path: "luts/faded_film.cube"    },
+                { name: "Kodachrome",    path: "luts/kodachrome.cube"    },
+                { name: "Fuji Astia",    path: "luts/fuji_astia.cube"    },
+                { name: "Bleach Bypass", path: "luts/bleach_bypass.cube" },
+                { name: "Portrait",      path: "luts/portrait.cube"      },
               ].map((p) => (
                 <button
                   key={p.path}
                   className={`cgp-lut-preset-btn${grade.lutPath === p.path ? " active" : ""}`}
-                  onClick={() => handleUpdate({ lutPath: p.path })}
+                  onClick={() => handleUpdate({ lutPath: p.path, lutName: p.name })}
                   type="button"
                 >
                   {p.name}
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ─── COLORSLICE ─── */}
+        {activePanel === "colorslice" && (
+          <div className="cgp-colorslice">
+            <div className="cgp-section-label">COLORSLICE — SIX-VECTOR GRADING</div>
+            {/* Vector selector swatches */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+              {(Object.entries({
+                red:     { emoji: '🔴', hue: 0   },
+                yellow:  { emoji: '🟡', hue: 60  },
+                green:   { emoji: '🟢', hue: 120 },
+                cyan:    { emoji: '🩵', hue: 180 },
+                blue:    { emoji: '🔵', hue: 240 },
+                magenta: { emoji: '🟣', hue: 300 },
+              }) as [keyof ColorSliceState['vectors'], { emoji: string; hue: number }][]).map(([key, info]) => {
+                const slice = grade.colorSlice ?? createDefaultColorSlice();
+                const adj = slice.vectors[key];
+                const isActive = activeVector === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setActiveVector(key)}
+                    type="button"
+                    title={`${key.charAt(0).toUpperCase() + key.slice(1)}: hue ${adj.hue > 0 ? '+' : ''}${adj.hue.toFixed(0)}°, sat ${adj.saturation > 0 ? '+' : ''}${adj.saturation.toFixed(2)}`}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      border: `2px solid ${isActive ? '#7c3aed' : 'rgba(255,255,255,0.12)'}`,
+                      background: isActive ? 'rgba(124,58,237,0.2)' : 'rgba(255,255,255,0.05)',
+                      color: '#e8e8e8',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      filter: adj.hue !== 0 ? `hue-rotate(${adj.hue}deg)` : undefined,
+                    }}
+                  >
+                    {info.emoji}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Sliders for selected vector */}
+            {(() => {
+              const slice = grade.colorSlice ?? createDefaultColorSlice();
+              const adj = slice.vectors[activeVector];
+              function updateVector(updates: Partial<VectorAdjustment>) {
+                const newSlice: ColorSliceState = {
+                  vectors: {
+                    ...slice.vectors,
+                    [activeVector]: { ...adj, ...updates }
+                  }
+                };
+                handleUpdate({ colorSlice: newSlice });
+              }
+              return (
+                <div className="cgp-sliders-grid">
+                  <SliderRow label="Hue Shift" value={adj.hue} min={-180} max={180} step={1} resetValue={0}
+                    accentColor="rgba(255,200,50,0.85)" onChange={(v) => updateVector({ hue: v })}
+                    formatValue={(v) => (v >= 0 ? '+' : '') + v.toFixed(0) + '°'} />
+                  <SliderRow label="Saturation" value={adj.saturation} min={-1} max={1} step={0.01} resetValue={0}
+                    accentColor="rgba(200,100,255,0.85)" onChange={(v) => updateVector({ saturation: v })}
+                    formatValue={(v) => (v >= 0 ? '+' : '') + v.toFixed(2)} />
+                  <SliderRow label="Luminance" value={adj.luminance} min={-1} max={1} step={0.01} resetValue={0}
+                    accentColor="rgba(255,255,255,0.7)" onChange={(v) => updateVector({ luminance: v })}
+                    formatValue={(v) => (v >= 0 ? '+' : '') + v.toFixed(2)} />
+                  <SliderRow label="Softness" value={adj.softness} min={0} max={1} step={0.01} resetValue={0.3}
+                    accentColor="rgba(100,200,255,0.85)" onChange={(v) => updateVector({ softness: v })}
+                    formatValue={(v) => v.toFixed(2)} />
+                  <button
+                    className="cgp-btn muted"
+                    type="button"
+                    style={{ marginTop: 4, alignSelf: 'flex-start' }}
+                    onClick={() => updateVector(createDefaultVectorAdjustment())}
+                  >Reset Vector</button>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* ─── GALLERY (Still Store) ─── */}
+        {activePanel === "gallery" && (
+          <div className="cgp-gallery">
+            <div className="cgp-section-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>📷 GALLERY — COLOR STILLS</span>
+              <button
+                className="cgp-btn"
+                type="button"
+                onClick={() => {
+                  // Capture thumbnail from video ref
+                  const video = videoRef.current;
+                  if (!video || !onAddColorStill) return;
+                  const canvas = document.createElement('canvas');
+                  canvas.width = 80; canvas.height = 45;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  try {
+                    ctx.drawImage(video, 0, 0, 80, 45);
+                    const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
+                    const currentGrade = grade;
+                    const still: ColorStill = {
+                      id: createId(),
+                      label: `Still ${(colorStills?.length ?? 0) + 1}`,
+                      thumbnail,
+                      grade: JSON.parse(JSON.stringify(currentGrade)) as ColorGrade,
+                      capturedAt: Date.now(),
+                      clipId: selectedClipId ?? '',
+                    };
+                    onAddColorStill(still);
+                  } catch {
+                    // Fallback if video is cross-origin
+                    const still: ColorStill = {
+                      id: createId(),
+                      label: `Still ${(colorStills?.length ?? 0) + 1}`,
+                      thumbnail: '',
+                      grade: JSON.parse(JSON.stringify(grade)) as ColorGrade,
+                      capturedAt: Date.now(),
+                      clipId: selectedClipId ?? '',
+                    };
+                    onAddColorStill(still);
+                  }
+                }}
+                title="Grab current frame as a color still"
+              >📷 Grab Still</button>
+            </div>
+
+            {(!colorStills || colorStills.length === 0) && (
+              <div style={{ padding: 16, textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 12 }}>
+                No stills yet. Click "Grab Still" to capture the current grade.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 0' }}>
+              {colorStills?.map((still) => (
+                <div
+                  key={still.id}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer' }}
+                  onClick={() => {
+                    // Apply stored grade to current clip
+                    handleUpdate(still.grade);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setStillContextMenu({ stillId: still.id, x: e.clientX, y: e.clientY });
+                  }}
+                  title={`${still.label} — click to apply grade`}
+                >
+                  <div style={{
+                    width: 80, height: 45,
+                    background: still.thumbnail ? `url(${still.thumbnail}) center/cover` : 'rgba(255,255,255,0.06)',
+                    borderRadius: 4,
+                    border: '2px solid rgba(255,255,255,0.12)',
+                    position: 'relative',
+                    overflow: 'hidden',
+                  }}>
+                    {!still.thumbnail && (
+                      <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, opacity:0.4 }}>🎨</div>
+                    )}
+                  </div>
+                  {renamingStillId === still.id ? (
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={() => {
+                        if (renameValue.trim()) onRenameColorStill?.(still.id, renameValue.trim());
+                        setRenamingStillId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (renameValue.trim()) onRenameColorStill?.(still.id, renameValue.trim());
+                          setRenamingStillId(null);
+                        } else if (e.key === 'Escape') {
+                          setRenamingStillId(null);
+                        }
+                      }}
+                      style={{ width: 76, fontSize: 9, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 3, color: '#e8e8e8', padding: '1px 4px' }}
+                    />
+                  ) : (
+                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {still.label}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Context menu */}
+            {stillContextMenu && (
+              <div
+                className="timeline-context-menu"
+                style={{ position: 'fixed', left: stillContextMenu.x, top: stillContextMenu.y, zIndex: 9999, background: '#1e1e2a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: 4, minWidth: 120 }}
+                onMouseLeave={() => setStillContextMenu(null)}
+              >
+                <button className="ctx-menu-item" type="button" onClick={() => { setStillContextMenu(null); }}>Apply Grade</button>
+                <button className="ctx-menu-item" type="button" onClick={() => {
+                  const still = colorStills?.find(s => s.id === stillContextMenu.stillId);
+                  if (still) { setRenamingStillId(still.id); setRenameValue(still.label); }
+                  setStillContextMenu(null);
+                }}>Rename</button>
+                <button className="ctx-menu-item danger" type="button" onClick={() => {
+                  onRemoveColorStill?.(stillContextMenu.stillId);
+                  setStillContextMenu(null);
+                }}>Delete</button>
+              </div>
+            )}
           </div>
         )}
 

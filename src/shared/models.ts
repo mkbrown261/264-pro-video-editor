@@ -225,6 +225,54 @@ export interface ColorCurves {
   hueVsSat: CurvePoint[];
 }
 
+// ── ColorSlice — six-vector grading ──────────────────────────────────────────
+
+export interface VectorAdjustment {
+  hue:        number;  // -180 to +180 degrees
+  saturation: number;  // -1 to +1
+  luminance:  number;  // -1 to +1
+  softness:   number;  // 0-1 (range of color selection)
+}
+
+export interface ColorSliceState {
+  vectors: {
+    red:     VectorAdjustment;
+    yellow:  VectorAdjustment;
+    green:   VectorAdjustment;
+    cyan:    VectorAdjustment;
+    blue:    VectorAdjustment;
+    magenta: VectorAdjustment;
+  };
+}
+
+export function createDefaultVectorAdjustment(): VectorAdjustment {
+  return { hue: 0, saturation: 0, luminance: 0, softness: 0.3 };
+}
+
+export function createDefaultColorSlice(): ColorSliceState {
+  return {
+    vectors: {
+      red:     createDefaultVectorAdjustment(),
+      yellow:  createDefaultVectorAdjustment(),
+      green:   createDefaultVectorAdjustment(),
+      cyan:    createDefaultVectorAdjustment(),
+      blue:    createDefaultVectorAdjustment(),
+      magenta: createDefaultVectorAdjustment(),
+    }
+  };
+}
+
+// ── Color Still (Gallery) ─────────────────────────────────────────────────────
+
+export interface ColorStill {
+  id: string;
+  label: string;
+  thumbnail: string;       // base64 data URL of viewer frame
+  grade: ColorGrade;       // the full grade at time of capture
+  capturedAt: number;
+  clipId: string;
+}
+
 export interface ColorGrade {
   // Primary wheels
   lift: RGBValue;
@@ -242,6 +290,9 @@ export interface ColorGrade {
   // LUT
   lutPath: string | null;
   lutIntensity: number;  // 0-1
+  lutName?: string;      // display name for built-in LUTs
+  // ColorSlice six-vector grading
+  colorSlice?: ColorSliceState;
   // Masks (which masks are color-grade targets)
   maskIds: string[];
   // Keyframe tracks
@@ -318,7 +369,8 @@ export type EffectType =
   | "noise_reduction"
   | "sharpening"
   | "film_grain"
-  | "lens_distortion";
+  | "lens_distortion"
+  | "film_look_creator";
 
 export interface ClipEffect {
   id: string;
@@ -538,12 +590,33 @@ export interface TitleClipConfig {
   posY: number;
 }
 
+// ── Text-Based Editing ────────────────────────────────────────────────────────
+
+export interface TranscriptWord {
+  word: string;
+  startMs: number;
+  endMs: number;
+  confidence: number;
+  selected: boolean;
+}
+
+export interface Transcript {
+  assetId: string;
+  words: TranscriptWord[];
+  language: string;
+  generatedAt: number;
+}
+
+// ── EditorProject ─────────────────────────────────────────────────────────────
+
 export interface EditorProject {
   id: string;
   name: string;
   assets: MediaAsset[];
   sequence: TimelineSequence;
   subtitleCues?: SubtitleCue[];
+  transcripts?: Record<string, Transcript>;   // keyed by assetId
+  colorStills?: ColorStill[];
 }
 
 // ── Playback & Editor State ───────────────────────────────────────────────────

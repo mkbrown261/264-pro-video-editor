@@ -391,6 +391,67 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     // when false use the original source via media:// protocol
     const [proxyMode, setProxyMode] = useState(true);
 
+    // ── GAP 3B: Safe Area Overlay ─────────────────────────────────────────────
+    const [showSafeArea, setShowSafeArea] = useState(false);
+    const [safeAreaType, setSafeAreaType] = useState<'broadcast' | 'cinema' | 'action'>('broadcast');
+
+    // ── GAP 4: Dual Viewer (Source + Program) ─────────────────────────────────
+    const [dualViewerMode, setDualViewerMode] = useState(false);
+    const sourceVideoRef = useRef<HTMLVideoElement>(null);
+    const [sourceInFrame, setSourceInFrame] = useState(0);
+    const [sourceOutFrame, setSourceOutFrame] = useState(0);
+    const [sourceCurrentFrame, setSourceCurrentFrame] = useState(0);
+    const [sourcePlaying, setSourcePlaying] = useState(false);
+    const sourceRafRef = useRef<number>(0);
+
+    // Load source asset video when selectedAsset changes in dual mode
+    useEffect(() => {
+      const video = sourceVideoRef.current;
+      if (!video || !selectedAsset?.previewUrl) return;
+      video.src = selectedAsset.previewUrl;
+      video.load();
+      setSourceInFrame(0);
+      setSourceOutFrame(0);
+      setSourceCurrentFrame(0);
+      setSourcePlaying(false);
+    }, [selectedAsset?.previewUrl]);
+
+    // Sync sourceCurrentFrame from video time
+    useEffect(() => {
+      const video = sourceVideoRef.current;
+      if (!video) return;
+      const onTimeUpdate = () => {
+        setSourceCurrentFrame(Math.round(video.currentTime * sequenceFps));
+      };
+      video.addEventListener('timeupdate', onTimeUpdate);
+      return () => video.removeEventListener('timeupdate', onTimeUpdate);
+    }, [sequenceFps]);
+
+    const toggleSourcePlayback = useCallback(() => {
+      const video = sourceVideoRef.current;
+      if (!video) return;
+      if (sourcePlaying) {
+        video.pause();
+        setSourcePlaying(false);
+      } else {
+        void video.play();
+        setSourcePlaying(true);
+      }
+    }, [sourcePlaying]);
+
+    const setSourceIn = useCallback(() => {
+      setSourceInFrame(sourceCurrentFrame);
+    }, [sourceCurrentFrame]);
+
+    const setSourceOut = useCallback(() => {
+      setSourceOutFrame(sourceCurrentFrame);
+    }, [sourceCurrentFrame]);
+
+    // Cleanup source RAF on unmount
+    useEffect(() => {
+      return () => { if (sourceRafRef.current) cancelAnimationFrame(sourceRafRef.current); };
+    }, []);
+
     // Build a patched version of activeSegment that overrides previewUrl
     // based on proxyMode. When using original, we construct the media:// URL
     // from the asset's sourcePath (same pattern as probeMediaFile returns).
@@ -657,6 +718,77 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         ref={panelRef}
         className={`panel viewer-panel${isFullscreen ? " viewer-panel-fullscreen" : ""}`}
       >
+
+        {/* ── GAP 4: Dual Viewer — Source panel (shown above stage in a side-by-side row when dualViewerMode) ── */}
+        {dualViewerMode && (
+          <div style={{ display: 'flex', gap: 4, padding: '4px 4px 0', height: '45%', minHeight: 0, overflow: 'hidden' }}>
+            {/* SOURCE viewer */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0a0e1a', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <div style={{ padding: '4px 8px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                SOURCE {selectedAsset ? `— ${selectedAsset.name}` : ''}
+              </div>
+              <div style={{ flex: 1, position: 'relative', background: '#000', overflow: 'hidden' }}>
+                {selectedAsset?.previewUrl ? (
+                  <video
+                    ref={sourceVideoRef}
+                    src={selectedAsset.previewUrl}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                    muted
+                    playsInline
+                    preload="auto"
+                  />
+                ) : (
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151', fontSize: 11 }}>
+                    Select an asset
+                  </div>
+                )}
+              </div>
+              {/* Source transport */}
+              <div style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4, borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+                <button onClick={toggleSourcePlayback} style={{ padding: '2px 8px', borderRadius: 4, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 11, cursor: 'pointer' }}>
+                  {sourcePlaying ? '⏸' : '▶'}
+                </button>
+                <button onClick={setSourceIn} title="Set In Point (I)" style={{ padding: '2px 6px', borderRadius: 4, border: 'none', background: 'rgba(255,255,255,0.07)', color: '#e2e8f0', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}>I</button>
+                <button onClick={setSourceOut} title="Set Out Point (O)" style={{ padding: '2px 6px', borderRadius: 4, border: 'none', background: 'rgba(255,255,255,0.07)', color: '#e2e8f0', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}>O</button>
+                <span style={{ fontSize: 10, color: '#64748b', fontVariantNumeric: 'tabular-nums', marginLeft: 2 }}>
+                  {formatTimecode(sourceCurrentFrame, sequenceFps)}
+                </span>
+                <span style={{ flex: 1 }} />
+                {sourceOutFrame > sourceInFrame && (
+                  <>
+                    <button
+                      title="Insert at playhead"
+                      style={{ padding: '2px 8px', borderRadius: 4, border: 'none', background: 'rgba(124,58,237,0.3)', color: '#c4b5fd', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}
+                      onClick={() => {
+                        /* Insert stub */
+                        alert(`Insert ${selectedAsset?.name ?? 'asset'} [${formatTimecode(sourceInFrame, sequenceFps)} → ${formatTimecode(sourceOutFrame, sequenceFps)}] at playhead`);
+                      }}
+                    >Insert</button>
+                    <button
+                      title="Overwrite at playhead"
+                      style={{ padding: '2px 8px', borderRadius: 4, border: 'none', background: 'rgba(59,130,246,0.3)', color: '#93c5fd', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}
+                      onClick={() => {
+                        /* Overwrite stub */
+                        alert(`Overwrite with ${selectedAsset?.name ?? 'asset'} [${formatTimecode(sourceInFrame, sequenceFps)} → ${formatTimecode(sourceOutFrame, sequenceFps)}]`);
+                      }}
+                    >Overwrite</button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* PROGRAM label panel (just a label; the main stage below shows program) */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0a0e1a', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <div style={{ padding: '4px 8px', fontSize: 10, fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                PROGRAM
+              </div>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151', fontSize: 11 }}>
+                ↓ Timeline output below
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Hidden SVG for per-channel grade filter ── */}
         {gradeStyle.hasSvgEffect && (
           <svg
@@ -733,6 +865,39 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
               <div className="viewer-empty-icon">▶</div>
               <p>Import footage and add clips to the timeline.</p>
               <span>The viewer follows the playhead during playback.</span>
+            </div>
+          )}
+
+          {/* ── GAP 3B: Safe Area Overlay ── */}
+          {showSafeArea && (
+            <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5 }}>
+              {/* Action safe area - 90% */}
+              <div style={{
+                position: 'absolute',
+                left: '5%', top: '5%', right: '5%', bottom: '5%',
+                border: '1px solid rgba(255,255,0,0.6)',
+                borderRadius: 1,
+              }} />
+              {/* Title safe area - 80% */}
+              <div style={{
+                position: 'absolute',
+                left: '10%', top: '10%', right: '10%', bottom: '10%',
+                border: '1px solid rgba(255,100,0,0.6)',
+              }} />
+              {/* Cinema 2.39:1 bars */}
+              {safeAreaType === 'cinema' && (
+                <>
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '12.5%', background: 'rgba(0,0,0,0.5)' }} />
+                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '12.5%', background: 'rgba(0,0,0,0.5)' }} />
+                </>
+              )}
+              {/* Center crosshair */}
+              <div style={{ position:'absolute', left:'50%', top:'50%', width:12, height:1, background:'rgba(255,255,255,0.4)', transform:'translate(-50%,-50%)' }} />
+              <div style={{ position:'absolute', left:'50%', top:'50%', width:1, height:12, background:'rgba(255,255,255,0.4)', transform:'translate(-50%,-50%)' }} />
+              {/* Label */}
+              <div style={{ position:'absolute', top:4, left:4, fontSize:9, color:'rgba(255,255,0,0.7)', fontWeight:600, letterSpacing:'0.05em' }}>
+                {safeAreaType === 'broadcast' ? 'BROADCAST 90/80' : safeAreaType === 'cinema' ? 'CINEMA 2.39:1' : 'ACTION SAFE'}
+              </div>
             </div>
           )}
 
@@ -916,6 +1081,36 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             <button className={`transport-btn tool-btn${toolMode === "blade"  ? " active" : ""}`} onClick={onToggleBladeTool}            title="Blade tool (B)"  type="button">✂ <kbd>B</kbd></button>
             <button className="transport-btn muted" disabled={!activeSegment} onClick={onSplitAtPlayhead} title="Split at playhead (Cmd/Ctrl+B)" type="button">Split</button>
             <button className="transport-btn muted" onClick={() => void toggleFullscreen()} title="Fullscreen (F)" type="button">{isFullscreen ? "⊠" : "⊞"} <kbd>F</kbd></button>
+            {/* Dual Viewer toggle */}
+            <button
+              className={`transport-btn${dualViewerMode ? " active" : ""}`}
+              onClick={() => setDualViewerMode(v => !v)}
+              title="Dual Viewer: Source + Program"
+              type="button"
+              style={{ fontSize: 10, fontWeight: 700 }}
+            >⧉ Dual</button>
+            {/* Safe Area toggle */}
+            <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+              <button
+                className={`transport-btn${showSafeArea ? " active" : ""}`}
+                onClick={() => setShowSafeArea(v => !v)}
+                title="Toggle Safe Area Overlay"
+                type="button"
+                style={{ fontSize: 10, fontWeight: 700 }}
+              >Safe</button>
+              {showSafeArea && (
+                <select
+                  value={safeAreaType}
+                  onChange={(e) => setSafeAreaType(e.target.value as 'broadcast' | 'cinema' | 'action')}
+                  style={{ marginLeft: 2, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: '#e8e8e8', fontSize: 9, padding: '2px 4px', cursor: 'pointer' }}
+                  title="Safe area type"
+                >
+                  <option value="broadcast">Broadcast</option>
+                  <option value="cinema">Cinema 2.39:1</option>
+                  <option value="action">Action Safe</option>
+                </select>
+              )}
+            </div>
           </div>
         </div>
 

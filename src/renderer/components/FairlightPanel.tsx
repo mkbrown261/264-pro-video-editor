@@ -8,6 +8,7 @@ interface FairlightPanelProps {
   onUpdateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   masterVolume: number;
   onSetMasterVolume: (v: number) => void;
+  selectedClipId?: string | null;
 }
 
 const DEFAULT_EQ_BANDS: EQBand[] = [
@@ -65,7 +66,7 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume }: FairlightPanelProps) {
+export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId }: FairlightPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
@@ -89,6 +90,35 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
   const [masterVuR, setMasterVuR] = useState(0);
   const animFrameRef = useRef<number>(0);
   const eqCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // AI Audio Tools state
+  const [aiAudioExpanded, setAiAudioExpanded] = useState(true);
+  const [musicStemMode, setMusicStemMode] = useState<'all' | 'vocals_only' | 'instrumental'>('all');
+  const [dialogueMode, setDialogueMode] = useState<'dialogue' | 'background' | 'both'>('dialogue');
+  const [voiceSensitivity, setVoiceSensitivity] = useState(0.8);
+  const [aiToast, setAiToast] = useState<string | null>(null);
+
+  const showAiToast = (msg: string) => {
+    setAiToast(msg);
+    setTimeout(() => setAiToast(null), 4000);
+  };
+
+  const applyAudioAI = async (mode: string) => {
+    if (!selectedClipId) {
+      showAiToast('⚠️ No clip selected. Select a clip on the timeline first.');
+      return;
+    }
+    showAiToast('⏳ Processing…');
+    try {
+      const api = (window as unknown as { electronAPI?: { applyAudioAI?: (id: string, mode: string) => Promise<{ success: boolean; message: string }> } }).electronAPI;
+      const result = api?.applyAudioAI
+        ? await api.applyAudioAI(selectedClipId, mode)
+        : { success: true, message: 'AI audio processing requires API key. Add REPLICATE_API_KEY in Settings.' };
+      showAiToast(result.message);
+    } catch {
+      showAiToast('AI audio processing requires API key. Add REPLICATE_API_KEY in Settings.');
+    }
+  };
 
   const selectedState = selectedTrackId ? trackStates[selectedTrackId] : null;
   const selectedTrack = audioTracks.find(t => t.id === selectedTrackId);
@@ -221,7 +251,7 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0d1117", color: "#e2e8f0", fontSize: 12, overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0d1117", color: "#e2e8f0", fontSize: 12, overflow: "hidden", position: "relative" }}>
       {/* Header */}
       <div style={{ padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>🎚 Fairlight Audio</span>
@@ -374,6 +404,90 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
             </div>
           );
         })}
+      </div>
+
+      {/* AI Audio Toast */}
+      {aiToast && (
+        <div style={{ position: 'absolute', top: 48, left: '50%', transform: 'translateX(-50%)', background: '#1e1b4b', color: '#c4b5fd', padding: '8px 16px', borderRadius: 8, fontSize: 12, zIndex: 100, border: '1px solid rgba(124,58,237,0.4)', maxWidth: 360, textAlign: 'center', boxShadow: '0 4px 20px rgba(0,0,0,0.6)' }}>
+          {aiToast}
+        </div>
+      )}
+
+      {/* AI Audio Tools */}
+      <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+        <button
+          onClick={() => setAiAudioExpanded(v => !v)}
+          style={{ width: '100%', padding: '8px 12px', background: 'transparent', border: 'none', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+        >
+          <span style={{ fontSize: 14 }}>🤖</span>
+          <span>AI Audio Tools</span>
+          <span style={{ marginLeft: 'auto', color: '#475569', fontSize: 10 }}>{aiAudioExpanded ? '▲' : '▼'}</span>
+        </button>
+        {aiAudioExpanded && (
+          <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+            {/* Music Remixer */}
+            <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: 10, border: '1px solid rgba(255,255,255,0.07)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <span style={{ fontSize: 14 }}>🎵</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>Music Remixer</span>
+              </div>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Isolate stems from any music track</div>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                {(['all', 'vocals_only', 'instrumental'] as const).map(mode => (
+                  <button key={mode} onClick={() => setMusicStemMode(mode)} style={{ padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 600, background: musicStemMode === mode ? '#7c3aed' : 'rgba(255,255,255,0.07)', color: musicStemMode === mode ? '#fff' : '#94a3b8' }}>
+                    {mode === 'all' ? 'All' : mode === 'vocals_only' ? 'Vocals Only' : 'Instrumental'}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                {(['Vocals', 'Drums', 'Bass', 'Other'] as const).map(stem => (
+                  <div key={stem} style={{ padding: '2px 6px', borderRadius: 3, background: 'rgba(124,58,237,0.15)', color: '#a78bfa', fontSize: 9, fontWeight: 700 }}>{stem}</div>
+                ))}
+              </div>
+              <button onClick={() => applyAudioAI(`music_remixer:${musicStemMode}`)} style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                Apply to Selected Clip
+              </button>
+            </div>
+
+            {/* Dialogue Separator */}
+            <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: 10, border: '1px solid rgba(255,255,255,0.07)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <span style={{ fontSize: 14 }}>🎤</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>Dialogue Separator</span>
+              </div>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Extract clean dialogue from ambient audio</div>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                {(['dialogue', 'background', 'both'] as const).map(mode => (
+                  <button key={mode} onClick={() => setDialogueMode(mode)} style={{ padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 600, background: dialogueMode === mode ? '#7c3aed' : 'rgba(255,255,255,0.07)', color: dialogueMode === mode ? '#fff' : '#94a3b8', textTransform: 'capitalize' }}>
+                    {mode === 'both' ? 'Both' : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => applyAudioAI(`dialogue_separator:${dialogueMode}`)} style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                Apply to Selected Clip
+              </button>
+            </div>
+
+            {/* Voice Isolation */}
+            <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: 10, border: '1px solid rgba(255,255,255,0.07)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <span style={{ fontSize: 14 }}>🔇</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>Voice Isolation</span>
+              </div>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Remove all non-speech audio from clip</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 10, color: '#94a3b8', minWidth: 60 }}>Sensitivity</span>
+                <input type="range" min={0} max={1} step={0.01} value={voiceSensitivity} onChange={e => setVoiceSensitivity(Number(e.target.value))} style={{ flex: 1, accentColor: '#7c3aed' }} />
+                <span style={{ fontSize: 10, color: '#a855f7', minWidth: 32, textAlign: 'right' }}>{Math.round(voiceSensitivity * 100)}%</span>
+              </div>
+              <button onClick={() => applyAudioAI(`voice_isolation:${voiceSensitivity.toFixed(2)}`)} style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                Apply to Selected Clip
+              </button>
+            </div>
+
+          </div>
+        )}
       </div>
 
       {/* Master bus */}

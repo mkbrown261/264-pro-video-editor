@@ -4,6 +4,8 @@ import {
   type ClipMask,
   type ClipTransitionType,
   type ColorGrade,
+  type ColorStill,
+  type Transcript,
   createDefaultColorGrade,
   createEmptyClip,
   createEmptyProject,
@@ -212,6 +214,21 @@ interface EditorStore {
   closeFusion: () => void;
   setCompGraph: (clipId: string, graph: import("../../shared/compositing").CompGraph) => void;
   clearCompGraph: (clipId: string) => void;
+
+  // ── Ripple operations ──
+  rippleDelete: (clipId: string) => void;
+
+  // ── Fixed Playhead Mode ──
+  fixedPlayheadMode: boolean;
+  toggleFixedPlayheadMode: () => void;
+
+  // ── Transcripts (Text-Based Editing) ──
+  setTranscript: (assetId: string, transcript: Transcript) => void;
+
+  // ── Color Stills Gallery ──
+  addColorStill: (still: ColorStill) => void;
+  removeColorStill: (stillId: string) => void;
+  renameColorStill: (stillId: string, label: string) => void;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -2189,6 +2206,103 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           ),
         },
       },
+    }));
+  },
+
+  // ── Ripple Delete ─────────────────────────────────────────────────────────
+  rippleDelete: (clipId) => {
+    set(withUndo("Ripple Delete", (state) => {
+      const linked = getLinkedClips(state.project, clipId);
+      if (!linked.length) return state;
+      const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+      const segsById = new Map(segs.map((s) => [s.clip.id, s]));
+      const linkedIds = new Set(linked.map((c) => c.id));
+      const trackIds = linked.map((c) => c.trackId);
+      const removedByTrack = new Map<string, Array<{ dur: number; start: number }>>();
+      for (const clip of linked) {
+        const seg = segsById.get(clip.id);
+        if (!seg) continue;
+        const arr = removedByTrack.get(clip.trackId) ?? [];
+        arr.push({ dur: seg.durationFrames, start: seg.startFrame });
+        removedByTrack.set(clip.trackId, arr);
+      }
+      const next = resolveTracks(
+        {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            clips: state.project.sequence.clips
+              .filter((c) => !linkedIds.has(c.id))
+              .map((c) => {
+                const removed = removedByTrack.get(c.trackId);
+                if (!removed?.length) return c;
+                const ripple = removed.reduce((t, r) => r.start < c.startFrame ? t + r.dur : t, 0);
+                return ripple > 0 ? { ...c, startFrame: Math.max(0, c.startFrame - ripple) } : c;
+              })
+          }
+        },
+        trackIds
+      );
+      const nextSegs = buildTimelineSegments(next.sequence, next.assets);
+      const fallback = findPlayableSegmentAtFrame(nextSegs, state.playback.playheadFrame, "video") ?? nextSegs[0] ?? null;
+      return {
+        project: next,
+        selectedClipId: fallback?.clip.id ?? null,
+        selectedAssetId: fallback?.asset.id ?? state.selectedAssetId,
+        playback: {
+          isPlaying: nextSegs.length ? state.playback.isPlaying : false,
+          playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
+        }
+      };
+    }));
+  },
+
+  // ── Fixed Playhead Mode ───────────────────────────────────────────────────
+  fixedPlayheadMode: false,
+  toggleFixedPlayheadMode: () => {
+    set((state) => ({ fixedPlayheadMode: !state.fixedPlayheadMode }));
+  },
+
+  // ── Transcripts ───────────────────────────────────────────────────────────
+  setTranscript: (assetId, transcript) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        transcripts: {
+          ...(state.project.transcripts ?? {}),
+          [assetId]: transcript
+        }
+      }
+    }));
+  },
+
+  // ── Color Stills Gallery ──────────────────────────────────────────────────
+  addColorStill: (still) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        colorStills: [...(state.project.colorStills ?? []), still]
+      }
+    }));
+  },
+
+  removeColorStill: (stillId) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        colorStills: (state.project.colorStills ?? []).filter((s) => s.id !== stillId)
+      }
+    }));
+  },
+
+  renameColorStill: (stillId, label) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        colorStills: (state.project.colorStills ?? []).map((s) =>
+          s.id === stillId ? { ...s, label } : s
+        )
+      }
     }));
   },
 }));

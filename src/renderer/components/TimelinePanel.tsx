@@ -166,6 +166,9 @@ interface TimelinePanelProps {
   onUpdateMarker?: (markerId: string, updates: Partial<TimelineMarker>) => void;
   /** Add a keyframe to the selected clip at the current playhead position */
   onAddKeyframe?: (clipId: string, property: "opacity" | "volume" | "posX" | "posY" | "scaleX" | "scaleY" | "rotation", frame: number, value: number) => void;
+  /** Fixed playhead mode — playhead stays centered, clips scroll under it */
+  fixedPlayheadMode?: boolean;
+  onToggleFixedPlayheadMode?: () => void;
 }
 
 const MIN_PPF = 1.5;
@@ -221,6 +224,8 @@ export function TimelinePanel({
   onRemoveMarker,
   onUpdateMarker,
   onAddKeyframe,
+  fixedPlayheadMode = false,
+  onToggleFixedPlayheadMode,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -271,6 +276,25 @@ export function TimelinePanel({
       localStorage.setItem("264pro_snap_div_idx", String(snapDivIdx));
     } catch { /* noop */ }
   }, [snapEnabled, snapDivIdx]);
+
+  // ── View options (GAP 9) ──────────────────────────────────────────────────
+  const [clipHeight, setClipHeight] = useState<'small' | 'medium' | 'large'>(() => {
+    try { return (localStorage.getItem("264pro_clip_height") as 'small' | 'medium' | 'large') || 'medium'; } catch { return 'medium'; }
+  });
+  const [showClipThumbnails, setShowClipThumbnails] = useState<boolean>(() => {
+    try { return localStorage.getItem("264pro_show_thumbs") !== "false"; } catch { return true; }
+  });
+  const [showClipNames, setShowClipNames] = useState<boolean>(() => {
+    try { return localStorage.getItem("264pro_show_names") !== "false"; } catch { return true; }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("264pro_clip_height", clipHeight);
+      localStorage.setItem("264pro_show_thumbs", String(showClipThumbnails));
+      localStorage.setItem("264pro_show_names", String(showClipNames));
+    } catch { /* noop */ }
+  }, [clipHeight, showClipThumbnails, showClipNames]);
+  const CLIP_HEIGHT_MAP: Record<'small' | 'medium' | 'large', number> = { small: 32, medium: 56, large: 80 };
 
   // ── Interaction state ─────────────────────────────────────────────────────
   const [trimState, setTrimState]                   = useState<TrimState | null>(null);
@@ -349,6 +373,16 @@ export function TimelinePanel({
   const canvasWidth    = Math.max(timelineFrames * pixelsPerFrame, 960);
   const zoomPercent    = Math.round((pixelsPerFrame / 6) * 100);
   const playheadLeft   = Math.round(playheadFrame * pixelsPerFrame);
+
+  // ── GAP 3A: Fixed Playhead Mode — scroll timeline so playhead stays centered ──
+  useEffect(() => {
+    if (!fixedPlayheadMode) return;
+    const editor = timelineEditorRef.current;
+    if (!editor) return;
+    const visibleWidth = editor.clientWidth - LABEL_W;
+    const desiredScroll = Math.max(0, playheadLeft - visibleWidth / 2);
+    editor.scrollLeft = desiredScroll;
+  }, [playheadFrame, fixedPlayheadMode, pixelsPerFrame]);
 
   // Helper: get frame under cursor accounting for scroll + label offset
   function getFrameAt(clientX: number, containerRef: React.RefObject<HTMLDivElement | null>) {
@@ -1309,6 +1343,37 @@ export function TimelinePanel({
           )}
         </div>
 
+        {/* View options — clip height S/M/L + thumbnail + name toggles + fixed playhead */}
+        <div className="tl-view-options">
+          {(['small','medium','large'] as const).map(size => (
+            <button
+              key={size}
+              onClick={() => setClipHeight(size)}
+              className={`tl-snap-btn${clipHeight === size ? " active" : ""}`}
+              title={`Clip height: ${size}`}
+              type="button"
+            >{size === 'small' ? 'S' : size === 'medium' ? 'M' : 'L'}</button>
+          ))}
+          <button
+            onClick={() => setShowClipThumbnails(v => !v)}
+            className={`tl-snap-btn${showClipThumbnails ? " active" : ""}`}
+            title={showClipThumbnails ? "Hide clip thumbnails" : "Show clip thumbnails"}
+            type="button"
+          >🖼</button>
+          <button
+            onClick={() => setShowClipNames(v => !v)}
+            className={`tl-snap-btn${showClipNames ? " active" : ""}`}
+            title={showClipNames ? "Hide clip names" : "Show clip names"}
+            type="button"
+          >T</button>
+          <button
+            onClick={() => onToggleFixedPlayheadMode?.()}
+            className={`tl-snap-btn${fixedPlayheadMode ? " active" : ""}`}
+            title={fixedPlayheadMode ? "Fixed Playhead ON — click to disable" : "Fixed Playhead OFF — keeps playhead centered during playback"}
+            type="button"
+          >⊕</button>
+        </div>
+
         <div className="tl-header-right">
           <span className="tl-info">{zoomPercent}%</span>
           <button
@@ -1551,7 +1616,7 @@ export function TimelinePanel({
           {trackLayouts.map((layout) => {
             const isLocked = layout.track.locked;
             const isMuted  = layout.track.muted;
-            const trackH   = layout.track.height ?? (layout.track.kind === "video" ? 56 : 44);
+            const trackH   = CLIP_HEIGHT_MAP[clipHeight] ?? (layout.track.height ?? (layout.track.kind === "video" ? 56 : 44));
             const isReordering = trackReorderDrag?.trackId === layout.track.id;
 
             // Use whichever drag is active for ghost rendering
@@ -1829,7 +1894,7 @@ export function TimelinePanel({
                           width: clipWidth,
                           height: "calc(100% - 4px)",
                           // Fix 6: Prefer filmstrip repeating background; fall back to single thumbnail
-                          ...(segment.track.kind === "video" && (segment.asset.filmstripThumbs?.length || segment.asset.thumbnailUrl)
+                          ...(showClipThumbnails && segment.track.kind === "video" && (segment.asset.filmstripThumbs?.length || segment.asset.thumbnailUrl)
                             ? (() => {
                                 // Use first filmstrip thumb as repeating tile, or fallback to thumbnailUrl
                                 const thumbSrc = segment.asset.filmstripThumbs?.[0] ?? segment.asset.thumbnailUrl;
@@ -2054,7 +2119,7 @@ export function TimelinePanel({
 
                         {/* Clip content */}
                         <div className="timeline-clip-content">
-                          <strong className="clip-name">{segment.asset.name}</strong>
+                          {showClipNames && <strong className="clip-name">{segment.asset.name}</strong>}
                           {clipWidth > 60 && <span className="clip-dur">{formatDuration(segment.durationSeconds)}</span>}
                           {/* Status badges */}
                           {!segment.clip.isEnabled && (
