@@ -68,6 +68,10 @@ interface ViewerPanelProps {
   onAudioEngineRef?: (ref: import("../lib/AudioScheduler").AudioEngine | null) => void;
   /** Subtitle cues to overlay on the viewer */
   subtitleCues?: import("../../shared/models").SubtitleCue[];
+  /** Insert selected asset (trimmed to in/out) at playhead — ripple existing clips */
+  onInsertAtPlayhead?: (assetId: string, inFrame: number, outFrame: number) => void;
+  /** Overwrite at playhead with selected asset (trimmed to in/out) */
+  onOverwriteAtPlayhead?: (assetId: string, inFrame: number, outFrame: number) => void;
 }
 
 // ─── Transition helpers ───────────────────────────────────────────────────────
@@ -368,6 +372,8 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onStepFrames,
     onAudioEngineRef,
     subtitleCues,
+    onInsertAtPlayhead,
+    onOverwriteAtPlayhead,
   }, ref) {
 
     const panelRef       = useRef<HTMLElement | null>(null);
@@ -757,19 +763,23 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                 {sourceOutFrame > sourceInFrame && (
                   <>
                     <button
-                      title="Insert at playhead"
+                      title="Insert at playhead — ripples existing clips forward"
                       style={{ padding: '2px 8px', borderRadius: 4, border: 'none', background: 'rgba(124,58,237,0.3)', color: '#c4b5fd', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}
                       onClick={() => {
-                        /* Insert stub */
-                        alert(`Insert ${selectedAsset?.name ?? 'asset'} [${formatTimecode(sourceInFrame, sequenceFps)} → ${formatTimecode(sourceOutFrame, sequenceFps)}] at playhead`);
+                        if (!selectedAsset) return;
+                        if (onInsertAtPlayhead) {
+                          onInsertAtPlayhead(selectedAsset.id, sourceInFrame, sourceOutFrame);
+                        }
                       }}
                     >Insert</button>
                     <button
-                      title="Overwrite at playhead"
+                      title="Overwrite at playhead — replaces frames with asset"
                       style={{ padding: '2px 8px', borderRadius: 4, border: 'none', background: 'rgba(59,130,246,0.3)', color: '#93c5fd', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}
                       onClick={() => {
-                        /* Overwrite stub */
-                        alert(`Overwrite with ${selectedAsset?.name ?? 'asset'} [${formatTimecode(sourceInFrame, sequenceFps)} → ${formatTimecode(sourceOutFrame, sequenceFps)}]`);
+                        if (!selectedAsset) return;
+                        if (onOverwriteAtPlayhead) {
+                          onOverwriteAtPlayhead(selectedAsset.id, sourceInFrame, sourceOutFrame);
+                        }
                       }}
                     >Overwrite</button>
                   </>

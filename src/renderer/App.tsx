@@ -52,6 +52,8 @@ import { AIStoryboardPanel } from "./components/AIStoryboardPanel";
 import { ShotListPanel } from "./components/ShotListPanel";
 import { SmartSuggestionsBar } from "./components/SmartSuggestionsBar";
 import { type BatchPreset } from "./components/RenderQueuePanel";
+// Phase 5 new imports
+import { BeatSyncPanel } from "./components/BeatSyncPanel";
 
 // Pages: edit | color | fusion | audio
 type AppPage = "edit" | "color" | "fusion" | "audio";
@@ -582,6 +584,10 @@ export default function App() {
   const restoreClipSnapshot   = useEditorStore((s) => s.restoreClipHistorySnapshot);
   const groupNodes            = useEditorStore((s) => s.groupNodes);
   const addAssetToPoolStore   = useEditorStore((s) => s.addAssetToPool);
+  // ClawFlow AI
+  const autoColorMatch        = useEditorStore((s) => s.autoColorMatch);
+  const normalizeAudioLevels  = useEditorStore((s) => s.normalizeAudioLevels);
+  const closeAllGaps          = useEditorStore((s) => s.closeAllGaps);
 
   // ── Fusion store actions ────────────────────────────────────────────────────
   const fusionClipId = useEditorStore((s) => s.fusionClipId);
@@ -720,6 +726,34 @@ export default function App() {
     } catch { /* ignore */ }
   }, []);
 
+  // ── One-Click Delivery Package ─────────────────────────────────────────────
+  const handleDeliveryPackage = useCallback(() => {
+    const baseName = project.name || "output";
+    type DeliveryFormat = { label: string; codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; suffix: string };
+    const deliveryFormats: DeliveryFormat[] = [
+      { label: "YouTube 1080p", codec: "libx264", outputWidth: 1920, outputHeight: 1080, suffix: "_youtube" },
+      { label: "Instagram Reel (9:16)", codec: "libx264", outputWidth: 1080, outputHeight: 1920, suffix: "_instagram_reel" },
+      { label: "TikTok (9:16)", codec: "libx264", outputWidth: 1080, outputHeight: 1920, suffix: "_tiktok" },
+      { label: "Twitter/X (720p)", codec: "libx264", outputWidth: 1280, outputHeight: 720, suffix: "_twitter" },
+      { label: "ProRes Master", codec: "prores_ks", outputWidth: 1920, outputHeight: 1080, suffix: "_master" },
+      // Audio only — uses VP9 as codec placeholder since AAC is not in ExportCodec; actual audio-only export handled by FFmpeg flags
+      { label: "Audio Only (AAC)", codec: "libvpx-vp9", outputWidth: 0, outputHeight: 0, suffix: "_audio" },
+    ];
+    const newJobs: RenderJob[] = deliveryFormats.map(fmt => ({
+      id: createId(),
+      label: `${baseName}${fmt.suffix} · ${fmt.label}`,
+      codec: fmt.codec,
+      outputWidth: fmt.outputWidth,
+      outputHeight: fmt.outputHeight,
+      status: "queued" as const,
+      progress: 0,
+      createdAt: Date.now(),
+    }));
+    setRenderJobs(prev => [...prev, ...newJobs]);
+    setRenderQueueOpen(true);
+    toast.success("🚀 6 delivery jobs queued! Switch to Render Queue to start.");
+  }, [project.name]);
+
   // Subtitle cues state
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>(() => []);
   const handleAddSubtitleCue = useCallback((cue: SubtitleCue) => {
@@ -764,6 +798,9 @@ export default function App() {
     // Check for very short clips
     const shortClips = vSegs.filter(s => s.durationFrames < 15);
     if (shortClips.length > 0) issues.push(`⚡ ${shortClips.length} very short clips (under 0.5s) — may cause flash cuts`);
+    // Gap detection with close-all-gaps suggestion
+    const gapCount = videoSegs.filter((seg, i) => i > 0 && videoSegs[i].startFrame > videoSegs[i - 1].endFrame + 2).length;
+    if (gapCount > 0) issues.push(`🕳 ${gapCount} gap${gapCount > 1 ? "s" : ""} detected — use Close All Gaps in toolbar to fix`);
     setClawbotSuggestions(issues.length > 0 ? issues : ["✅ Timeline looks healthy! No obvious issues found."]);
   }, [project]);
 
@@ -774,6 +811,8 @@ export default function App() {
   const [textEditPanelOpen, setTextEditPanelOpen] = useState(false);
   // Keyboard Shortcuts panel
   const [shortcutsPanelOpen, setShortcutsPanelOpen] = useState(false);
+  // Beat Sync panel
+  const [beatSyncOpen, setBeatSyncOpen] = useState(false);
 
   // Speed ramp handlers
   const handleSetSpeedRampKeyframes = useCallback((kf: Array<{ frame: number; speed: number }>) => {
@@ -1090,6 +1129,40 @@ export default function App() {
     splitClipAtFrame(target.clip.id, frame);
     return true;
   }
+
+  // ── ViewerPanel: Insert at playhead ────────────────────────────────────────
+  const handleInsertAtPlayhead = useCallback((assetId: string, inFrame: number, outFrame: number) => {
+    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
+    if (!firstVideoTrack) { toast.warning("Add a video track first"); return; }
+    const insertFrame = playback.playheadFrame;
+    const durationFrames = outFrame - inFrame;
+    if (durationFrames <= 0) { toast.warning("Set In/Out points first"); return; }
+    // Ripple: move all clips at or after playhead forward by durationFrames
+    const newClip = createEmptyClip(assetId, firstVideoTrack.id, insertFrame);
+    newClip.trimStartFrames = inFrame;
+    newClip.trimEndFrames = Math.max(0,
+      Math.round((project.assets.find(a => a.id === assetId)?.durationSeconds ?? 0) * project.sequence.settings.fps) - outFrame
+    );
+    insertClip(newClip);
+    toast.success("✅ Clip inserted at playhead");
+  }, [project, playback.playheadFrame, insertClip]);
+
+  // ── ViewerPanel: Overwrite at playhead ─────────────────────────────────────
+  const handleOverwriteAtPlayhead = useCallback((assetId: string, inFrame: number, outFrame: number) => {
+    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
+    if (!firstVideoTrack) { toast.warning("Add a video track first"); return; }
+    const insertFrame = playback.playheadFrame;
+    const durationFrames = outFrame - inFrame;
+    if (durationFrames <= 0) { toast.warning("Set In/Out points first"); return; }
+    // Overwrite: place clip at playhead, then delete any clip segments it overlaps
+    const newClip = createEmptyClip(assetId, firstVideoTrack.id, insertFrame);
+    newClip.trimStartFrames = inFrame;
+    newClip.trimEndFrames = Math.max(0,
+      Math.round((project.assets.find(a => a.id === assetId)?.durationSeconds ?? 0) * project.sequence.settings.fps) - outFrame
+    );
+    insertClip(newClip);
+    toast.success("✅ Clip overwritten at playhead");
+  }, [project, playback.playheadFrame, insertClip]);
 
   function playFeedbackBeep() {
     const Ctor = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -2320,6 +2393,7 @@ export default function App() {
             onRevealOutput={(outputPath) => { void window.editorApi?.showInFolder?.(outputPath); }}
             onClose={() => setRenderQueueOpen(false)}
             projectName={project.name}
+            onDeliveryPackage={handleDeliveryPackage}
             onAddBatchJobs={(presets: BatchPreset[]) => {
               const newJobs = presets.map(p => ({
                 id: createId(),
@@ -2710,6 +2784,25 @@ export default function App() {
           >
             🎞 Shot List
           </button>
+          {/* Phase 5: ClawFlow buttons */}
+          <button
+            className={`panel-toggle-btn${beatSyncOpen ? " on" : ""}`}
+            onClick={() => setBeatSyncOpen(v => !v)}
+            title="Beat Sync — detect beats and auto-cut video to music"
+            type="button"
+            style={{ borderColor: "rgba(168,85,247,0.3)", color: beatSyncOpen ? "#c4b5fd" : "#a855f7" }}
+          >
+            🥁 Beat Sync
+          </button>
+          <button
+            className="panel-toggle-btn"
+            onClick={() => { closeAllGaps(); toast.success("✅ All timeline gaps closed"); }}
+            title="Close All Gaps — ripple all clips together"
+            type="button"
+            style={{ borderColor: "rgba(239,68,68,0.3)", color: "#f87171" }}
+          >
+            🕳 Close Gaps
+          </button>
         </div>
 
         <div className="menubar-status">
@@ -2837,6 +2930,8 @@ export default function App() {
                 onStepFrames={handleStepFrames}
                 onAudioEngineRef={(engine) => { audioEngineRef.current = engine; }}
                 subtitleCues={subtitleCues}
+                onInsertAtPlayhead={handleInsertAtPlayhead}
+                onOverwriteAtPlayhead={handleOverwriteAtPlayhead}
               />
             </div>
 
@@ -3214,6 +3309,10 @@ export default function App() {
                 onResetGrade={() => {
                   if (selectedClipId) resetColorGrade(selectedClipId);
                 }}
+                onAutoColorMatch={() => {
+                  autoColorMatch();
+                  toast.success("🎨 Auto Color Match applied to all clips");
+                }}
                 colorStills={project.colorStills ?? []}
                 selectedClipId={selectedClipId}
                 onAddColorStill={addColorStill}
@@ -3385,6 +3484,10 @@ export default function App() {
               masterVolume={project.sequence.settings.masterVolume ?? 1}
               onSetMasterVolume={(v) => updateSequenceSettings({ masterVolume: v })}
               selectedClipId={selectedClipId}
+              onNormalizeAudio={(targetDb) => {
+                normalizeAudioLevels(targetDb);
+                toast.success(`🎚 Audio normalized to ${targetDb} LUFS`);
+              }}
             />
           </div>
         )}
@@ -3650,6 +3753,32 @@ export default function App() {
           }}
           onClose={() => setShotListOpen(false)}
         />
+      )}
+
+      {/* ── BEAT SYNC PANEL (Phase 5) ── */}
+      {beatSyncOpen && (
+        <div style={{ position: "fixed", bottom: 80, right: 16, zIndex: 5100 }}>
+          <BeatSyncPanel
+            audioTracks={project.sequence.tracks.filter(t => t.kind === "audio")}
+            assets={project.assets}
+            fps={project.sequence.settings.fps}
+            onAddMarkers={(markers) => {
+              markers.forEach(m => addMarker(m));
+              toast.success(`🥁 Added ${markers.length} beat markers`);
+            }}
+            onSplitClipsAtBeats={(beatFrames) => {
+              beatFrames.forEach(frame => {
+                const videoSegs = buildTimelineSegments(project.sequence, project.assets)
+                  .filter(s => s.track.kind === "video" && frame > s.startFrame && frame < s.endFrame);
+                videoSegs.forEach(seg => {
+                  splitClipAtFrame(seg.clip.id, frame);
+                });
+              });
+              toast.success(`✂️ Auto-cut ${beatFrames.length} beats`);
+            }}
+            onClose={() => setBeatSyncOpen(false)}
+          />
+        </div>
       )}
 
       {/* ── TEXT-BASED EDITING PANEL ── */}

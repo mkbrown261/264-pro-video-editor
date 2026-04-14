@@ -113,10 +113,16 @@ export function TextBasedEditingPanel({
   const handleImportSRT = () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.srt,.vtt';
+    // Only accept .srt — VTT has a different format and parseSRT only handles SRT
+    input.accept = '.srt';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file || !selectedAssetId) return;
+      // BUG fix: guard against silently overwriting an existing AI transcript
+      const existing = transcripts[selectedAssetId];
+      if (existing && existing.words.length > 0) {
+        if (!window.confirm('This will replace the existing transcript. Continue?')) return;
+      }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const text = ev.target?.result as string;

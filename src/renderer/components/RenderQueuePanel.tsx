@@ -55,6 +55,7 @@ interface RenderQueuePanelProps {
   onRevealOutput: (outputPath: string) => void;
   onClose: () => void;
   onAddBatchJobs?: (presets: BatchPreset[]) => void;
+  onDeliveryPackage?: () => void;
   projectName?: string;
 }
 
@@ -87,6 +88,7 @@ export function RenderQueuePanel({
   onRevealOutput,
   onClose,
   onAddBatchJobs,
+  onDeliveryPackage,
   projectName = "Project",
 }: RenderQueuePanelProps) {
   const [showBatch, setShowBatch] = useState(false);
@@ -130,6 +132,28 @@ export function RenderQueuePanel({
           </button>
         </div>
       </div>
+
+      {/* One-Click Delivery Package */}
+      {onDeliveryPackage && (
+        <div style={{ padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+          <button
+            type="button"
+            onClick={onDeliveryPackage}
+            style={{
+              width: "100%", padding: "12px", borderRadius: 9,
+              background: "linear-gradient(135deg,#7c3aed,#a855f7)",
+              border: "none", color: "#fff", fontSize: 13, fontWeight: 800,
+              cursor: "pointer", letterSpacing: "0.02em",
+            }}
+            title="Queue all 6 delivery formats simultaneously: YouTube, Instagram Reel, TikTok, Twitter/X, ProRes Master, Audio Only"
+          >
+            🚀 One-Click Delivery Package (6 Formats)
+          </button>
+          <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", textAlign: "center", marginTop: 5 }}>
+            YouTube · Instagram Reel · TikTok · Twitter/X · ProRes Master · Audio Only
+          </div>
+        </div>
+      )}
 
       {/* Batch export panel */}
       {showBatch && onAddBatchJobs && (

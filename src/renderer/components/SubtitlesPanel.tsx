@@ -30,14 +30,16 @@ function framesToDisplay(frames: number, fps: number): string {
 }
 
 function srtTimeToMs(time: string): number {
-  // 00:00:01,000
-  const [hms, ms] = time.split(",");
+  // Handles both 00:00:01,000 (SRT) and 00:00:01.000 (some generators)
+  const [hms, ms] = time.split(/[,.]/);
   const parts = hms.split(":").map(Number);
   return parts[0] * 3600000 + parts[1] * 60000 + parts[2] * 1000 + Number(ms);
 }
 
 function parseSRT(srt: string, fps: number): SubtitleCue[] {
-  const blocks = srt.trim().split(/\n\s*\n/);
+  // Normalize Windows CRLF to LF before parsing
+  const normalized = srt.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const blocks = normalized.trim().split(/\n\s*\n/);
   const cues: SubtitleCue[] = [];
   for (const block of blocks) {
     const lines = block.trim().split("\n");

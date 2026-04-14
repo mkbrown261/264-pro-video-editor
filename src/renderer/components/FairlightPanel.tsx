@@ -9,6 +9,7 @@ interface FairlightPanelProps {
   masterVolume: number;
   onSetMasterVolume: (v: number) => void;
   selectedClipId?: string | null;
+  onNormalizeAudio?: (targetDb: -14 | -23) => void;
 }
 
 const DEFAULT_EQ_BANDS: EQBand[] = [
@@ -66,7 +67,7 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId }: FairlightPanelProps) {
+export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio }: FairlightPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
@@ -507,6 +508,28 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
           <span style={{ fontSize: 10, color: "#94a3b8" }}>Limiter</span>
         </label>
       </div>
+      {/* Normalize buttons */}
+      {onNormalizeAudio && (
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, minWidth: 64 }}>Normalize:</span>
+          <button
+            type="button"
+            onClick={() => onNormalizeAudio(-14)}
+            style={{ padding: "5px 10px", borderRadius: 6, background: "#7c3aed", border: "none", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+            title="Normalize all audio clips to -14 LUFS (streaming standard)"
+          >
+            -14 LUFS Streaming
+          </button>
+          <button
+            type="button"
+            onClick={() => onNormalizeAudio(-23)}
+            style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#94a3b8", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+            title="Normalize all audio clips to -23 LUFS (broadcast standard)"
+          >
+            -23 LUFS Broadcast
+          </button>
+        </div>
+      )}
     </div>
   );
 }

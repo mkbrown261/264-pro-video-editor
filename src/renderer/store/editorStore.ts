@@ -252,6 +252,11 @@ interface EditorStore {
 
   // ── Add asset to pool only ──
   addAssetToPool: (asset: import("../../shared/models").MediaAsset) => void;
+
+  // ── ClawFlow AI ──
+  autoColorMatch: () => void;
+  normalizeAudioLevels: (targetDb: -14 | -23) => void;
+  closeAllGaps: () => void;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -2358,21 +2363,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const vTrack = videoTracks[0] ?? { id: createId(), name: "V1", kind: "video" as const, muted: false, locked: false, solo: false, height: 56, color: "#4f8ef7" };
       const aTrack = audioTracks[0] ?? { id: createId(), name: "A1", kind: "audio" as const, muted: false, locked: false, solo: false, height: 44, color: "#2fc77a" };
 
-      // Ripple-compress: remove all gaps (pack clips back-to-back on their track)
-      let vCursor = 0;
-      const packedVideo = videoClips.map(c => {
-        const dur = c.trimEndFrames > 0 || c.trimStartFrames > 0
-          ? c.trimEndFrames === 0 ? 9999 : c.trimEndFrames
-          : 9999; // will use actual dur; just pack startFrame
-        const next = { ...c, trackId: vTrack.id, startFrame: vCursor };
-        vCursor += (c.trimEndFrames || 0) > 0
-          ? (c.trimEndFrames - c.trimStartFrames)
-          : Math.max(1, c.trimEndFrames === 0 ? 100 : 1); // fallback
-        return next;
-      });
-
-      // Re-pack video clips sequentially (duration unknown here – just pack by existing gap-removal)
-      // Use a simple approach: sort + compact
+      // Re-pack video clips sequentially (sort + compact)
       let vFrame = 0;
       const repackedVideo = videoClips.map((c) => {
         const cloned = { ...c, trackId: vTrack.id, startFrame: vFrame };
@@ -2597,6 +2588,116 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         ...state.project,
         assets: [...state.project.assets, asset]
       }
+    }));
+  },
+
+  // ── ClawFlow AI ───────────────────────────────────────────────────────────
+
+  autoColorMatch: () => {
+    set(withUndo("Auto Color Match", (state) => {
+      const segs = buildTimelineSegments(state.project.sequence, state.project.assets)
+        .filter(s => s.track.kind === "video");
+      if (segs.length < 2) return state;
+
+      // Score each clip by how far it deviates from neutral — lowest score = reference
+      const scoreGrade = (cg: ColorGrade | null | undefined): number => {
+        if (!cg) return 0;
+        return (
+          Math.abs(cg.exposure ?? 0) +
+          Math.abs(cg.contrast ?? 0) +
+          Math.abs(cg.saturation ? cg.saturation - 1 : 0) +
+          Math.abs(cg.temperature ?? 0)
+        );
+      };
+
+      let refIdx = 0;
+      let refScore = Infinity;
+      segs.forEach((seg, i) => {
+        const score = scoreGrade(seg.clip.colorGrade);
+        if (score < refScore) { refScore = score; refIdx = i; }
+      });
+      const ref = segs[refIdx];
+      const refGrade = ref.clip.colorGrade ?? createDefaultColorGrade();
+
+      const newClips = state.project.sequence.clips.map(clip => {
+        const seg = segs.find(s => s.clip.id === clip.id);
+        if (!seg || clip.id === ref.clip.id) return clip;
+        const existing = clip.colorGrade ?? createDefaultColorGrade();
+        return {
+          ...clip,
+          colorGrade: {
+            ...existing,
+            exposure:    existing.exposure    * 0.3 + (refGrade.exposure    ?? 0) * 0.7,
+            temperature: (existing.temperature ?? 0) * 0.3 + (refGrade.temperature ?? 0) * 0.7,
+            contrast:    (existing.contrast    ?? 0) * 0.3 + (refGrade.contrast    ?? 0) * 0.7,
+            saturation:  (existing.saturation  ?? 1) * 0.3 + (refGrade.saturation  ?? 1) * 0.7,
+          },
+        };
+      });
+
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, clips: newClips },
+        },
+      };
+    }));
+  },
+
+  normalizeAudioLevels: (targetDb) => {
+    set(withUndo("Normalize Audio Levels", (state) => {
+      const targetVol = targetDb === -14 ? 1.0 : 0.7;
+      const audioTrackIds = new Set(
+        state.project.sequence.tracks
+          .filter(t => t.kind === "audio")
+          .map(t => t.id)
+      );
+      const newClips = state.project.sequence.clips.map(clip => {
+        if (!audioTrackIds.has(clip.trackId)) return clip;
+        const normalizedVol = Math.max(0.1, Math.min(2.0, targetVol));
+        return { ...clip, volume: parseFloat(normalizedVol.toFixed(2)) };
+      });
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, clips: newClips },
+        },
+      };
+    }));
+  },
+
+  closeAllGaps: () => {
+    set(withUndo("Close All Gaps", (state) => {
+      // For each video track, ripple clips together (remove all gaps)
+      const fps = state.project.sequence.settings.fps;
+      const assetsById = new Map(state.project.assets.map(a => [a.id, a]));
+      const videoTrackIds = new Set(
+        state.project.sequence.tracks
+          .filter(t => t.kind === "video")
+          .map(t => t.id)
+      );
+      // Group clips by track, sort, repack
+      const cursorByTrack = new Map<string, number>();
+      const newClips = [...state.project.sequence.clips]
+        .sort((a, b) => a.startFrame - b.startFrame)
+        .map(clip => {
+          if (!videoTrackIds.has(clip.trackId)) return clip;
+          const asset = assetsById.get(clip.assetId);
+          if (!asset) return clip;
+          const cursor = cursorByTrack.get(clip.trackId) ?? 0;
+          const duration = getClipDurationFrames(clip, asset, fps);
+          cursorByTrack.set(clip.trackId, cursor + duration);
+          return { ...clip, startFrame: cursor };
+        });
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, clips: newClips },
+        },
+      };
     }));
   },
 }));

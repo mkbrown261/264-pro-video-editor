@@ -40,6 +40,8 @@ export interface ColorGradingPanelProps {
   onAddColorStill?: (still: ColorStill) => void;
   onRemoveColorStill?: (stillId: string) => void;
   onRenameColorStill?: (stillId: string, label: string) => void;
+  // ClawFlow: Auto Color Match
+  onAutoColorMatch?: () => void;
 }
 
 type ActiveScope   = "waveform" | "vectorscope" | "histogram" | "parade";
@@ -837,6 +839,7 @@ export function ColorGradingPanel({
   onAddColorStill,
   onRemoveColorStill,
   onRenameColorStill,
+  onAutoColorMatch,
 }: ColorGradingPanelProps) {
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("primary");
@@ -918,6 +921,17 @@ export function ColorGradingPanel({
           {clipName}
         </span>
         <div className="cgp-topbar-actions">
+          {onAutoColorMatch && (
+            <button
+              className="cgp-btn"
+              onClick={onAutoColorMatch}
+              type="button"
+              title="Auto-match all clips to the most neutral reference clip (ClawFlow AI)"
+              style={{ background: "rgba(124,58,237,0.18)", borderColor: "rgba(124,58,237,0.4)", color: "#c4b5fd" }}
+            >
+              🎨 Auto-Match
+            </button>
+          )}
           {!colorGrade && (
             <button className="cgp-enable-btn" onClick={onEnableGrade} type="button">
               Enable Grade

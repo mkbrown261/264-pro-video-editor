@@ -935,7 +935,8 @@ export function TimelinePanel({
     if (!lassoBox) return;
     const onMove = (e: MouseEvent) => {
       // Use clientX/Y — consistent with getBoundingClientRect (viewport coords)
-      const next = { ...lassoBoxRef.current!, curX: e.clientX, curY: e.clientY };
+      if (!lassoBoxRef.current) return;
+      const next = { ...lassoBoxRef.current, curX: e.clientX, curY: e.clientY };
       lassoBoxRef.current = next;
       setLassoBox({ ...next });
     };
@@ -1010,7 +1011,7 @@ export function TimelinePanel({
       if (!anchor) return;
       const deltaX = e.clientX - anchor.anchorX;
       const deltaFrames = Math.round(deltaX / ppfRef.current);
-      const newFrame = Math.max(0, anchor.origFrame + deltaFrames);
+      const newFrame = Math.max(0, Math.min(totalFrames - 1, anchor.origFrame + deltaFrames));
       onUpdateMarker?.(draggingMarkerId, { frame: newFrame });
     };
     const onUp = () => setDraggingMarkerId(null);

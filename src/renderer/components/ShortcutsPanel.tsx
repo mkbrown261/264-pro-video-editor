@@ -105,7 +105,14 @@ export function ShortcutsPanel({ onClose }: ShortcutsPanelProps) {
 
   const applyShortcut = useCallback((id: string, key: string) => {
     setShortcuts(prev => {
-      const next = prev.map(s => s.id === id ? { ...s, currentKey: key } : s);
+      // BUG fix: if another shortcut already uses this key, clear it to avoid conflicts
+      const conflict = prev.find(s => s.id !== id && s.currentKey === key);
+      const next = prev.map(s => {
+        if (s.id === id) return { ...s, currentKey: key };
+        // Clear conflicting binding so each key maps to exactly one action
+        if (conflict && s.id === conflict.id) return { ...s, currentKey: s.defaultKey };
+        return s;
+      });
       // Persist overrides
       const overrides: Record<string, string> = {};
       next.forEach(s => { if (s.currentKey !== s.defaultKey) overrides[s.id] = s.currentKey; });
@@ -129,6 +136,10 @@ export function ShortcutsPanel({ onClose }: ShortcutsPanelProps) {
   const resetAll = () => {
     setShortcuts(DEFAULT_SHORTCUTS.map(d => ({ ...d })));
     saveCustomShortcuts({});
+    // BUG fix: dispatch storage event so useEditorShortcuts hook reloads defaults
+    // (localStorage changes within the same tab don't trigger window 'storage' events,
+    //  so we fire a CustomEvent that the hook can listen for)
+    window.dispatchEvent(new CustomEvent('264pro_shortcuts_reset'));
   };
 
   const filtered = shortcuts.filter(s =>
