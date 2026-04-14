@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import type { TimelineTrack, EQBand, CompressorSettings } from "../../shared/models";
+import type { TimelineTrack, EQBand, CompressorSettings, DuckingSettings } from "../../shared/models";
 import { createId } from "../../shared/models";
 
 interface FairlightPanelProps {
@@ -10,6 +10,9 @@ interface FairlightPanelProps {
   onSetMasterVolume: (v: number) => void;
   selectedClipId?: string | null;
   onNormalizeAudio?: (targetDb: -14 | -23) => void;
+  /** Phase 8: Audio ducking settings */
+  duckingSettings?: DuckingSettings[];
+  onSetDuckingSettings?: (settings: DuckingSettings[]) => void;
 }
 
 const DEFAULT_EQ_BANDS: EQBand[] = [
@@ -67,7 +70,7 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio }: FairlightPanelProps) {
+export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings }: FairlightPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
@@ -94,6 +97,31 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
 
   // AI Audio Tools state
   const [aiAudioExpanded, setAiAudioExpanded] = useState(true);
+
+  // Phase 8: Audio Ducking state
+  const existingDuck = duckingSettings?.[0];
+  const [duckExpanded, setDuckExpanded] = useState(false);
+  const [duckEnabled, setDuckEnabled] = useState(existingDuck?.enabled ?? false);
+  const [duckTriggerTrackId, setDuckTriggerTrackId] = useState<string>(existingDuck?.triggerTrackId ?? (audioTracks[0]?.id ?? ""));
+  const [duckTargetTrackId, setDuckTargetTrackId] = useState<string>(existingDuck?.targetTrackId ?? (audioTracks[1]?.id ?? ""));
+  const [duckThreshold, setDuckThreshold] = useState(existingDuck?.threshold ?? -20);
+  const [duckReduction, setDuckReduction] = useState(existingDuck?.reduction ?? 0.7);
+  const [duckAttackMs, setDuckAttackMs] = useState(existingDuck?.attackMs ?? 50);
+  const [duckReleaseMs, setDuckReleaseMs] = useState(existingDuck?.releaseMs ?? 500);
+
+  function applyDucking(overrides?: Partial<DuckingSettings>) {
+    if (!onSetDuckingSettings) return;
+    const settings: DuckingSettings = {
+      enabled: overrides?.enabled ?? duckEnabled,
+      triggerTrackId: overrides?.triggerTrackId ?? duckTriggerTrackId,
+      targetTrackId: overrides?.targetTrackId ?? duckTargetTrackId,
+      threshold: overrides?.threshold ?? duckThreshold,
+      reduction: overrides?.reduction ?? duckReduction,
+      attackMs: overrides?.attackMs ?? duckAttackMs,
+      releaseMs: overrides?.releaseMs ?? duckReleaseMs,
+    };
+    onSetDuckingSettings([settings]);
+  }
   const [musicStemMode, setMusicStemMode] = useState<'all' | 'vocals_only' | 'instrumental'>('all');
   const [dialogueMode, setDialogueMode] = useState<'dialogue' | 'background' | 'both'>('dialogue');
   const [voiceSensitivity, setVoiceSensitivity] = useState(0.8);
@@ -508,6 +536,110 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
           <span style={{ fontSize: 10, color: "#94a3b8" }}>Limiter</span>
         </label>
       </div>
+      {/* Phase 8: Audio Ducking */}
+      {onSetDuckingSettings && (
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+          <div
+            style={{ padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
+            onClick={() => setDuckExpanded(v => !v)}
+          >
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.06em" }}>🔇 AUTO DUCK</span>
+            <div style={{
+              marginLeft: 6,
+              padding: "2px 7px",
+              borderRadius: 10,
+              background: duckEnabled ? "rgba(124,58,237,0.25)" : "rgba(255,255,255,0.06)",
+              border: `1px solid ${duckEnabled ? "rgba(124,58,237,0.5)" : "rgba(255,255,255,0.1)"}`,
+              fontSize: 9,
+              color: duckEnabled ? "#c4b5fd" : "#64748b",
+              fontWeight: 700,
+            }}>{duckEnabled ? "ON" : "OFF"}</div>
+            <span style={{ marginLeft: "auto", color: "#475569", fontSize: 10 }}>{duckExpanded ? "▲" : "▼"}</span>
+          </div>
+          {duckExpanded && (
+            <div style={{ padding: "0 12px 12px" }}>
+              <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+                When dialogue (trigger) is detected, automatically lower the music (target) track.
+              </div>
+              {/* Trigger / Target selects */}
+              {[
+                { label: "Dialogue track", value: duckTriggerTrackId, set: (v: string) => { setDuckTriggerTrackId(v); applyDucking({ triggerTrackId: v }); }},
+                { label: "Music track", value: duckTargetTrackId, set: (v: string) => { setDuckTargetTrackId(v); applyDucking({ targetTrackId: v }); }},
+              ].map(({ label, value, set }) => (
+                <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 10, color: "#94a3b8", minWidth: 80 }}>{label}</span>
+                  <select
+                    value={value}
+                    onChange={e => set(e.target.value)}
+                    style={{ flex: 1, background: "#1e293b", color: "#e2e8f0", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, padding: "3px 6px", fontSize: 11 }}
+                  >
+                    {audioTracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>
+              ))}
+              {/* Threshold */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", minWidth: 80 }}>Threshold</span>
+                <input type="range" min={-60} max={0} step={1} value={duckThreshold}
+                  onChange={e => { setDuckThreshold(Number(e.target.value)); applyDucking({ threshold: Number(e.target.value) }); }}
+                  style={{ flex: 1, accentColor: "#7c3aed" }}
+                />
+                <span style={{ fontSize: 10, color: "#a855f7", minWidth: 36, textAlign: "right" }}>{duckThreshold} dB</span>
+              </div>
+              {/* Reduction */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", minWidth: 80 }}>Reduction</span>
+                <input type="range" min={0} max={1} step={0.01} value={duckReduction}
+                  onChange={e => { setDuckReduction(Number(e.target.value)); applyDucking({ reduction: Number(e.target.value) }); }}
+                  style={{ flex: 1, accentColor: "#7c3aed" }}
+                />
+                <span style={{ fontSize: 10, color: "#a855f7", minWidth: 36, textAlign: "right" }}>{Math.round(duckReduction * 100)}%</span>
+              </div>
+              {/* Attack */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", minWidth: 80 }}>Attack</span>
+                <input type="range" min={10} max={500} step={10} value={duckAttackMs}
+                  onChange={e => { setDuckAttackMs(Number(e.target.value)); applyDucking({ attackMs: Number(e.target.value) }); }}
+                  style={{ flex: 1, accentColor: "#7c3aed" }}
+                />
+                <span style={{ fontSize: 10, color: "#a855f7", minWidth: 36, textAlign: "right" }}>{duckAttackMs}ms</span>
+              </div>
+              {/* Release */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", minWidth: 80 }}>Release</span>
+                <input type="range" min={100} max={2000} step={50} value={duckReleaseMs}
+                  onChange={e => { setDuckReleaseMs(Number(e.target.value)); applyDucking({ releaseMs: Number(e.target.value) }); }}
+                  style={{ flex: 1, accentColor: "#7c3aed" }}
+                />
+                <span style={{ fontSize: 10, color: "#a855f7", minWidth: 40, textAlign: "right" }}>{duckReleaseMs}ms</span>
+              </div>
+              {/* Enable toggle */}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !duckEnabled;
+                  setDuckEnabled(next);
+                  applyDucking({ enabled: next });
+                }}
+                style={{
+                  width: "100%",
+                  padding: "8px",
+                  borderRadius: 7,
+                  border: "none",
+                  background: duckEnabled ? "linear-gradient(135deg,#7c3aed,#a855f7)" : "rgba(255,255,255,0.07)",
+                  color: duckEnabled ? "#fff" : "#94a3b8",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                {duckEnabled ? "● Auto Duck Enabled" : "○ Enable Auto Duck"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Normalize buttons */}
       {onNormalizeAudio && (
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>

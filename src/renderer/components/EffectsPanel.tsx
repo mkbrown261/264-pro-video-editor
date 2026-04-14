@@ -14,6 +14,10 @@ interface EffectsPanelProps {
   onReorderEffects: (fromIdx: number, toIdx: number) => void;
   onToggleBackgroundRemoval: () => void;
   onSetBackgroundRemoval: (config: Partial<BackgroundRemovalConfig>) => void;
+  /** Phase 8: current playhead frame for effect keyframing */
+  currentFrame?: number;
+  /** Phase 8: add a keyframe for an effect parameter at the current frame */
+  onAddEffectKeyframe?: (effectId: string, paramKey: string, frame: number, value: number) => void;
 }
 
 // ─── Preset type ──────────────────────────────────────────────────────────────
@@ -1358,6 +1362,10 @@ interface EffectCardProps {
   onDragStart: (idx: number) => void;
   onDragOver: (idx: number) => void;
   onDragEnd: () => void;
+  /** Phase 8: current playhead frame for keyframing */
+  currentFrame?: number;
+  /** Phase 8: add keyframe for this effect param */
+  onAddEffectKeyframe?: (paramKey: string, frame: number, value: number) => void;
 }
 
 function EffectCard({
@@ -1375,7 +1383,9 @@ function EffectCard({
   onMoveDown,
   onDragStart,
   onDragOver,
-  onDragEnd
+  onDragEnd,
+  currentFrame,
+  onAddEffectKeyframe,
 }: EffectCardProps) {
   return (
     <div
@@ -1450,6 +1460,24 @@ function EffectCard({
                     <span className="effect-param-value">
                       {displayVal}{pDef.unit ?? ""}
                     </span>
+                    {/* Phase 8: Effect keyframe button */}
+                    {onAddEffectKeyframe && currentFrame !== undefined && (
+                      <button
+                        type="button"
+                        title={`Add keyframe for ${pDef.label} at frame ${currentFrame}`}
+                        onClick={() => onAddEffectKeyframe(pDef.key, currentFrame, Number(val))}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: (effect.keyframes?.[pDef.key]?.length ?? 0) > 0 ? "#f59e0b" : "#475569",
+                          fontSize: 10,
+                          cursor: "pointer",
+                          padding: "0 2px",
+                          lineHeight: 1,
+                          flexShrink: 0,
+                        }}
+                      >◆</button>
+                    )}
                   </div>
                 )}
                 {pDef.type === "toggle" && (
@@ -1696,7 +1724,9 @@ export function EffectsPanel({
   onToggleEffect,
   onReorderEffects,
   onToggleBackgroundRemoval,
-  onSetBackgroundRemoval
+  onSetBackgroundRemoval,
+  currentFrame,
+  onAddEffectKeyframe,
 }: EffectsPanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -1919,6 +1949,11 @@ export function EffectsPanel({
                 }
               }}
               onDragEnd={() => setDragIdx(null)}
+              currentFrame={currentFrame}
+              onAddEffectKeyframe={onAddEffectKeyframe
+                ? (paramKey, frame, value) => onAddEffectKeyframe(effect.id, paramKey, frame, value)
+                : undefined
+              }
             />
           );
         })}

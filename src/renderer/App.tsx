@@ -561,6 +561,7 @@ export default function App() {
   const removeEffect = useEditorStore((s) => s.removeEffect);
   const toggleEffect = useEditorStore((s) => s.toggleEffect);
   const reorderEffects = useEditorStore((s) => s.reorderEffects);
+  const addEffectKeyframe = useEditorStore((s) => s.addEffectKeyframe);
   const toggleBackgroundRemoval = useEditorStore((s) => s.toggleBackgroundRemoval);
   const setBackgroundRemoval = useEditorStore((s) => s.setBackgroundRemoval);
 
@@ -591,6 +592,10 @@ export default function App() {
   const autoColorMatch        = useEditorStore((s) => s.autoColorMatch);
   const normalizeAudioLevels  = useEditorStore((s) => s.normalizeAudioLevels);
   const closeAllGaps          = useEditorStore((s) => s.closeAllGaps);
+
+  // Phase 8: DaVinci parity
+  const addAdjustmentLayer    = useEditorStore((s) => s.addAdjustmentLayer);
+  const setDuckingSettings    = useEditorStore((s) => s.setDuckingSettings);
 
   // ── Fusion store actions ────────────────────────────────────────────────────
   const fusionClipId = useEditorStore((s) => s.fusionClipId);
@@ -3000,6 +3005,10 @@ export default function App() {
               onReorderEffects={(from, to) => { if (selectedClipId) reorderEffects(selectedClipId, from, to); }}
               onToggleBackgroundRemoval={() => { if (selectedClipId) toggleBackgroundRemoval(selectedClipId); }}
               onSetBackgroundRemoval={(config) => { if (selectedClipId) setBackgroundRemoval(selectedClipId, config); }}
+              onAddEffectKeyframe={(effectId, paramKey, frame, value) => {
+                if (selectedClipId) addEffectKeyframe(selectedClipId, effectId, paramKey, frame, value);
+              }}
+              currentPlayheadFrame={playback.playheadFrame}
               onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
               onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
               onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
@@ -3294,6 +3303,7 @@ export default function App() {
               onSaveClipSnapshot={(clipId, label) => saveClipSnapshot(clipId, label)}
               onRestoreClipSnapshot={(clipId, snapshotId) => restoreClipSnapshot(clipId, snapshotId)}
               clipHistoryMap={Object.fromEntries(project.sequence.clips.filter(c => c.clipHistory && c.clipHistory.length > 0).map(c => [c.id, c.clipHistory!]))}
+              onAddAdjustmentLayer={addAdjustmentLayer}
             />
 
             {/* Audio Mixer Panel */}
@@ -3492,6 +3502,7 @@ export default function App() {
               onSaveClipSnapshot={(clipId, label) => saveClipSnapshot(clipId, label)}
               onRestoreClipSnapshot={(clipId, snapshotId) => restoreClipSnapshot(clipId, snapshotId)}
               clipHistoryMap={Object.fromEntries(project.sequence.clips.filter(c => c.clipHistory && c.clipHistory.length > 0).map(c => [c.id, c.clipHistory!]))}
+              onAddAdjustmentLayer={addAdjustmentLayer}
               />
             </div>
           </>
@@ -3511,6 +3522,8 @@ export default function App() {
                 normalizeAudioLevels(targetDb);
                 toast.success(`🎚 Audio normalized to ${targetDb} LUFS`);
               }}
+              duckingSettings={project.duckingSettings}
+              onSetDuckingSettings={setDuckingSettings}
             />
           </div>
         )}

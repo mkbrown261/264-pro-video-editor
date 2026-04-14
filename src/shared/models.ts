@@ -422,12 +422,30 @@ export const DEFAULT_CLIP_TRANSFORM: ClipTransform = {
   anchorX: 0.5, anchorY: 0.5,
 };
 
+// ── Adjustment Layer / Clip Type ─────────────────────────────────────────────
+
+export type ClipType = 'media' | 'adjustment' | 'title' | 'nested';
+
+// ── Audio Ducking ─────────────────────────────────────────────────────────────
+
+export interface DuckingSettings {
+  enabled: boolean;
+  triggerTrackId: string;   // dialogue track that triggers ducking
+  targetTrackId: string;    // music/bed track that gets ducked
+  threshold: number;        // -60 to 0 dB
+  reduction: number;        // 0-1 (how much to reduce target)
+  attackMs: number;         // 10-500 ms
+  releaseMs: number;        // 100-2000 ms
+}
+
 // ── Timeline Clip (extended) ──────────────────────────────────────────────────
 
 export interface TimelineClip {
   id: string;
   assetId: string;
   trackId: string;
+  /** 'media' (default) | 'adjustment' | 'title' | 'nested' */
+  clipType?: ClipType;
   startFrame: number;
   trimStartFrames: number;
   trimEndFrames: number;
@@ -661,6 +679,8 @@ export interface EditorProject {
   metadata?: ProjectMetadata;
   nestedSequences?: Record<string, EditorSequence>;
   compoundNodes?: Array<{ id: string; label: string; nodeIds: string[] }>;
+  /** Phase 8: Audio ducking configurations */
+  duckingSettings?: DuckingSettings[];
 }
 
 // ── Playback & Editor State ───────────────────────────────────────────────────

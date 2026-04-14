@@ -177,6 +177,8 @@ interface TimelinePanelProps {
   onNestClips?: (clipIds: string[], label: string) => void;
   // UX 2: Auto-layout
   onAutoLayout?: () => void;
+  // Phase 8: Adjustment Layers
+  onAddAdjustmentLayer?: (startFrame: number, durationFrames: number) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -239,6 +241,7 @@ export function TimelinePanel({
   clipHistoryMap = {},
   onNestClips,
   onAutoLayout,
+  onAddAdjustmentLayer,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -1051,6 +1054,14 @@ export function TimelinePanel({
           setTrackContextMenu(null);
         }}>{isLocked ? "🔓 Unlock Track" : "🔒 Lock Track"}</div>
         <div className="ctx-menu-sep" />
+        {trackKind === "video" && onAddAdjustmentLayer && (
+          <div className="ctx-menu-item" onClick={() => {
+            // Add 5-second adjustment layer at playhead
+            const fps = propsRef.current.sequenceFps ?? 30;
+            onAddAdjustmentLayer(playheadFrameRef.current, fps * 5);
+            setTrackContextMenu(null);
+          }} style={{ color: "#c4b5fd" }}>✦ Add Adjustment Layer</div>
+        )}
         <div className="ctx-menu-item" onClick={() => {
           onAddTrack?.(trackKind);
           setTrackContextMenu(null);
@@ -1974,6 +1985,8 @@ export function TimelinePanel({
                     // FIX 3: lasso highlight
                     const isLassoSelected = lassoSelectedIds.has(segment.clip.id);
 
+                    const isAdjustmentLayer = segment.clip.clipType === "adjustment";
+
                     const clipClass = [
                       "timeline-clip",
                       segment.track.kind === "video" ? "video-clip" : "audio-clip",
@@ -1982,7 +1995,8 @@ export function TimelinePanel({
                       !segment.clip.isEnabled ? "disabled" : "",
                       isDragging  ? "dragging"  : "",
                       isDraggingToNewTrack ? "dragging-to-new-track" : "",
-                      isLocked    ? "clip-locked" : ""
+                      isLocked    ? "clip-locked" : "",
+                      isAdjustmentLayer ? "adjustment-layer" : "",
                     ].filter(Boolean).join(" ");
 
                     return (
@@ -1994,8 +2008,14 @@ export function TimelinePanel({
                           left: displayLeft,
                           width: clipWidth,
                           height: "calc(100% - 4px)",
+                          // Phase 8: Adjustment layer special style
+                          ...(isAdjustmentLayer ? {
+                            background: "linear-gradient(135deg, rgba(124,58,237,0.35) 0%, rgba(45,212,191,0.35) 100%)",
+                            border: "1px dashed rgba(124,58,237,0.7)",
+                            opacity: 0.85,
+                          } : {}),
                           // Fix 6: Prefer filmstrip repeating background; fall back to single thumbnail
-                          ...(showClipThumbnails && segment.track.kind === "video" && (segment.asset.filmstripThumbs?.length || segment.asset.thumbnailUrl)
+                          ...(!isAdjustmentLayer && showClipThumbnails && segment.track.kind === "video" && (segment.asset.filmstripThumbs?.length || segment.asset.thumbnailUrl)
                             ? (() => {
                                 // Use first filmstrip thumb as repeating tile, or fallback to thumbnailUrl
                                 const thumbSrc = segment.asset.filmstripThumbs?.[0] ?? segment.asset.thumbnailUrl;
@@ -2220,7 +2240,10 @@ export function TimelinePanel({
 
                         {/* Clip content */}
                         <div className="timeline-clip-content">
-                          {showClipNames && <strong className="clip-name">{segment.asset.name}</strong>}
+                          {isAdjustmentLayer && (
+                            <strong className="clip-name" style={{ color: "#c4b5fd", letterSpacing: "0.08em" }}>ADJ</strong>
+                          )}
+                          {!isAdjustmentLayer && showClipNames && <strong className="clip-name">{segment.asset.name}</strong>}
                           {clipWidth > 60 && <span className="clip-dur">{formatDuration(segment.durationSeconds)}</span>}
                           {/* Status badges */}
                           {!segment.clip.isEnabled && (

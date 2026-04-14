@@ -262,6 +262,9 @@ export interface CompParam {
 
 // ── Node instance ─────────────────────────────────────────────────────────────
 
+/** Phase 8: Node rendering role in the color page node graph */
+export type CompNodeRole = 'serial' | 'parallel' | 'layer';
+
 export interface CompNode {
   id: string;
   type: CompNodeType;
@@ -276,6 +279,8 @@ export interface CompNode {
   ports: CompPort[];
   color: string | null;        // user-set header colour override
   thumbnailDataUrl?: string;   // 80×45 live preview (updated by renderer)
+  /** Phase 8: parallel nodes blend their grade with upstream using screen mode */
+  nodeRole?: CompNodeRole;
 }
 
 // ── Wire (connection) ─────────────────────────────────────────────────────────

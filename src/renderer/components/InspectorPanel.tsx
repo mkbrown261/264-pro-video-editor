@@ -77,6 +77,10 @@ interface InspectorPanelProps {
   onReorderEffects: (from: number, to: number) => void;
   onToggleBackgroundRemoval: () => void;
   onSetBackgroundRemoval: (config: Partial<BackgroundRemovalConfig>) => void;
+  /** Phase 8: add keyframe for an effect parameter */
+  onAddEffectKeyframe?: (effectId: string, paramKey: string, frame: number, value: number) => void;
+  /** Phase 8: current playhead frame (for effect keyframing) */
+  currentPlayheadFrame?: number;
 
   // Clip actions
   onToggleClipEnabled: (clipId: string) => void;
@@ -1081,6 +1085,8 @@ export function InspectorPanel({
   onExport,
   onAddToQueue,
   videoRef,
+  onAddEffectKeyframe,
+  currentPlayheadFrame,
 }: InspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("clip");
   const [transitionCategory, setTransitionCategory] = useState("Basic");
@@ -1414,6 +1420,8 @@ export function InspectorPanel({
               onReorderEffects={onReorderEffects}
               onToggleBackgroundRemoval={onToggleBackgroundRemoval}
               onSetBackgroundRemoval={onSetBackgroundRemoval}
+              currentFrame={currentPlayheadFrame}
+              onAddEffectKeyframe={onAddEffectKeyframe}
             />
           </div>
         )}

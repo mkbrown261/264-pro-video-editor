@@ -905,6 +905,50 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                     opacity={0.85}
                   />
                 )}
+                {/* Phase 8: Parallel node — double border style */}
+                {node.nodeRole === "parallel" && (
+                  <>
+                    <rect
+                      x={-3} y={-3}
+                      width={NODE_W + 6}
+                      height={NODE_H + 6}
+                      rx={8}
+                      fill="none"
+                      stroke="#a855f7"
+                      strokeWidth={1 / zoom}
+                      opacity={0.7}
+                    />
+                    <rect
+                      x={-6} y={-6}
+                      width={NODE_W + 12}
+                      height={NODE_H + 12}
+                      rx={10}
+                      fill="none"
+                      stroke="#a855f7"
+                      strokeWidth={0.7 / zoom}
+                      opacity={0.4}
+                    />
+                    <text
+                      x={NODE_W - 4} y={NODE_H - 4}
+                      textAnchor="end"
+                      fill="#a855f7"
+                      fontSize={5}
+                      fontWeight="700"
+                      style={{ userSelect: "none", pointerEvents: "none" }}
+                    >∥</text>
+                  </>
+                )}
+                {/* Phase 8: Layer node — layer icon */}
+                {node.nodeRole === "layer" && (
+                  <text
+                    x={NODE_W - 4} y={NODE_H - 4}
+                    textAnchor="end"
+                    fill="#38bdf8"
+                    fontSize={5}
+                    fontWeight="700"
+                    style={{ userSelect: "none", pointerEvents: "none" }}
+                  >⊞</text>
+                )}
                 {/* Node label */}
                 <text
                   x={(NODE_W + 4) / 2} y={11}
@@ -1061,6 +1105,36 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                 </button>
                 <button title="Remove all wires connected to this node" onClick={() => disconnectWires(ctxMenu.nodeId!)}>
                   ✂ Disconnect Wires
+                </button>
+                {/* Phase 8: Node role */}
+                <hr />
+                <button
+                  title="Set as Parallel node — blends grade with upstream using screen mode"
+                  onClick={() => {
+                    const newRole = node?.nodeRole === "parallel" ? undefined : "parallel" as const;
+                    onUpdateGraph({
+                      ...graph,
+                      nodes: graph.nodes.map(n => n.id === ctxMenu.nodeId ? { ...n, nodeRole: newRole } : n),
+                    });
+                    setCtxMenu(null);
+                  }}
+                  style={node?.nodeRole === "parallel" ? { color: "#a855f7", fontWeight: 700 } : {}}
+                >
+                  {node?.nodeRole === "parallel" ? "∥ Remove Parallel" : "∥ Set as Parallel Node"}
+                </button>
+                <button
+                  title="Set as Layer node — composites with alpha/mask"
+                  onClick={() => {
+                    const newRole = node?.nodeRole === "layer" ? undefined : "layer" as const;
+                    onUpdateGraph({
+                      ...graph,
+                      nodes: graph.nodes.map(n => n.id === ctxMenu.nodeId ? { ...n, nodeRole: newRole } : n),
+                    });
+                    setCtxMenu(null);
+                  }}
+                  style={node?.nodeRole === "layer" ? { color: "#38bdf8", fontWeight: 700 } : {}}
+                >
+                  {node?.nodeRole === "layer" ? "⊞ Remove Layer" : "⊞ Set as Layer Node"}
                 </button>
                 <hr />
                 <button title="Duplicate selected nodes (Ctrl+D)" onClick={duplicateSelected}>⧉ Duplicate</button>

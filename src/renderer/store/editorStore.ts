@@ -6,6 +6,7 @@ import {
   type ColorGrade,
   type ColorStill,
   type Transcript,
+  type DuckingSettings,
   createDefaultColorGrade,
   createEmptyClip,
   createEmptyProject,
@@ -135,6 +136,8 @@ interface EditorStore {
   removeEffect: (clipId: string, effectId: string) => void;
   toggleEffect: (clipId: string, effectId: string) => void;
   reorderEffects: (clipId: string, fromIdx: number, toIdx: number) => void;
+  /** Phase 8: Add a keyframe for an effect parameter */
+  addEffectKeyframe: (clipId: string, effectId: string, paramKey: string, frame: number, value: number) => void;
 
   // ── Color Grading ──
   setColorGrade: (clipId: string, grade: Partial<ColorGrade>) => void;
@@ -154,6 +157,14 @@ interface EditorStore {
   removeTrack: (trackId: string) => void;
   updateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   duplicateTrack: (trackId: string) => void;
+  /** Phase 8: Toggle track locked state */
+  toggleTrackLock: (trackId: string) => void;
+  /** Phase 8: Toggle track solo state */
+  toggleTrackSolo: (trackId: string) => void;
+  /** Phase 8: Add adjustment layer at given time range on topmost video track */
+  addAdjustmentLayer: (startFrame: number, durationFrames: number) => void;
+  /** Phase 8: Set/update ducking settings */
+  setDuckingSettings: (settings: import("../../shared/models").DuckingSettings[]) => void;
   /** Patch any fields on a TimelineClip directly (used for new features like speedRamp, titleConfig) */
   patchClip: (clipId: string, updates: Partial<import("../../shared/models").TimelineClip>) => void;
   /** Add an asset to the project pool without appending to timeline */
@@ -1603,6 +1614,25 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     })));
   },
 
+  addEffectKeyframe: (clipId, effectId, paramKey, frame, value) => {
+    set(withUndo("Add Effect Keyframe", (state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      effects: c.effects.map(e => {
+        if (e.id !== effectId) return e;
+        const existing = e.keyframes?.[paramKey] ?? [];
+        // Replace if same frame exists, otherwise append
+        const filtered = existing.filter(kf => kf.frame !== frame);
+        return {
+          ...e,
+          keyframes: {
+            ...e.keyframes,
+            [paramKey]: [...filtered, { frame, value, easing: "linear" as const }].sort((a, b) => a.frame - b.frame),
+          }
+        };
+      })
+    }))));
+  },
+
   // ── Color Grading ─────────────────────────────────────────────────────────
 
   enableColorGrade: (clipId) => {
@@ -1823,6 +1853,96 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           )
         }
       }
+    })));
+  },
+
+  toggleTrackLock: (trackId) => {
+    set(withUndo("Toggle Track Lock", (state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.map((t) =>
+            t.id === trackId ? { ...t, locked: !t.locked } : t
+          )
+        }
+      }
+    })));
+  },
+
+  toggleTrackSolo: (trackId) => {
+    set(withUndo("Toggle Track Solo", (state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.map((t) =>
+            t.id === trackId ? { ...t, solo: !t.solo } : t
+          )
+        }
+      }
+    })));
+  },
+
+  addAdjustmentLayer: (startFrame, durationFrames) => {
+    set(withUndo("Add Adjustment Layer", (state) => {
+      // Place on topmost video track (first video track)
+      const videoTrack = state.project.sequence.tracks.find(t => t.kind === "video");
+      if (!videoTrack) return state;
+      const fps = state.project.sequence.settings.fps;
+      const durationSeconds = durationFrames / fps;
+      const virtualAssetId = createId();
+      const virtualAsset: import("../../shared/models").MediaAsset = {
+        id: virtualAssetId,
+        name: "Adjustment Layer",
+        sourcePath: "",
+        previewUrl: "",
+        thumbnailUrl: null,
+        durationSeconds,
+        nativeFps: fps,
+        width: state.project.sequence.settings.width,
+        height: state.project.sequence.settings.height,
+        hasAudio: false,
+      };
+      const adjClip: TimelineClip = {
+        id: createId(),
+        assetId: virtualAssetId,
+        trackId: videoTrack.id,
+        startFrame,
+        trimStartFrames: 0,
+        trimEndFrames: 0,
+        linkedGroupId: null,
+        isEnabled: true,
+        transitionIn: null,
+        transitionOut: null,
+        masks: [],
+        effects: [],
+        colorGrade: null,
+        volume: 1,
+        speed: 1,
+        transform: null,
+        compGraph: null,
+        aiBackgroundRemoval: null,
+        beatSync: null,
+        clipType: "adjustment",
+      };
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          assets: [...state.project.assets, virtualAsset],
+          sequence: {
+            ...state.project.sequence,
+            clips: [...state.project.sequence.clips, adjClip],
+          }
+        }
+      };
+    }));
+  },
+
+  setDuckingSettings: (settings: DuckingSettings[]) => {
+    set(withUndo("Set Ducking Settings", (state) => ({
+      project: { ...state.project, duckingSettings: settings }
     })));
   },
 
