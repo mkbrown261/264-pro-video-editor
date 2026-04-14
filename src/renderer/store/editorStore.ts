@@ -138,6 +138,8 @@ interface EditorStore {
   reorderEffects: (clipId: string, fromIdx: number, toIdx: number) => void;
   /** Phase 8: Add a keyframe for an effect parameter */
   addEffectKeyframe: (clipId: string, effectId: string, paramKey: string, frame: number, value: number) => void;
+  /** Bezier curve editor: replace all keyframes for an effect parameter */
+  updateEffectKeyframes: (clipId: string, effectId: string, paramName: string, keyframes: import("../components/KeyframeCurveEditor").CurveKeyframe[]) => void;
 
   // ── Color Grading ──
   setColorGrade: (clipId: string, grade: Partial<ColorGrade>) => void;
@@ -231,6 +233,12 @@ interface EditorStore {
 
   // ── Ripple operations ──
   rippleDelete: (clipId: string) => void;
+
+  // ── Precision Trim operations ──
+  rippleTrim: (clipId: string, side: 'start' | 'end', deltaFrames: number) => void;
+  rollTrim: (clipId: string, deltaFrames: number) => void;
+  slip: (clipId: string, deltaFrames: number) => void;
+  slide: (clipId: string, deltaFrames: number) => void;
 
   // ── Fixed Playhead Mode ──
   fixedPlayheadMode: boolean;
@@ -1636,6 +1644,22 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }))));
   },
 
+  updateEffectKeyframes: (clipId, effectId, paramName, keyframes) => {
+    set(withUndo("Update Effect Keyframes", (state) => updateClipInState(state, clipId, (c) => ({
+      ...c,
+      effects: (c.effects ?? []).map(ef => {
+        if (ef.id !== effectId) return ef;
+        return {
+          ...ef,
+          keyframes: {
+            ...(ef.keyframes ?? {}),
+            [paramName]: keyframes as unknown as import("../../shared/models").Keyframe<number>[],
+          },
+        };
+      }),
+    }))));
+  },
+
   // ── Color Grading ─────────────────────────────────────────────────────────
 
   enableColorGrade: (clipId) => {
@@ -2407,6 +2431,189 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           isPlaying: nextSegs.length ? state.playback.isPlaying : false,
           playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
         }
+      };
+    }));
+  },
+
+  // ── Precision Trim operations ─────────────────────────────────────────────
+
+  rippleTrim: (clipId, side, deltaFrames) => {
+    set(withUndo("Ripple Trim", (state) => {
+      const clip = state.project.sequence.clips.find(c => c.id === clipId);
+      if (!clip) return state;
+      const asset = state.project.assets.find(a => a.id === clip.assetId);
+      if (!asset) return state;
+      const fps = state.project.sequence.settings.fps;
+      const totalAssetFrames = Math.round(asset.durationSeconds * fps);
+
+      if (side === 'start') {
+        // Increase trimStartFrames, shift startFrame, ripple downstream by -deltaFrames
+        const newTrimStart = Math.max(0,
+          Math.min(clip.trimStartFrames + deltaFrames, totalAssetFrames - clip.trimEndFrames - 1)
+        );
+        const actualDelta = newTrimStart - clip.trimStartFrames;
+        const newStartFrame = Math.max(0, clip.startFrame + actualDelta);
+        const updatedClips = state.project.sequence.clips.map(c => {
+          if (c.id === clipId) {
+            return { ...c, trimStartFrames: newTrimStart, startFrame: newStartFrame };
+          }
+          // Ripple downstream clips on the same track
+          if (c.trackId === clip.trackId && c.startFrame > clip.startFrame) {
+            return { ...c, startFrame: Math.max(0, c.startFrame - actualDelta) };
+          }
+          return c;
+        });
+        return {
+          project: {
+            ...state.project,
+            sequence: { ...state.project.sequence, clips: updatedClips }
+          },
+          playback: { ...state.playback, playheadFrame: clampPlayhead({ ...state.project, sequence: { ...state.project.sequence, clips: updatedClips } }, state.playback.playheadFrame) }
+        };
+      } else {
+        // side === 'end': increase trimEndFrames by -deltaFrames (i.e. trim end moves right when delta>0)
+        const newTrimEnd = Math.max(0,
+          Math.min(clip.trimEndFrames + (-deltaFrames), totalAssetFrames - clip.trimStartFrames - 1)
+        );
+        const updatedClips = state.project.sequence.clips.map(c => {
+          if (c.id === clipId) {
+            return { ...c, trimEndFrames: newTrimEnd };
+          }
+          return c;
+        });
+        return {
+          project: {
+            ...state.project,
+            sequence: { ...state.project.sequence, clips: updatedClips }
+          },
+          playback: { ...state.playback, playheadFrame: clampPlayhead({ ...state.project, sequence: { ...state.project.sequence, clips: updatedClips } }, state.playback.playheadFrame) }
+        };
+      }
+    }));
+  },
+
+  rollTrim: (clipId, deltaFrames) => {
+    set(withUndo("Roll Trim", (state) => {
+      const clip = state.project.sequence.clips.find(c => c.id === clipId);
+      if (!clip) return state;
+      const asset = state.project.assets.find(a => a.id === clip.assetId);
+      if (!asset) return state;
+      const fps = state.project.sequence.settings.fps;
+      const totalAssetFrames = Math.round(asset.durationSeconds * fps);
+
+      // Move edit point: trim end of this clip by -deltaFrames, trim start of next clip by +deltaFrames
+      const newTrimEnd = Math.max(0,
+        Math.min(clip.trimEndFrames + (-deltaFrames), totalAssetFrames - clip.trimStartFrames - 1)
+      );
+
+      // Find the next clip on the same track
+      const clipEnd = clip.startFrame + Math.round(asset.durationSeconds * fps) - clip.trimStartFrames - clip.trimEndFrames;
+      const nextClip = state.project.sequence.clips
+        .filter(c => c.trackId === clip.trackId && c.id !== clipId && c.startFrame >= clipEnd)
+        .sort((a, b) => a.startFrame - b.startFrame)[0] ?? null;
+
+      const updatedClips = state.project.sequence.clips.map(c => {
+        if (c.id === clipId) {
+          return { ...c, trimEndFrames: newTrimEnd };
+        }
+        if (nextClip && c.id === nextClip.id) {
+          const nextAsset = state.project.assets.find(a => a.id === c.assetId);
+          if (!nextAsset) return c;
+          const nextTotal = Math.round(nextAsset.durationSeconds * fps);
+          const newNextTrimStart = Math.max(0,
+            Math.min(c.trimStartFrames + deltaFrames, nextTotal - c.trimEndFrames - 1)
+          );
+          return { ...c, trimStartFrames: newNextTrimStart };
+        }
+        return c;
+      });
+
+      return {
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, clips: updatedClips }
+        },
+        playback: { ...state.playback, playheadFrame: clampPlayhead({ ...state.project, sequence: { ...state.project.sequence, clips: updatedClips } }, state.playback.playheadFrame) }
+      };
+    }));
+  },
+
+  slip: (clipId, deltaFrames) => {
+    set(withUndo("Slip", (state) => {
+      const clip = state.project.sequence.clips.find(c => c.id === clipId);
+      if (!clip) return state;
+      const asset = state.project.assets.find(a => a.id === clip.assetId);
+      if (!asset) return state;
+      const fps = state.project.sequence.settings.fps;
+      const totalAssetFrames = Math.round(asset.durationSeconds * fps);
+
+      // Shift trimStartFrames += deltaFrames, trimEndFrames += -deltaFrames (keep duration constant)
+      const newTrimStart = Math.max(0, Math.min(clip.trimStartFrames + deltaFrames, totalAssetFrames - clip.trimEndFrames - 1));
+      const newTrimEnd   = Math.max(0, Math.min(clip.trimEndFrames + (-deltaFrames), totalAssetFrames - clip.trimStartFrames - 1));
+
+      return updateClipInState(state, clipId, (c) => ({
+        ...c,
+        trimStartFrames: newTrimStart,
+        trimEndFrames: newTrimEnd,
+      }));
+    }));
+  },
+
+  slide: (clipId, deltaFrames) => {
+    set(withUndo("Slide", (state) => {
+      const clip = state.project.sequence.clips.find(c => c.id === clipId);
+      if (!clip) return state;
+      const asset = state.project.assets.find(a => a.id === clip.assetId);
+      if (!asset) return state;
+      const fps = state.project.sequence.settings.fps;
+
+      const newStartFrame = Math.max(0, clip.startFrame + deltaFrames);
+
+      // Find previous clip on same track
+      const prevClip = state.project.sequence.clips
+        .filter(c => c.trackId === clip.trackId && c.id !== clipId && c.startFrame < clip.startFrame)
+        .sort((a, b) => b.startFrame - a.startFrame)[0] ?? null;
+
+      // Find next clip on same track
+      const clipDur = Math.round(asset.durationSeconds * fps) - clip.trimStartFrames - clip.trimEndFrames;
+      const clipEnd = clip.startFrame + clipDur;
+      const nextClip = state.project.sequence.clips
+        .filter(c => c.trackId === clip.trackId && c.id !== clipId && c.startFrame >= clipEnd)
+        .sort((a, b) => a.startFrame - b.startFrame)[0] ?? null;
+
+      const updatedClips = state.project.sequence.clips.map(c => {
+        if (c.id === clipId) {
+          return { ...c, startFrame: newStartFrame };
+        }
+        if (prevClip && c.id === prevClip.id) {
+          const prevAsset = state.project.assets.find(a => a.id === c.assetId);
+          if (!prevAsset) return c;
+          const prevTotal = Math.round(prevAsset.durationSeconds * fps);
+          // Prev clip trims its end to fill/reduce the gap
+          const newPrevTrimEnd = Math.max(0,
+            Math.min(c.trimEndFrames - deltaFrames, prevTotal - c.trimStartFrames - 1)
+          );
+          return { ...c, trimEndFrames: newPrevTrimEnd };
+        }
+        if (nextClip && c.id === nextClip.id) {
+          const nextAsset = state.project.assets.find(a => a.id === c.assetId);
+          if (!nextAsset) return c;
+          const nextTotal = Math.round(nextAsset.durationSeconds * fps);
+          // Next clip adjusts trimStart + startFrame to maintain continuity
+          const newNextTrimStart = Math.max(0,
+            Math.min(c.trimStartFrames + deltaFrames, nextTotal - c.trimEndFrames - 1)
+          );
+          return { ...c, trimStartFrames: newNextTrimStart };
+        }
+        return c;
+      });
+
+      return {
+        project: {
+          ...state.project,
+          sequence: { ...state.project.sequence, clips: updatedClips }
+        },
+        playback: { ...state.playback, playheadFrame: clampPlayhead({ ...state.project, sequence: { ...state.project.sequence, clips: updatedClips } }, state.playback.playheadFrame) }
       };
     }));
   },

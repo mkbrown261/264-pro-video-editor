@@ -16,6 +16,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { CommandPalette, buildCommandList } from "./components/CommandPalette";
 import { StoryboardView } from "./components/StoryboardView";
 import { ColorHistogram } from "./components/ColorHistogram";
+import { PrecisionTrimPanel } from "./components/PrecisionTrimPanel";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
 import { useAsyncImport } from "./hooks/useAsyncImport";
@@ -570,6 +571,7 @@ export default function App() {
   const toggleEffect = useEditorStore((s) => s.toggleEffect);
   const reorderEffects = useEditorStore((s) => s.reorderEffects);
   const addEffectKeyframe = useEditorStore((s) => s.addEffectKeyframe);
+  const updateEffectKeyframes = useEditorStore((s) => s.updateEffectKeyframes);
   const toggleBackgroundRemoval = useEditorStore((s) => s.toggleBackgroundRemoval);
   const setBackgroundRemoval = useEditorStore((s) => s.setBackgroundRemoval);
 
@@ -582,6 +584,12 @@ export default function App() {
   // Phase 3 additions
   const rippleDelete = useEditorStore((s) => s.rippleDelete);
   const fixedPlayheadMode = useEditorStore((s) => s.fixedPlayheadMode);
+
+  // Precision Trim
+  const rippleTrim = useEditorStore((s) => s.rippleTrim);
+  const rollTrim   = useEditorStore((s) => s.rollTrim);
+  const slip       = useEditorStore((s) => s.slip);
+  const slide      = useEditorStore((s) => s.slide);
   const toggleFixedPlayheadMode = useEditorStore((s) => s.toggleFixedPlayheadMode);
   const setTranscript = useEditorStore((s) => s.setTranscript);
   const addColorStill = useEditorStore((s) => s.addColorStill);
@@ -894,6 +902,7 @@ export default function App() {
 
   // ── AI Tools Panel ─────────────────────────────────────────────────────────
   const [aiToolsPanelOpen, setAiToolsPanelOpen] = useState(false);
+  const [trimPanelOpen, setTrimPanelOpen] = useState(false);
 
   // ── Phase 4: New Panel State ────────────────────────────────────────────────
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
@@ -1586,6 +1595,19 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") {
         e.preventDefault();
         setIntelligenceOpen(v => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ── Precision Trim: T key toggles trim panel ───────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if ((e.key === 't' || e.key === 'T') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        setTrimPanelOpen(v => !v);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -3046,6 +3068,15 @@ export default function App() {
                   ✂️
                   <span className="tool-btn-label">Blade</span>
                 </button>
+                <button
+                  className={`tool-btn${trimPanelOpen ? " active" : ""}`}
+                  onClick={() => setTrimPanelOpen(v => !v)}
+                  title="Precision Trim (T)"
+                  type="button"
+                >
+                  ✂
+                  <span className="tool-btn-label">Trim</span>
+                </button>
                 <div className="tool-toolbar-sep" />
                 <button
                   className="tool-btn"
@@ -3151,7 +3182,11 @@ export default function App() {
               onAddEffectKeyframe={(effectId, paramKey, frame, value) => {
                 if (selectedClipId) addEffectKeyframe(selectedClipId, effectId, paramKey, frame, value);
               }}
+              onUpdateEffectKeyframes={(effectId, paramName, keyframes) => {
+                if (selectedClipId) updateEffectKeyframes(selectedClipId, effectId, paramName, keyframes);
+              }}
               currentPlayheadFrame={playback.playheadFrame}
+              totalFrames={totalFrames}
               onToggleClipEnabled={(clipId) => { pauseViewerPlayback(); toggleClipEnabled(clipId); }}
               onDetachLinkedClips={(clipId) => { pauseViewerPlayback(); detachLinkedClips(clipId); }}
               onRelinkClips={(clipId) => { pauseViewerPlayback(); relinkClips(clipId); }}
@@ -3379,6 +3414,20 @@ export default function App() {
                   onReorderClips={reorderClips}
                 />
               </div>
+            )}
+
+            {/* Precision Trim Panel */}
+            {trimPanelOpen && activePage === 'edit' && (
+              <PrecisionTrimPanel
+                project={project}
+                fps={project.sequence.settings.fps}
+                selectedClipId={selectedClipId}
+                onRippleTrim={rippleTrim}
+                onRollTrim={rollTrim}
+                onSlip={slip}
+                onSlide={slide}
+                onClose={() => setTrimPanelOpen(false)}
+              />
             )}
 
             {/* Timeline */}
