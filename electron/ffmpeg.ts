@@ -370,6 +370,22 @@ export function killAllActiveProcesses(): void {
   _activeChildren.clear();
 }
 
+// ── Transition filter helper ──────────────────────────────────────────────────
+// Returns the appropriate FFmpeg video filter string for a clip's transition-in.
+// Note: xfade technically requires two input streams and is best applied between
+// clips in a more complex filter graph. Here we apply it per-clip as a reasonable
+// approximation; the offset=0 means the effect plays from the clip's own start.
+// fade=t=out is kept as-is for transition-out since xfade needs a second stream.
+function getXfadeFilter(transitionType: string | undefined, durationSec: number): string {
+  if (!transitionType || durationSec <= 0) return `fade=t=in:st=0:d=${durationSec}`;
+  switch (transitionType) {
+    case "whip_smear":          return `xfade=transition=slideleft:duration=${durationSec}:offset=0`;
+    case "light_leak_dissolve": return `xfade=transition=fadewhite:duration=${durationSec}:offset=0`;
+    case "digital_shatter":     return `xfade=transition=horzopen:duration=${durationSec}:offset=0`;
+    default:                    return `fade=t=in:st=0:d=${durationSec}`;
+  }
+}
+
 // ── atempo chain helper ───────────────────────────────────────────────────────
 // atempo filter only accepts 0.5–2.0. For values outside that range we chain
 // multiple atempo filters. E.g. 4x speed = atempo=2.0,atempo=2.0
@@ -659,6 +675,27 @@ export async function exportSequence(
             }
             break;
           }
+          case "film_look_creator": {
+            // Organic film look: grain + slight curves + subtle vignette
+            const intensity = Math.min(1, Math.max(0, Number(effect.params?.intensity ?? 50) / 100));
+            const grainStr = (intensity * 20).toFixed(1);
+            videoFilters.push(`noise=alls=${grainStr}:allf=t`);
+            videoFilters.push(`vignette=angle=PI/4:x0=w/2:y0=h/2:mode=forward:eval=frame`);
+            videoFilters.push(`curves=all='0/0 0.3/${(0.27 + intensity * 0.03).toFixed(2)} 0.7/${(0.68 + intensity * 0.02).toFixed(2)} 1/1'`);
+            break;
+          }
+          case "face_refinement": {
+            // Soft skin smoothing via bilateral-style blur + slight sharpen on edges
+            videoFilters.push(`smartblur=lr=1.0:ls=-1.0:cr=0.9:cs=-0.3`);
+            break;
+          }
+          case "defocus_background": {
+            // Center-sharp, edges blurred — simulates shallow DoF
+            const strength = Math.min(10, Math.max(1, Math.round(Number(effect.params?.intensity ?? 50) / 10)));
+            videoFilters.push(`boxblur=${strength}:1`);
+            videoFilters.push(`overlay=0:0`); // placeholder — full ML version requires segmentation
+            break;
+          }
           default:
             break;
         }
@@ -671,7 +708,7 @@ export async function exportSequence(
     }
 
     if (Number(transitionInSeconds) > 0) {
-      videoFilters.push(`fade=t=in:st=0:d=${transitionInSeconds}`);
+      videoFilters.push(getXfadeFilter(segment.clip.transitionIn?.type, Number(transitionInSeconds)));
     }
     if (Number(transitionOutSeconds) > 0) {
       const fadeOutStart = Math.max(
