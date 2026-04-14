@@ -16,6 +16,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { CommandPalette, buildCommandList } from "./components/CommandPalette";
 import { StoryboardView } from "./components/StoryboardView";
 import { ColorHistogram } from "./components/ColorHistogram";
+import { VideoScopesPanel } from "./components/VideoScopesPanel";
 import { PrecisionTrimPanel } from "./components/PrecisionTrimPanel";
 import { useEditorShortcuts } from "./hooks/useEditorShortcuts";
 import { useWaveformExtractor } from "./hooks/useWaveformExtractor";
@@ -691,6 +692,7 @@ export default function App() {
 
   // ── Storyboard ────────────────────────────────────────────────────────────
   const [storyboardOpen, setStoryboardOpen] = useState(false);
+  const [editScopesOpen, setEditScopesOpen] = useState(false);
 
   // ── Viewer maximize ────────────────────────────────────────────────────────
   // When true: both side panels collapse and timeline shrinks to minimum
@@ -3131,6 +3133,16 @@ export default function App() {
                   □
                   <span className="tool-btn-label">Fit</span>
                 </button>
+                <div className="tool-toolbar-sep" />
+                <button
+                  className={`tool-btn${editScopesOpen ? " active" : ""}`}
+                  onClick={() => setEditScopesOpen(v => !v)}
+                  title="Toggle Video Scopes"
+                  type="button"
+                >
+                  📊
+                  <span className="tool-btn-label">Scopes</span>
+                </button>
               </div>
               <ViewerPanel
                 ref={viewerPanelRef}
@@ -3162,6 +3174,12 @@ export default function App() {
                 onOverwriteAtPlayhead={handleOverwriteAtPlayhead}
                 getCachedVideoPath={renderCache.getCachedPath}
               />
+              {/* Edit-page Video Scopes — toggleable via Scopes toolbar button */}
+              {editScopesOpen && (
+                <div style={{ padding: "6px 8px 0 8px" }}>
+                  <VideoScopesPanel videoRef={viewerVideoRef} width={320} height={150} refreshMs={150} />
+                </div>
+              )}
             </div>
 
             <div
@@ -3630,14 +3648,9 @@ export default function App() {
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
               />
-              {/* Imp 5 / Imp 12: Persistent Scopes Strip */}
+              {/* Professional Video Scopes — live pixel data via Canvas2D */}
               <div className="color-scopes-strip">
-                <div className="scope-block">Waveform</div>
-                <div className="scope-block">Parade</div>
-                <div className="scope-block">Vectorscope</div>
-                <div className="scope-block">
-                  <ColorHistogram videoRef={colorPageVideoRef} width={200} height={90} />
-                </div>
+                <VideoScopesPanel videoRef={colorPageVideoRef} width={300} height={160} refreshMs={150} />
               </div>
             </div>
 
