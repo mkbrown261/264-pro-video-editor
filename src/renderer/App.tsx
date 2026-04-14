@@ -43,6 +43,15 @@ import { TitleGeneratorPanel } from "./components/TitleGeneratorPanel";
 import { FairlightPanel } from "./components/FairlightPanel";
 import { TextBasedEditingPanel } from "./components/TextBasedEditingPanel";
 import { ShortcutsPanel } from "./components/ShortcutsPanel";
+// Phase 4 new imports
+import { ProjectTemplateModal, instantiateTemplate, type ProjectTemplate } from "./components/ProjectTemplateModal";
+import { ProjectNotesPanel } from "./components/ProjectNotesPanel";
+import { MulticamPanel } from "./components/MulticamPanel";
+import { AutoResizePanel } from "./components/AutoResizePanel";
+import { AIStoryboardPanel } from "./components/AIStoryboardPanel";
+import { ShotListPanel } from "./components/ShotListPanel";
+import { SmartSuggestionsBar } from "./components/SmartSuggestionsBar";
+import { type BatchPreset } from "./components/RenderQueuePanel";
 
 // Pages: edit | color | fusion | audio
 type AppPage = "edit" | "color" | "fusion" | "audio";
@@ -565,6 +574,15 @@ export default function App() {
   const removeColorStill = useEditorStore((s) => s.removeColorStill);
   const renameColorStill = useEditorStore((s) => s.renameColorStill);
 
+  // ── Phase 4 new store actions ───────────────────────────────────────────────
+  const updateProjectMetadata = useEditorStore((s) => s.updateProjectMetadata);
+  const autoLayoutTimeline    = useEditorStore((s) => s.autoLayoutTimeline);
+  const nestSelectedClips     = useEditorStore((s) => s.nestSelectedClips);
+  const saveClipSnapshot      = useEditorStore((s) => s.saveClipHistorySnapshot);
+  const restoreClipSnapshot   = useEditorStore((s) => s.restoreClipHistorySnapshot);
+  const groupNodes            = useEditorStore((s) => s.groupNodes);
+  const addAssetToPoolStore   = useEditorStore((s) => s.addAssetToPool);
+
   // ── Fusion store actions ────────────────────────────────────────────────────
   const fusionClipId = useEditorStore((s) => s.fusionClipId);
   const openFusion   = useEditorStore((s) => s.openFusion);
@@ -816,6 +834,14 @@ export default function App() {
 
   // ── AI Tools Panel ─────────────────────────────────────────────────────────
   const [aiToolsPanelOpen, setAiToolsPanelOpen] = useState(false);
+
+  // ── Phase 4: New Panel State ────────────────────────────────────────────────
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [projectNotesPanelOpen, setProjectNotesPanelOpen] = useState(false);
+  const [multicamOpen, setMulticamOpen] = useState(false);
+  const [autoResizeOpen, setAutoResizeOpen] = useState(false);
+  const [aiStoryboardOpen, setAiStoryboardOpen] = useState(false);
+  const [shotListOpen, setShotListOpen] = useState(false);
 
   // ── Image to Video ─────────────────────────────────────────────────────────
   const [imageToVideoAsset, setImageToVideoAsset] = useState<import("../shared/models").MediaAsset | null>(null);
@@ -1391,6 +1417,18 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
         e.preventDefault();
         setClawbotOpen(v => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Project Notes keyboard shortcut: Cmd/Ctrl+Shift+N
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setProjectNotesPanelOpen(v => !v);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -2274,13 +2312,28 @@ export default function App() {
 
       {/* ── Render Queue Panel (floating) ── */}
       {renderQueueOpen && (
-        <div style={{ position: "fixed", bottom: 60, right: 16, zIndex: 5000, width: 340 }}>
+        <div style={{ position: "fixed", bottom: 60, right: 16, zIndex: 5000, width: 360 }}>
           <RenderQueuePanel
             jobs={renderJobs}
             onRemoveJob={(id) => setRenderJobs((prev) => prev.filter((j) => j.id !== id))}
             onRetryJob={(id) => setRenderJobs((prev) => prev.map((j) => j.id === id ? { ...j, status: "queued" as const, progress: 0, errorMessage: undefined } : j))}
             onRevealOutput={(outputPath) => { void window.editorApi?.showInFolder?.(outputPath); }}
             onClose={() => setRenderQueueOpen(false)}
+            projectName={project.name}
+            onAddBatchJobs={(presets: BatchPreset[]) => {
+              const newJobs = presets.map(p => ({
+                id: createId(),
+                label: `${project.name}${p.suffix} · ${p.label}`,
+                codec: p.codec,
+                outputWidth: p.width,
+                outputHeight: p.height,
+                status: "queued" as const,
+                progress: 0,
+                createdAt: Date.now(),
+              }));
+              setRenderJobs(prev => [...prev, ...newJobs]);
+              toast.success(`Added ${newJobs.length} batch jobs to queue`);
+            }}
           />
         </div>
       )}
@@ -2343,6 +2396,9 @@ export default function App() {
               <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); handleNewProject(); }} type="button">
                 <span className="fmi-icon">➕</span> New Project <span className="fmi-kbd">⌘N</span>
               </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setTemplateModalOpen(true); }} type="button">
+                <span className="fmi-icon">📋</span> New from Template…
+              </button>
               <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleOpenProject(); }} type="button">
                 <span className="fmi-icon">📂</span> Open… <span className="fmi-kbd">⌘O</span>
               </button>
@@ -2360,7 +2416,13 @@ export default function App() {
               <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleExport(); }} type="button">
                 <span className="fmi-icon">🎥</span> Export… <span className="fmi-kbd">⌘E</span>
               </button>
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setAutoResizeOpen(true); }} type="button">
+                <span className="fmi-icon">📱</span> Social Auto-Resize…
+              </button>
               <div className="file-menu-sep" />
+              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setProjectNotesPanelOpen(true); }} type="button">
+                <span className="fmi-icon">📋</span> Project Notes… <span className="fmi-kbd">⌘⇧N</span>
+              </button>
               <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShowSettings(true); }} type="button">
                 <span className="fmi-icon">⚙️</span> Settings…
               </button>
@@ -2618,6 +2680,35 @@ export default function App() {
             type="button"
           >
             T Titles
+          </button>
+
+          {/* Phase 4: New panel buttons */}
+          <button
+            className={`panel-toggle-btn${multicamOpen ? " on" : ""}`}
+            onClick={() => setMulticamOpen(v => !v)}
+            title="Multicam Angle Viewer — cut between camera angles"
+            type="button"
+            style={{ borderColor: "rgba(79,142,247,0.3)", color: multicamOpen ? "#4f8ef7" : undefined }}
+          >
+            📹 Multicam
+          </button>
+          <button
+            className="panel-toggle-btn"
+            onClick={() => setAiStoryboardOpen(true)}
+            title="AI Storyboard → Timeline — generate a rough cut from a description"
+            type="button"
+            style={{ borderColor: "rgba(168,85,247,0.3)", color: "#a855f7" }}
+          >
+            🤖 Storyboard
+          </button>
+          <button
+            className="panel-toggle-btn"
+            onClick={() => setShotListOpen(true)}
+            title="Shot List & Script Integration — import fountain/plain text scripts"
+            type="button"
+            style={{ borderColor: "rgba(47,199,122,0.3)", color: "#2fc77a" }}
+          >
+            🎞 Shot List
           </button>
         </div>
 
@@ -3080,6 +3171,11 @@ export default function App() {
               onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
               fixedPlayheadMode={fixedPlayheadMode}
               onToggleFixedPlayheadMode={toggleFixedPlayheadMode}
+              onAutoLayout={autoLayoutTimeline}
+              onNestClips={(clipIds, label) => nestSelectedClips(clipIds, label)}
+              onSaveClipSnapshot={(clipId, label) => saveClipSnapshot(clipId, label)}
+              onRestoreClipSnapshot={(clipId, snapshotId) => restoreClipSnapshot(clipId, snapshotId)}
+              clipHistoryMap={Object.fromEntries(project.sequence.clips.filter(c => c.clipHistory && c.clipHistory.length > 0).map(c => [c.id, c.clipHistory!]))}
             />
 
             {/* Audio Mixer Panel */}
@@ -3184,6 +3280,31 @@ export default function App() {
 
             {/* Bottom: Timeline */}
             <div className="color-page-timeline">
+              {/* UX 4: Smart Suggestions Bar */}
+              <SmartSuggestionsBar
+                segments={segments}
+                selectedClipId={selectedClipId}
+                onNormalizeWhiteBalance={(clipId) => {
+                  setColorGrade(clipId, { temperature: 0, tint: 0 });
+                  toast.info("White balance normalized");
+                }}
+                onRecoverHighlights={(clipId) => {
+                  setColorGrade(clipId, { exposure: -0.5, gain: { r: -0.02, g: -0.02, b: -0.02 } });
+                  toast.info("Highlight recovery applied");
+                }}
+                onCompressAudio={() => {
+                  project.sequence.clips.filter(c => {
+                    const track = project.sequence.tracks.find(t => t.id === c.trackId);
+                    return track?.kind === "audio" && c.volume > 1.3;
+                  }).forEach(c => setClipVolume(c.id, 1.0));
+                  toast.info("Audio peaks compressed to unity");
+                }}
+                onAutoColorGrade={(clipId) => {
+                  enableColorGrade(clipId);
+                  setColorGrade(clipId, { saturation: 1.1, contrast: 0.1, exposure: 0.05 });
+                  toast.info("Auto color grade applied");
+                }}
+              />
               <TimelinePanel
                 trackLayouts={trackLayouts}
                 selectedClipId={selectedClipId}
@@ -3244,6 +3365,11 @@ export default function App() {
               onAddKeyframe={(clipId, property, frame, value) => addKeyframe(clipId, property, frame, value)}
               fixedPlayheadMode={fixedPlayheadMode}
               onToggleFixedPlayheadMode={toggleFixedPlayheadMode}
+              onAutoLayout={autoLayoutTimeline}
+              onNestClips={(clipIds, label) => nestSelectedClips(clipIds, label)}
+              onSaveClipSnapshot={(clipId, label) => saveClipSnapshot(clipId, label)}
+              onRestoreClipSnapshot={(clipId, snapshotId) => restoreClipSnapshot(clipId, snapshotId)}
+              clipHistoryMap={Object.fromEntries(project.sequence.clips.filter(c => c.clipHistory && c.clipHistory.length > 0).map(c => [c.id, c.clipHistory!]))}
               />
             </div>
           </>
@@ -3279,6 +3405,8 @@ export default function App() {
               videoRef={viewerVideoRef}
               onUpdateGraph={(clipId, graph) => setCompGraph(clipId, graph)}
               onBack={() => setActivePage("edit")}
+              onGroupNodes={(nodeIds, label) => groupNodes(nodeIds, label)}
+              compoundNodes={project.compoundNodes ?? []}
             />
           );
         })()}
@@ -3413,6 +3541,115 @@ export default function App() {
       {/* ── KEYBOARD SHORTCUTS PANEL ── */}
       {shortcutsPanelOpen && (
         <ShortcutsPanel onClose={() => setShortcutsPanelOpen(false)} />
+      )}
+
+      {/* ── PROJECT TEMPLATE MODAL (UX 5) ── */}
+      {templateModalOpen && (
+        <ProjectTemplateModal
+          onClose={() => setTemplateModalOpen(false)}
+          onSelect={(tmpl: ProjectTemplate) => {
+            const { tracks, markers, settings } = instantiateTemplate(tmpl);
+            const base = createEmptyProject();
+            const newProject = {
+              ...base,
+              name: `${tmpl.label} Project`,
+              sequence: {
+                ...base.sequence,
+                tracks,
+                markers,
+                settings: { ...base.sequence.settings, ...settings },
+              }
+            };
+            loadProjectFromData(newProject);
+            setProjectDirty(false);
+            toast.success(`New ${tmpl.label} project created!`);
+          }}
+        />
+      )}
+
+      {/* ── PROJECT NOTES PANEL (GAP B) ── */}
+      {projectNotesPanelOpen && (
+        <ProjectNotesPanel
+          metadata={project.metadata ?? {}}
+          projectName={project.name}
+          onUpdate={(updates) => updateProjectMetadata(updates)}
+          onClose={() => setProjectNotesPanelOpen(false)}
+        />
+      )}
+
+      {/* ── MULTICAM PANEL (GAP C) ── */}
+      {multicamOpen && (
+        <MulticamPanel
+          segments={segments}
+          playheadFrame={playback.playheadFrame}
+          sequenceFps={project.sequence.settings.fps}
+          onCutToAngle={(clipId, _trackId, frame) => {
+            selectClip(clipId);
+            setPlayheadFrame(frame);
+            toast.info(`Cut to angle at frame ${frame}`);
+          }}
+          onClose={() => setMulticamOpen(false)}
+        />
+      )}
+
+      {/* ── AUTO-RESIZE PANEL (EXCLUSIVE 2) ── */}
+      {autoResizeOpen && (
+        <AutoResizePanel
+          projectName={project.name}
+          onAddBatchJobs={(jobs) => {
+            const newJobs = jobs.map(j => ({
+              id: createId(),
+              label: j.label,
+              codec: j.codec,
+              outputWidth: j.outputWidth,
+              outputHeight: j.outputHeight,
+              status: "queued" as const,
+              progress: 0,
+              createdAt: Date.now(),
+            }));
+            setRenderJobs(prev => [...prev, ...newJobs]);
+            setRenderQueueOpen(true);
+            toast.success(`Added ${newJobs.length} batch export jobs to Render Queue`);
+          }}
+          onClose={() => setAutoResizeOpen(false)}
+        />
+      )}
+
+      {/* ── AI STORYBOARD PANEL (EXCLUSIVE 1) ── */}
+      {aiStoryboardOpen && (
+        <AIStoryboardPanel
+          fps={project.sequence.settings.fps}
+          onCreateTimeline={({ tracks, clips, markers, assets: newAssets }) => {
+            newAssets.forEach(a => addAssetToPoolStore(a));
+            const base = createEmptyProject();
+            const newProject = {
+              ...project,
+              assets: [...project.assets, ...newAssets],
+              sequence: {
+                ...project.sequence,
+                tracks: [...project.sequence.tracks, ...tracks],
+                clips: [...project.sequence.clips, ...clips],
+                markers: [...project.sequence.markers, ...markers],
+              }
+            };
+            loadProjectFromData(newProject);
+            toast.success("AI Storyboard applied to timeline!");
+          }}
+          onClose={() => setAiStoryboardOpen(false)}
+        />
+      )}
+
+      {/* ── SHOT LIST PANEL (EXCLUSIVE 3) ── */}
+      {shotListOpen && (
+        <ShotListPanel
+          fps={project.sequence.settings.fps}
+          existingMarkers={project.sequence.markers}
+          onAddMarkers={(markers) => {
+            markers.forEach(m => addMarker(m));
+            toast.success(`Added ${markers.length} scene markers from shot list`);
+          }}
+          onClose={() => setShotListOpen(false)}
+        />
       )}
 
       {/* ── TEXT-BASED EDITING PANEL ── */}

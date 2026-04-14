@@ -6,7 +6,7 @@
  * sequentially by the queue runner in App.tsx.
  */
 
-import React from "react";
+import React, { useState } from "react";
 import type { ExportCodec } from "../../shared/models";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -26,6 +26,26 @@ export interface RenderJob {
   createdAt: number;       // Date.now()
 }
 
+// ── Batch Export Presets (GAP D) ──────────────────────────────────────────────
+
+export interface BatchPreset {
+  id: string;
+  label: string;
+  codec: ExportCodec;
+  width: number;
+  height: number;
+  suffix: string;
+}
+
+export const BATCH_PRESETS: BatchPreset[] = [
+  { id: "youtube",   label: "YouTube (H.264 1080p)",      codec: "libx264",   width: 1920, height: 1080, suffix: "_youtube"   },
+  { id: "instagram", label: "Instagram (H.264 1080p sq)", codec: "libx264",   width: 1080, height: 1080, suffix: "_instagram" },
+  { id: "prores",    label: "ProRes 4444 (Master)",       codec: "prores_ks", width: 0,    height: 0,    suffix: "_master"    },
+  { id: "reels",     label: "Reels / TikTok (9:16)",      codec: "libx264",   width: 1080, height: 1920, suffix: "_reels"     },
+  { id: "4k",        label: "4K H.265 (Archive)",         codec: "libx265",   width: 3840, height: 2160, suffix: "_4k"        },
+  { id: "vp9",       label: "VP9 WebM (Web)",             codec: "libvpx-vp9",width: 1920, height: 1080, suffix: "_web"       },
+];
+
 // ── Panel component ────────────────────────────────────────────────────────────
 
 interface RenderQueuePanelProps {
@@ -34,6 +54,8 @@ interface RenderQueuePanelProps {
   onRetryJob: (jobId: string) => void;
   onRevealOutput: (outputPath: string) => void;
   onClose: () => void;
+  onAddBatchJobs?: (presets: BatchPreset[]) => void;
+  projectName?: string;
 }
 
 const STATUS_ICONS: Record<RenderJobStatus, string> = {
@@ -64,8 +86,23 @@ export function RenderQueuePanel({
   onRetryJob,
   onRevealOutput,
   onClose,
+  onAddBatchJobs,
+  projectName = "Project",
 }: RenderQueuePanelProps) {
+  const [showBatch, setShowBatch] = useState(false);
+  const [selectedPresets, setSelectedPresets] = useState<Set<string>>(new Set(["youtube", "prores"]));
   const activeCount = jobs.filter((j) => j.status === "rendering" || j.status === "queued").length;
+
+  function togglePreset(id: string) {
+    setSelectedPresets(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  function handleAddBatch() {
+    if (!onAddBatchJobs) return;
+    const presets = BATCH_PRESETS.filter(p => selectedPresets.has(p.id));
+    onAddBatchJobs(presets);
+    setShowBatch(false);
+  }
 
   return (
     <div className="rq-panel">
@@ -77,10 +114,46 @@ export function RenderQueuePanel({
             <span className="rq-badge">{activeCount}</span>
           )}
         </div>
-        <button className="rq-close-btn" onClick={onClose} type="button" title="Close">
-          ✕
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {onAddBatchJobs && (
+            <button
+              type="button"
+              onClick={() => setShowBatch(v => !v)}
+              style={{ padding: "3px 8px", borderRadius: 5, background: showBatch ? "rgba(79,142,247,0.2)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(79,142,247,0.3)", color: "#4f8ef7", fontSize: 10, fontWeight: 600, cursor: "pointer" }}
+              title="Add Batch Export Job"
+            >
+              + Batch Export
+            </button>
+          )}
+          <button className="rq-close-btn" onClick={onClose} type="button" title="Close">
+            ✕
+          </button>
+        </div>
       </div>
+
+      {/* Batch export panel */}
+      {showBatch && onAddBatchJobs && (
+        <div style={{ padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", background: "rgba(0,0,0,0.3)" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.5)", marginBottom: 7, textTransform: "uppercase", letterSpacing: "0.05em" }}>Select Export Formats</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+            {BATCH_PRESETS.map(p => (
+              <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                <input type="checkbox" checked={selectedPresets.has(p.id)} onChange={() => togglePreset(p.id)} style={{ accentColor: "#4f8ef7" }} />
+                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.65)" }}>{p.label}</span>
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginLeft: "auto" }}>{projectName}{p.suffix}</span>
+              </label>
+            ))}
+          </div>
+          <button
+            onClick={handleAddBatch}
+            disabled={selectedPresets.size === 0}
+            type="button"
+            style={{ width: "100%", padding: "6px 0", borderRadius: 6, background: selectedPresets.size > 0 ? "linear-gradient(135deg,#4f8ef7,#7c3aed)" : "rgba(255,255,255,0.07)", border: "none", color: "#fff", fontSize: 11, fontWeight: 700, cursor: selectedPresets.size > 0 ? "pointer" : "not-allowed" }}
+          >
+            Add {selectedPresets.size} Job{selectedPresets.size !== 1 ? "s" : ""} to Queue
+          </button>
+        </div>
+      )}
 
       {/* Job list */}
       <div className="rq-job-list">

@@ -199,6 +199,9 @@ export interface NodeCanvasProps {
   onSelectNodes: (ids: string[]) => void;
   onUpdateGraph: (graph: CompGraph) => void;
   onNodeDoubleClick?: (nodeId: string) => void;
+  // GAP A: Compound Nodes
+  onGroupNodes?: (nodeIds: string[], label: string) => void;
+  compoundNodes?: Array<{ id: string; label: string; nodeIds: string[] }>;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -208,6 +211,8 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
   onSelectNodes,
   onUpdateGraph,
   onNodeDoubleClick,
+  onGroupNodes,
+  compoundNodes = [],
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1061,6 +1066,18 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
                 <button title="Copy selected nodes (Ctrl+C)" onClick={copySelected}>⎘ Copy</button>
                 <button className="danger" title="Delete selected nodes (Del)" onClick={deleteSelected}>🗑 Delete</button>
                 <hr />
+                {onGroupNodes && selectedNodeIds.length >= 2 && (
+                  <button
+                    title="Group selected nodes into a compound node"
+                    onClick={() => {
+                      const label = `Group ${compoundNodes.length + 1}`;
+                      onGroupNodes(selectedNodeIds, label);
+                      setCtxMenu(null);
+                    }}
+                  >
+                    📦 Group Selected ({selectedNodeIds.length})
+                  </button>
+                )}
               </>
             );
           })()}

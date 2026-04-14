@@ -229,6 +229,29 @@ interface EditorStore {
   addColorStill: (still: ColorStill) => void;
   removeColorStill: (stillId: string) => void;
   renameColorStill: (stillId: string, label: string) => void;
+
+  // ── Project Metadata (GAP B) ──
+  updateProjectMetadata: (updates: Partial<import("../../shared/models").ProjectMetadata>) => void;
+
+  // ── Timeline Auto-Layout (UX 2) ──
+  autoLayoutTimeline: () => void;
+
+  // ── Timeline Nesting / Compound Clips (GAP E) ──
+  nestSelectedClips: (clipIds: string[], label: string) => void;
+  openNestedSequence: (nestedSequenceId: string) => void;
+  exitNestedSequence: () => void;
+  activeNestedSequenceId: string | null;
+
+  // ── Clip History (UX 3) ──
+  saveClipHistorySnapshot: (clipId: string, label: string) => void;
+  restoreClipHistorySnapshot: (clipId: string, snapshotId: string) => void;
+
+  // ── Compound Nodes (GAP A) ──
+  groupNodes: (nodeIds: string[], label: string) => void;
+  ungroupNodes: (compoundId: string) => void;
+
+  // ── Add asset to pool only ──
+  addAssetToPool: (asset: import("../../shared/models").MediaAsset) => void;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -2302,6 +2325,277 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         colorStills: (state.project.colorStills ?? []).map((s) =>
           s.id === stillId ? { ...s, label } : s
         )
+      }
+    }));
+  },
+
+  // ── Project Metadata (GAP B) ──────────────────────────────────────────────
+  updateProjectMetadata: (updates) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        metadata: { ...(state.project.metadata ?? {}), ...updates }
+      }
+    }));
+  },
+
+  // ── Timeline Auto-Layout (UX 2) ──────────────────────────────────────────
+  autoLayoutTimeline: () => {
+    set(withUndo("Auto-Layout Timeline", (state) => {
+      const { sequence } = state.project;
+      const videoTracks = sequence.tracks.filter(t => t.kind === "video");
+      const audioTracks = sequence.tracks.filter(t => t.kind === "audio");
+
+      // Separate clips by track kind
+      const videoClips = sequence.clips
+        .filter(c => videoTracks.some(t => t.id === c.trackId))
+        .sort((a, b) => a.startFrame - b.startFrame);
+      const audioClips = sequence.clips
+        .filter(c => audioTracks.some(t => t.id === c.trackId))
+        .sort((a, b) => a.startFrame - b.startFrame);
+
+      // Ensure at least one video and one audio track
+      const vTrack = videoTracks[0] ?? { id: createId(), name: "V1", kind: "video" as const, muted: false, locked: false, solo: false, height: 56, color: "#4f8ef7" };
+      const aTrack = audioTracks[0] ?? { id: createId(), name: "A1", kind: "audio" as const, muted: false, locked: false, solo: false, height: 44, color: "#2fc77a" };
+
+      // Ripple-compress: remove all gaps (pack clips back-to-back on their track)
+      let vCursor = 0;
+      const packedVideo = videoClips.map(c => {
+        const dur = c.trimEndFrames > 0 || c.trimStartFrames > 0
+          ? c.trimEndFrames === 0 ? 9999 : c.trimEndFrames
+          : 9999; // will use actual dur; just pack startFrame
+        const next = { ...c, trackId: vTrack.id, startFrame: vCursor };
+        vCursor += (c.trimEndFrames || 0) > 0
+          ? (c.trimEndFrames - c.trimStartFrames)
+          : Math.max(1, c.trimEndFrames === 0 ? 100 : 1); // fallback
+        return next;
+      });
+
+      // Re-pack video clips sequentially (duration unknown here – just pack by existing gap-removal)
+      // Use a simple approach: sort + compact
+      let vFrame = 0;
+      const repackedVideo = videoClips.map((c) => {
+        const cloned = { ...c, trackId: vTrack.id, startFrame: vFrame };
+        // Estimate duration as (trimEnd - trimStart) if non-zero, else use a default
+        const dur = Math.max(1, c.trimEndFrames > 0 ? c.trimEndFrames - c.trimStartFrames : 90);
+        vFrame += dur;
+        return cloned;
+      });
+
+      let aFrame = 0;
+      const repackedAudio = audioClips.map((c) => {
+        const cloned = { ...c, trackId: aTrack.id, startFrame: aFrame };
+        const dur = Math.max(1, c.trimEndFrames > 0 ? c.trimEndFrames - c.trimStartFrames : 90);
+        aFrame += dur;
+        return cloned;
+      });
+
+      const newTracks = [
+        vTrack,
+        ...videoTracks.slice(1),
+        aTrack,
+        ...audioTracks.slice(1),
+      ];
+
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          sequence: {
+            ...sequence,
+            tracks: newTracks,
+            clips: [...repackedVideo, ...repackedAudio],
+          }
+        }
+      };
+    }));
+  },
+
+  // ── Nested Sequence state ─────────────────────────────────────────────────
+  activeNestedSequenceId: null,
+
+  openNestedSequence: (nestedSequenceId) => {
+    set({ activeNestedSequenceId: nestedSequenceId });
+  },
+
+  exitNestedSequence: () => {
+    set({ activeNestedSequenceId: null });
+  },
+
+  // ── Timeline Nesting (GAP E) ──────────────────────────────────────────────
+  nestSelectedClips: (clipIds, label) => {
+    set(withUndo("Nest Clips", (state) => {
+      if (clipIds.length === 0) return state;
+      const { sequence } = state.project;
+      const clipsToNest = sequence.clips.filter(c => clipIds.includes(c.id));
+      if (clipsToNest.length === 0) return state;
+
+      const minStart = Math.min(...clipsToNest.map(c => c.startFrame));
+
+      // Build sub-sequence
+      const subSeqId = createId();
+      const subTrackId = createId();
+      const subTrack = { id: subTrackId, name: "V1", kind: "video" as const, muted: false, locked: false, solo: false, height: 56, color: "#4f8ef7" };
+      const subClips = clipsToNest.map(c => ({ ...c, id: createId(), trackId: subTrackId, startFrame: c.startFrame - minStart }));
+      const subSeq: import("../../shared/models").EditorSequence = {
+        id: subSeqId,
+        name: label,
+        tracks: [subTrack],
+        clips: subClips,
+        settings: sequence.settings,
+        beatSync: null,
+        markers: [],
+      };
+
+      // Create a placeholder asset for the nested clip
+      const placeholderAssetId = createId();
+      const placeholderAsset: import("../../shared/models").MediaAsset = {
+        id: placeholderAssetId,
+        name: label,
+        sourcePath: "",
+        previewUrl: "",
+        thumbnailUrl: null,
+        durationSeconds: 60,
+        nativeFps: sequence.settings.fps,
+        width: sequence.settings.width,
+        height: sequence.settings.height,
+        hasAudio: false,
+      };
+
+      const hostTrackId = clipsToNest[0].trackId;
+      const nestedClip: import("../../shared/models").TimelineClip = {
+        id: createId(),
+        assetId: placeholderAssetId,
+        trackId: hostTrackId,
+        startFrame: minStart,
+        trimStartFrames: 0,
+        trimEndFrames: 0,
+        linkedGroupId: null,
+        isEnabled: true,
+        transitionIn: null,
+        transitionOut: null,
+        masks: [],
+        effects: [],
+        colorGrade: null,
+        volume: 1,
+        speed: 1,
+        transform: null,
+        compGraph: null,
+        aiBackgroundRemoval: null,
+        beatSync: null,
+        nestedSequenceId: subSeqId,
+      };
+
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          assets: [...state.project.assets, placeholderAsset],
+          nestedSequences: {
+            ...(state.project.nestedSequences ?? {}),
+            [subSeqId]: subSeq,
+          },
+          sequence: {
+            ...sequence,
+            clips: [
+              ...sequence.clips.filter(c => !clipIds.includes(c.id)),
+              nestedClip,
+            ],
+          }
+        }
+      };
+    }));
+  },
+
+  // ── Clip History (UX 3) ──────────────────────────────────────────────────
+  saveClipHistorySnapshot: (clipId, label) => {
+    set((state) => {
+      const clip = state.project.sequence.clips.find(c => c.id === clipId);
+      if (!clip) return state;
+      const snapshot: import("../../shared/models").ClipHistorySnapshot = {
+        id: createId(),
+        label,
+        capturedAt: Date.now(),
+        trimStartFrames: clip.trimStartFrames,
+        trimEndFrames: clip.trimEndFrames,
+        colorGrade: clip.colorGrade ? { ...clip.colorGrade } : null,
+        effects: clip.effects.map(e => ({ ...e })),
+        volume: clip.volume,
+        speed: clip.speed,
+      };
+      const existing = clip.clipHistory ?? [];
+      const updated = [snapshot, ...existing].slice(0, 5);
+      return {
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            clips: state.project.sequence.clips.map(c =>
+              c.id === clipId ? { ...c, clipHistory: updated } : c
+            )
+          }
+        }
+      };
+    });
+  },
+
+  restoreClipHistorySnapshot: (clipId, snapshotId) => {
+    set(withUndo("Restore Clip History", (state) => {
+      const clip = state.project.sequence.clips.find(c => c.id === clipId);
+      if (!clip) return state;
+      const snap = (clip.clipHistory ?? []).find(s => s.id === snapshotId);
+      if (!snap) return state;
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          sequence: {
+            ...state.project.sequence,
+            clips: state.project.sequence.clips.map(c =>
+              c.id === clipId ? {
+                ...c,
+                trimStartFrames: snap.trimStartFrames,
+                trimEndFrames: snap.trimEndFrames,
+                colorGrade: snap.colorGrade,
+                effects: snap.effects,
+                volume: snap.volume,
+                speed: snap.speed,
+              } : c
+            )
+          }
+        }
+      };
+    }));
+  },
+
+  // ── Compound Nodes (GAP A) ────────────────────────────────────────────────
+  groupNodes: (nodeIds, label) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        compoundNodes: [
+          ...(state.project.compoundNodes ?? []),
+          { id: createId(), label, nodeIds }
+        ]
+      }
+    }));
+  },
+
+  ungroupNodes: (compoundId) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        compoundNodes: (state.project.compoundNodes ?? []).filter(n => n.id !== compoundId)
+      }
+    }));
+  },
+
+  // ── Add asset to pool only (no timeline) ─────────────────────────────────
+  addAssetToPool: (asset) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        assets: [...state.project.assets, asset]
       }
     }));
   },

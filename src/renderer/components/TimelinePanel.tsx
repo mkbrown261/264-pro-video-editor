@@ -169,6 +169,14 @@ interface TimelinePanelProps {
   /** Fixed playhead mode — playhead stays centered, clips scroll under it */
   fixedPlayheadMode?: boolean;
   onToggleFixedPlayheadMode?: () => void;
+  // UX 3: Clip History
+  onSaveClipSnapshot?: (clipId: string, label: string) => void;
+  onRestoreClipSnapshot?: (clipId: string, snapshotId: string) => void;
+  clipHistoryMap?: Record<string, import("../../shared/models").ClipHistorySnapshot[]>;
+  // GAP E: Nesting
+  onNestClips?: (clipIds: string[], label: string) => void;
+  // UX 2: Auto-layout
+  onAutoLayout?: () => void;
 }
 
 const MIN_PPF = 1.5;
@@ -226,6 +234,11 @@ export function TimelinePanel({
   onAddKeyframe,
   fixedPlayheadMode = false,
   onToggleFixedPlayheadMode,
+  onSaveClipSnapshot,
+  onRestoreClipSnapshot,
+  clipHistoryMap = {},
+  onNestClips,
+  onAutoLayout,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -338,6 +351,7 @@ export function TimelinePanel({
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [speedInput, setSpeedInput] = useState<string>("1.0");
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenu | null>(null);
+  const [clipHistoryPopup, setClipHistoryPopup] = useState<{ clipId: string; x: number; y: number } | null>(null);
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState<string>("");
 
@@ -1232,6 +1246,41 @@ export function TimelinePanel({
           <span className="ctx-icon">↔</span> Replace Clip...
           <span className="ctx-badge-coming">soon</span>
         </div>
+
+        {/* ── Section: History (UX 3) ── */}
+        {onSaveClipSnapshot && (
+          <>
+            <div className="ctx-menu-sep" />
+            <div className="ctx-section-label">CLIP HISTORY</div>
+            <div className="ctx-menu-item" onClick={() => { onSaveClipSnapshot(clipId, `Snapshot ${new Date().toLocaleTimeString()}`); close(); }}>
+              <span className="ctx-icon">📸</span> Save Snapshot
+            </div>
+            {(clipHistoryMap[clipId] ?? []).length > 0 && (
+              <div
+                className="ctx-menu-item"
+                onClick={(e) => { setClipHistoryPopup({ clipId, x: safeX + menuW + 4, y: safeY }); }}
+              >
+                <span className="ctx-icon">🕒</span> Clip History ({(clipHistoryMap[clipId] ?? []).length})
+                <span className="ctx-icon" style={{ marginLeft: "auto" }}>▶</span>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── Section: Nesting (GAP E) ── */}
+        {onNestClips && (
+          <>
+            <div className="ctx-menu-sep" />
+            <div className="ctx-section-label">COMPOUND</div>
+            <div className="ctx-menu-item" onClick={() => {
+              const label = `Nested Sequence ${Date.now().toString(36).slice(-4).toUpperCase()}`;
+              onNestClips([clipId], label);
+              close();
+            }}>
+              <span className="ctx-icon">📦</span> Nest as Compound Clip
+            </div>
+          </>
+        )}
       </div>
     );
   }
@@ -1263,6 +1312,48 @@ export function TimelinePanel({
     <section className="panel timeline-panel">
       {renderContextMenu()}
       {renderTrackContextMenu()}
+
+      {/* Clip History Popup (UX 3) */}
+      {clipHistoryPopup && onRestoreClipSnapshot && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 10001 }}
+          onClick={() => setClipHistoryPopup(null)}
+        >
+          <div
+            style={{
+              position: "fixed",
+              left: Math.min(clipHistoryPopup.x, window.innerWidth - 260),
+              top: Math.min(clipHistoryPopup.y, window.innerHeight - 250),
+              background: "#1a1a1f",
+              border: "1px solid rgba(255,255,255,0.14)",
+              borderRadius: 10,
+              padding: "8px 0",
+              minWidth: 250,
+              zIndex: 10002,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", padding: "0 12px 6px" }}>Clip History</div>
+            {(clipHistoryMap[clipHistoryPopup.clipId] ?? []).map(snap => (
+              <div
+                key={snap.id}
+                onClick={() => { onRestoreClipSnapshot(clipHistoryPopup.clipId, snap.id); setClipHistoryPopup(null); }}
+                style={{ padding: "7px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                <span style={{ fontSize: 16 }}>📷</span>
+                <div>
+                  <div style={{ fontSize: 11, color: "#e8e8e8", fontWeight: 600 }}>{snap.label}</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>{new Date(snap.capturedAt).toLocaleTimeString()}</div>
+                </div>
+                <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(79,142,247,0.8)", fontWeight: 700 }}>RESTORE</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Inline track rename input (shown over the track label) */}
       {renamingTrackId && (() => {
@@ -1411,6 +1502,15 @@ export function TimelinePanel({
             title="Add audio track"
             type="button"
           >+ A</button>
+          {onAutoLayout && (
+            <button
+              className="tl-add-track-btn"
+              onClick={onAutoLayout}
+              title="Auto-Layout: remove gaps and group clips by type (UX 2)"
+              type="button"
+              style={{ color: "#f7c948", borderColor: "rgba(247,201,72,0.3)" }}
+            >⊞ Layout</button>
+          )}
         </div>
       </div>
 

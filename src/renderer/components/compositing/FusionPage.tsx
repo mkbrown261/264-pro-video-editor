@@ -31,6 +31,9 @@ export interface FusionPageProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   onUpdateGraph: (clipId: string, graph: CompGraph) => void;
   onBack: () => void;
+  // GAP A: Compound nodes
+  onGroupNodes?: (nodeIds: string[], label: string) => void;
+  compoundNodes?: Array<{ id: string; label: string; nodeIds: string[] }>;
 }
 
 // ── Viewer panel ──────────────────────────────────────────────────────────────
@@ -206,6 +209,8 @@ const FusionPage: React.FC<FusionPageProps> = ({
   videoRef: _videoRef, // kept for API compat but FusionViewer now uses its own video
   onUpdateGraph,
   onBack,
+  onGroupNodes,
+  compoundNodes = [],
 }) => {
   const [graph, setGraph] = useState<CompGraph | null>(clip?.compGraph ?? null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -410,6 +415,8 @@ const FusionPage: React.FC<FusionPageProps> = ({
               onSelectNodes={setSelectedNodeIds}
               onUpdateGraph={handleUpdateGraph}
               onNodeDoubleClick={handleNodeDoubleClick}
+              onGroupNodes={onGroupNodes}
+              compoundNodes={compoundNodes}
             />
           ) : (
             <div className="fusion-no-clip">

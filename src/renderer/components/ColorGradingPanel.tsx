@@ -55,6 +55,124 @@ interface ColorNode {
   active: boolean;
 }
 
+// ─── One-Click Color Looks (UX 1) ─────────────────────────────────────────────
+
+interface ColorLook {
+  id: string;
+  label: string;
+  grade: Partial<ColorGrade>;
+}
+
+const COLOR_LOOKS: ColorLook[] = [
+  {
+    id: "natural", label: "Natural",
+    grade: { saturation: 1.05, contrast: 0.05, temperature: 2 },
+  },
+  {
+    id: "cinematic", label: "Cinematic",
+    grade: {
+      saturation: 0.85, contrast: 0.18, exposure: -0.1,
+      lift: { r: 0.02, g: 0.02, b: 0.04 },
+      gain: { r: 0.0, g: -0.01, b: -0.02 },
+    },
+  },
+  {
+    id: "warm", label: "Warm",
+    grade: { temperature: 25, tint: 5, saturation: 1.1 },
+  },
+  {
+    id: "cool", label: "Cool",
+    grade: { temperature: -20, tint: -5, saturation: 0.95 },
+  },
+  {
+    id: "desaturated", label: "Desatd.",
+    grade: { saturation: 0.55, contrast: 0.12, exposure: 0.05 },
+  },
+  {
+    id: "punchy", label: "Punchy",
+    grade: { saturation: 1.35, contrast: 0.25, exposure: 0.08 },
+  },
+  {
+    id: "vintage", label: "Vintage",
+    grade: {
+      saturation: 0.75, contrast: 0.1, temperature: 15, tint: 8,
+      lift: { r: 0.03, g: 0.02, b: 0.0 },
+      gamma: { r: 0.01, g: 0.0, b: -0.02 },
+    },
+  },
+  {
+    id: "teal_orange", label: "Teal+Org",
+    grade: {
+      saturation: 1.2, contrast: 0.15,
+      lift: { r: -0.02, g: 0.02, b: 0.04 },
+      gain: { r: 0.04, g: 0.01, b: -0.03 },
+    },
+  },
+  {
+    id: "bw", label: "B&W",
+    grade: { saturation: 0, contrast: 0.2 },
+  },
+  {
+    id: "fade", label: "Fade",
+    grade: {
+      saturation: 0.8, contrast: -0.08,
+      lift: { r: 0.05, g: 0.05, b: 0.07 },
+      gain: { r: -0.02, g: -0.02, b: -0.02 },
+    },
+  },
+  {
+    id: "golden_hour", label: "Golden Hr",
+    grade: {
+      temperature: 35, tint: 8, saturation: 1.15, exposure: 0.05,
+      gain: { r: 0.04, g: 0.01, b: -0.05 },
+    },
+  },
+  {
+    id: "night", label: "Night",
+    grade: {
+      temperature: -30, tint: -10, saturation: 0.65, exposure: -0.3,
+      lift: { r: -0.02, g: -0.01, b: 0.04 },
+    },
+  },
+];
+
+interface OneClickLooksBarProps {
+  onApplyLook: (look: Partial<ColorGrade>) => void;
+}
+
+function OneClickLooksBar({ onApplyLook }: OneClickLooksBarProps) {
+  const [appliedId, setAppliedId] = useState<string | null>(null);
+  return (
+    <div style={{ padding: "6px 8px 4px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>One-Click Looks</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {COLOR_LOOKS.map(look => (
+          <button
+            key={look.id}
+            type="button"
+            onClick={() => { setAppliedId(look.id); onApplyLook(look.grade); }}
+            title={`Apply ${look.label} look`}
+            style={{
+              padding: "3px 7px",
+              borderRadius: 5,
+              border: `1px solid ${appliedId === look.id ? "rgba(79,142,247,0.6)" : "rgba(255,255,255,0.1)"}`,
+              background: appliedId === look.id ? "rgba(79,142,247,0.18)" : "rgba(255,255,255,0.04)",
+              color: appliedId === look.id ? "#4f8ef7" : "rgba(255,255,255,0.6)",
+              fontSize: 10,
+              fontWeight: appliedId === look.id ? 700 : 400,
+              cursor: "pointer",
+              transition: "all 0.12s",
+            }}
+          >
+            {look.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 // ─── Tiny helpers ─────────────────────────────────────────────────────────────
 
 function clamp(v: number, lo: number, hi: number) {
@@ -830,6 +948,11 @@ export function ColorGradingPanel({
           )}
         </div>
       </div>
+
+      {/* ── One-Click Color Looks (UX 1) ── */}
+      <OneClickLooksBar
+        onApplyLook={(partial) => handleUpdate(partial)}
+      />
 
       {/* ── Node Graph ── */}
       <NodeGraph

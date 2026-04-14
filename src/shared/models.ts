@@ -452,6 +452,10 @@ export interface TimelineClip {
   opticalFlow?: boolean;
   // Title generator
   titleConfig?: TitleClipConfig;
+  // Clip History (UX 3) — up to 5 snapshots
+  clipHistory?: ClipHistorySnapshot[];
+  // Nested sequence reference (GAP E)
+  nestedSequenceId?: string;
 }
 
 // ── Background Removal ────────────────────────────────────────────────────────
@@ -607,6 +611,35 @@ export interface Transcript {
   generatedAt: number;
 }
 
+// ── Project Metadata (GAP B) ──────────────────────────────────────────────────
+
+export interface ProjectMetadata {
+  director?: string;
+  dp?: string;
+  editor?: string;
+  client?: string;
+  deadline?: string;
+  notes?: string;
+}
+
+// ── Clip History Snapshot (UX 3) ──────────────────────────────────────────────
+
+export interface ClipHistorySnapshot {
+  id: string;
+  label: string;
+  capturedAt: number;
+  trimStartFrames: number;
+  trimEndFrames: number;
+  colorGrade: ColorGrade | null;
+  effects: ClipEffect[];
+  volume: number;
+  speed: number;
+}
+
+// ── Nested Sequences (GAP E) ──────────────────────────────────────────────────
+
+export type EditorSequence = TimelineSequence;
+
 // ── EditorProject ─────────────────────────────────────────────────────────────
 
 export interface EditorProject {
@@ -617,6 +650,9 @@ export interface EditorProject {
   subtitleCues?: SubtitleCue[];
   transcripts?: Record<string, Transcript>;   // keyed by assetId
   colorStills?: ColorStill[];
+  metadata?: ProjectMetadata;
+  nestedSequences?: Record<string, EditorSequence>;
+  compoundNodes?: Array<{ id: string; label: string; nodeIds: string[] }>;
 }
 
 // ── Playback & Editor State ───────────────────────────────────────────────────
