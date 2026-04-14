@@ -8,6 +8,7 @@ import { basename, dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { ExportRequest } from "../src/shared/models.js";
 import {
+  detectBestHWEncoder,
   exportSequence,
   generateProxiesInBackground,
   getEnvironmentStatus,
@@ -1322,6 +1323,16 @@ ipcMain.handle('render-cache:clear', async (_ev, projectId: string) => {
     return { success: true };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// ── Hardware encoder detection ────────────────────────────────────────────────
+ipcMain.handle('export:detect-hw-encoder', async () => {
+  try {
+    const encoder = await detectBestHWEncoder();
+    return { success: true, encoder: encoder ?? null };
+  } catch {
+    return { success: true, encoder: null };
   }
 });
 

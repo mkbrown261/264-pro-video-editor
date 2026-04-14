@@ -6,7 +6,7 @@
  * sequentially by the queue runner in App.tsx.
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import type { ExportCodec } from "../../shared/models";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -95,6 +95,19 @@ export function RenderQueuePanel({
   const [selectedPresets, setSelectedPresets] = useState<Set<string>>(new Set(["youtube", "prores"]));
   const activeCount = jobs.filter((j) => j.status === "rendering" || j.status === "queued").length;
 
+  const [hwEncoder, setHwEncoder] = useState<string | null>(null);
+  const [hwChecked, setHwChecked] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).electronAPI?.detectHWEncoder?.()
+      .then((r: { success: boolean; encoder: string | null } | undefined) => {
+        setHwEncoder(r?.encoder ?? null);
+        setHwChecked(true);
+      })
+      .catch(() => setHwChecked(true));
+  }, []);
+
   function togglePreset(id: string) {
     setSelectedPresets(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
@@ -117,6 +130,16 @@ export function RenderQueuePanel({
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {hwChecked && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+              <span style={{ color: hwEncoder ? "#22c55e" : "#64748b", fontWeight: 600 }}>
+                {hwEncoder ? `⚡ ${hwEncoder}` : "🖥 SW: libx264"}
+              </span>
+              {hwEncoder && (
+                <span style={{ fontSize: 9, color: "#475569" }}>(HW)</span>
+              )}
+            </div>
+          )}
           {onAddBatchJobs && (
             <button
               type="button"

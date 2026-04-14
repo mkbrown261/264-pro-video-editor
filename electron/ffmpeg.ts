@@ -56,6 +56,56 @@ function getFfprobePath(): string {
   return process.env.FFPROBE_PATH || ffprobeStatic.path || "ffprobe";
 }
 
+// ── Hardware encoder detection ────────────────────────────────────────────────
+// Cache result so we only probe once per session
+let _hwEncoderCache: string | null | undefined = undefined;
+
+export async function detectBestHWEncoder(): Promise<string | null> {
+  if (_hwEncoderCache !== undefined) return _hwEncoderCache;
+
+  const ffmpegBin = getFfmpegPath();
+
+  // Encoder preference order: videotoolbox (Mac) > nvenc (NVIDIA) > amf (AMD) > qsv (Intel)
+  const candidates =
+    process.platform === "darwin"
+      ? ["h264_videotoolbox"]
+      : process.platform === "win32"
+      ? ["h264_nvenc", "h264_amf", "h264_qsv"]
+      : ["h264_nvenc", "h264_vaapi", "h264_qsv"];
+
+  for (const enc of candidates) {
+    const available = await new Promise<boolean>((resolve) => {
+      // Test encoder with a 1-frame null source
+      const proc = spawn(ffmpegBin, [
+        "-f", "lavfi", "-i", "color=black:s=64x64:r=1",
+        "-vframes", "1",
+        "-c:v", enc,
+        "-f", "null", "-",
+      ]);
+      let stderr = "";
+      proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+      proc.on("close", (code: number | null) => {
+        // nvenc/videotoolbox will succeed (code 0) if hardware is present
+        resolve(
+          code === 0 &&
+          !stderr.includes("Unknown encoder") &&
+          !stderr.includes("Encoder h264")
+        );
+      });
+      proc.on("error", () => resolve(false));
+      // Timeout after 3s
+      setTimeout(() => { proc.kill(); resolve(false); }, 3000);
+    });
+    if (available) {
+      _hwEncoderCache = enc;
+      return enc;
+    }
+  }
+
+  _hwEncoderCache = null;
+  return null;
+}
+
 function canExecute(binaryPath: string): boolean {
   const result = spawnSync(binaryPath, ["-version"], {
     stdio: "ignore"
@@ -807,7 +857,22 @@ export async function exportSequence(
   const finalAudioLabel = allAudioLabels.length > 0 ? "[afinal]" : "[aout]";
 
   // ── Codec-specific output args ─────────────────────────────────────────────
-  function getVideoCodecArgs(c: typeof codec): string[] {
+  function getVideoCodecArgs(c: typeof codec, hwEncoder?: string | null): string[] {
+    // Use hardware encoder for h264 if available
+    if (c === "libx264" && hwEncoder) {
+      switch (hwEncoder) {
+        case "h264_videotoolbox":
+          return ["-c:v", "h264_videotoolbox", "-b:v", "8M", "-allow_sw", "1"];
+        case "h264_nvenc":
+          return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-b:v", "0"];
+        case "h264_amf":
+          return ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20"];
+        case "h264_qsv":
+          return ["-c:v", "h264_qsv", "-global_quality", "23", "-look_ahead", "1"];
+        case "h264_vaapi":
+          return ["-c:v", "h264_vaapi", "-qp", "23"];
+      }
+    }
     switch (c) {
       case "libx265":
         return ["-c:v", "libx265", "-preset", "medium", "-crf", "22", "-tag:v", "hvc1"];
@@ -843,6 +908,9 @@ export async function exportSequence(
     }
   }
 
+  // Detect HW encoder at export time (cached after first call)
+  const hwEncoder = await detectBestHWEncoder();
+
   const args = [
     ...uniqueAssets.flatMap((asset) => ["-i", asset.sourcePath]),
     "-filter_complex",
@@ -851,7 +919,7 @@ export async function exportSequence(
     "[vout]",
     "-map",
     finalAudioLabel,  // BUG #3 fix: use [afinal] when audio-only tracks are mixed in
-    ...getVideoCodecArgs(codec),
+    ...getVideoCodecArgs(codec, hwEncoder),
     ...getAudioCodecArgs(codec),
     ...getContainerArgs(codec),
     "-y",

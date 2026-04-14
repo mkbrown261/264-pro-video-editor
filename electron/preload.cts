@@ -125,6 +125,8 @@ const electronAPI = {
   }) => ipcRenderer.invoke('render-cache:render-segment', args),
   getCacheDir: (projectId: string) => ipcRenderer.invoke('render-cache:get-cache-dir', projectId),
   clearRenderCache: (projectId: string) => ipcRenderer.invoke('render-cache:clear', projectId),
+  detectHWEncoder: (): Promise<{ success: boolean; encoder: string | null }> =>
+    ipcRenderer.invoke('export:detect-hw-encoder'),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 

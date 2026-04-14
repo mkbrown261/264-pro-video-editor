@@ -61,6 +61,7 @@ declare global {
       }) => Promise<{ success: boolean; filePath?: string; cached?: boolean; error?: string }>;
       getCacheDir?: (projectId: string) => Promise<string>;
       clearRenderCache?: (projectId: string) => Promise<{ success: boolean; error?: string }>;
+      detectHWEncoder?: () => Promise<{ success: boolean; encoder: string | null }>;
     };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;
