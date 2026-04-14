@@ -2330,6 +2330,19 @@ export function TimelinePanel({
                           </div>
                         )}
 
+                        {/* ── SpeedWarp badge ── */}
+                        {segment.clip.opticalFlow && (segment.clip.speed ?? 1) < 1 && (
+                          <div style={{
+                            position: 'absolute', top: 3, right: 3,
+                            background: 'rgba(124,58,237,0.85)',
+                            borderRadius: 4, padding: '1px 5px',
+                            fontSize: 9, fontWeight: 700, color: '#e9d5ff',
+                            pointerEvents: 'none', zIndex: 3,
+                          }}>
+                            ✨ SpeedWarp
+                          </div>
+                        )}
+
                         {/* ── Disabled overlay (diagonal stripe pattern) ── */}
                         {!segment.clip.isEnabled && (
                           <div style={{

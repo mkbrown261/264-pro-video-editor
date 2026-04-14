@@ -2510,6 +2510,7 @@ export default function App() {
             onClose={() => setRenderQueueOpen(false)}
             projectName={project.name}
             project={project}
+            hasOpticalFlowClips={project.sequence.clips.some(c => c.opticalFlow && (c.speed ?? 1) < 1)}
             onDeliveryPackage={handleDeliveryPackage}
             onAddBatchJobs={(presets: BatchPreset[]) => {
               const newJobs = presets.map(p => ({
@@ -3253,6 +3254,10 @@ export default function App() {
               onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
               onSetSpeedRampKeyframes={handleSetSpeedRampKeyframes}
               onSetOpticalFlow={handleSetOpticalFlow}
+              onSetOpticalFlowQuality={(quality) => {
+                if (!selectedClipId) return;
+                patchClip(selectedClipId, { opticalFlowQuality: quality });
+              }}
               clipTransform={inspectorSegment?.clip.transform ?? null}
               onSetClipTransform={(updates) => { if (selectedClipId) setClipTransform(selectedClipId, updates); }}
               videoRef={viewerVideoRef}

@@ -753,8 +753,47 @@ export async function exportSequence(
     }
 
     // ── Optical Flow slow-mo ────────────────────────────────────────────────
+    // Only apply when:
+    // 1. opticalFlow is enabled
+    // 2. Speed is less than 1 (slow motion) — optical flow synthesizes missing frames
+    // 3. We need it AFTER setpts (speed) so minterpolate gets the already-slowed stream
     if (segment.clip.opticalFlow && (segment.clip.speed ?? 1) < 1) {
-      videoFilters.push(`minterpolate='fps=60:mi_mode=mci:mc_mode=aobmc:me_algo=umh'`);
+      const quality = segment.clip.opticalFlowQuality ?? 'good';
+      const speed = Math.max(0.01, Math.min(0.999, segment.clip.speed ?? 0.5));
+
+      // Target output FPS: synthesize enough frames to reach at least 60fps equivalent
+      // E.g. 30fps source at 0.25x speed → need 4x frames → target 120fps, output at 30fps
+      const sourceFps = project.sequence.settings.fps;
+      const interpolatedFps = Math.min(120, Math.round(sourceFps / speed));
+
+      switch (quality) {
+        case 'draft':
+          // Fast: simple frame blending — good for preview, not for export
+          videoFilters.push(
+            `minterpolate='fps=${interpolatedFps}:mi_mode=blend'`
+          );
+          break;
+
+        case 'good':
+          // Balanced: Motion Compensated Interpolation with OBMC
+          // This is the DaVinci Speed Warp equivalent at good quality
+          videoFilters.push(
+            `minterpolate='fps=${interpolatedFps}:mi_mode=mci:mc_mode=aobmc:me_algo=epzs:search_param=64'`
+          );
+          break;
+
+        case 'best':
+          // Cinematic: full MCI with UMH search, larger block size, more iterations
+          // Slowest but closest to optical-flow neural results
+          videoFilters.push(
+            `minterpolate='fps=${interpolatedFps}:mi_mode=mci:mc_mode=aobmc:me_algo=umh:search_param=128:vsbmc=1'`
+          );
+          break;
+      }
+
+      // After interpolation, set output to target sequence fps
+      // This is critical: minterpolate outputs at interpolatedFps, we need to bring it to sequenceFps
+      videoFilters.push(`fps=${sourceFps}`);
     }
 
     if (Number(transitionInSeconds) > 0) {

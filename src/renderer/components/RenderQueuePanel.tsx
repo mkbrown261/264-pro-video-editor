@@ -60,6 +60,8 @@ interface RenderQueuePanelProps {
   projectName?: string;
   /** Full project object — used for EDL / FCP XML exchange export */
   project?: EditorProject;
+  /** True when any clip in the project has optical flow slow-mo enabled */
+  hasOpticalFlowClips?: boolean;
 }
 
 const STATUS_ICONS: Record<RenderJobStatus, string> = {
@@ -94,6 +96,7 @@ export function RenderQueuePanel({
   onDeliveryPackage,
   projectName = "Project",
   project,
+  hasOpticalFlowClips,
 }: RenderQueuePanelProps) {
   const [showBatch, setShowBatch] = useState(false);
   const [selectedPresets, setSelectedPresets] = useState<Set<string>>(new Set(["youtube", "prores"]));
@@ -221,6 +224,18 @@ export function RenderQueuePanel({
           >
             Add {selectedPresets.size} Job{selectedPresets.size !== 1 ? "s" : ""} to Queue
           </button>
+        </div>
+      )}
+
+      {/* Optical flow quality notice — shown when project has SpeedWarp clips */}
+      {hasOpticalFlowClips && (
+        <div style={{
+          padding: '8px 12px', borderRadius: 6, margin: '8px 12px',
+          background: 'rgba(124,58,237,0.1)', border: '1px solid #4c1d95',
+          fontSize: 11, color: '#c4b5fd', display: 'flex', gap: 8, alignItems: 'center',
+        }}>
+          <span>✨</span>
+          <span>SpeedWarp clips detected — export will use optical flow interpolation. Best quality may take longer.</span>
         </div>
       )}
 

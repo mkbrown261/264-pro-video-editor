@@ -99,6 +99,7 @@ interface InspectorPanelProps {
   // Speed Ramp
   onSetSpeedRampKeyframes?: (kf: Array<{ frame: number; speed: number }>) => void;
   onSetOpticalFlow?: (enabled: boolean) => void;
+  onSetOpticalFlowQuality?: (quality: 'draft' | 'good' | 'best') => void;
 
   // Transform
   clipTransform?: ClipTransformValues | null;
@@ -352,10 +353,12 @@ function SpeedRampSection({
   clip,
   onSetSpeedRampKeyframes,
   onSetOpticalFlow,
+  onSetOpticalFlowQuality,
 }: {
   clip: import("../../shared/models").TimelineClip;
   onSetSpeedRampKeyframes: (kf: Array<{ frame: number; speed: number }>) => void;
   onSetOpticalFlow: (enabled: boolean) => void;
+  onSetOpticalFlowQuality?: (quality: 'draft' | 'good' | 'best') => void;
 }) {
   const speedRampCanvasRef = useRef<HTMLCanvasElement>(null);
   const [speedRampMode, setSpeedRampMode] = useState<"constant" | "linear" | "ease">("linear");
@@ -470,12 +473,113 @@ function SpeedRampSection({
           Clear Keyframes
         </button>
       )}
-      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, cursor: "pointer" }}>
-        <input type="checkbox" checked={opticalFlowEnabled} onChange={e => onSetOpticalFlow(e.target.checked)}
-          style={{ accentColor: "#7c3aed" }} />
-        <span style={{ fontSize: 12, color: "#cbd5e1" }}>Optical Flow (smooth slow-mo)</span>
-        <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>On export</span>
-      </label>
+      {/* ── Optical Flow / Speed Warp ─────────────────────────────────── */}
+      <div style={{
+        marginTop: 12,
+        padding: 12,
+        background: opticalFlowEnabled ? 'rgba(124,58,237,0.12)' : 'rgba(15,23,42,0.8)',
+        border: `1px solid ${opticalFlowEnabled ? '#4c1d95' : '#1e293b'}`,
+        borderRadius: 8,
+        transition: 'all 0.2s',
+      }}>
+        {/* Header row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: opticalFlowEnabled ? 10 : 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* Toggle */}
+            <div
+              onClick={() => onSetOpticalFlow(!opticalFlowEnabled)}
+              style={{
+                width: 36, height: 20, borderRadius: 10, cursor: 'pointer', position: 'relative',
+                background: opticalFlowEnabled ? '#7c3aed' : '#334155',
+                transition: 'background 0.2s',
+              }}
+            >
+              <div style={{
+                position: 'absolute', top: 2, left: opticalFlowEnabled ? 18 : 2,
+                width: 16, height: 16, borderRadius: '50%', background: 'white',
+                transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+              }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: opticalFlowEnabled ? '#c4b5fd' : '#94a3b8' }}>
+                ✨ Speed Warp
+              </div>
+              <div style={{ fontSize: 10, color: '#475569', marginTop: 1 }}>
+                {opticalFlowEnabled ? 'Optical flow frame synthesis active' : 'AI-powered slow motion'}
+              </div>
+            </div>
+          </div>
+          {/* Speed indicator badge */}
+          {(clip.speed ?? 1) < 1 && (
+            <div style={{
+              padding: '2px 8px', borderRadius: 12,
+              background: opticalFlowEnabled ? '#4c1d95' : '#1e293b',
+              fontSize: 11, fontWeight: 700,
+              color: opticalFlowEnabled ? '#c4b5fd' : '#64748b',
+            }}>
+              {Math.round((clip.speed ?? 1) * 100)}%
+            </div>
+          )}
+        </div>
+
+        {/* Quality selector — only show when enabled AND speed < 1 */}
+        {opticalFlowEnabled && (clip.speed ?? 1) < 1 && (
+          <div>
+            <div style={{ fontSize: 10, color: '#475569', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Quality
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+              {([
+                { key: 'draft', label: 'Draft', desc: 'Fast preview', icon: '⚡' },
+                { key: 'good',  label: 'Good',  desc: 'Balanced',    icon: '✦' },
+                { key: 'best',  label: 'Best',  desc: 'Cinematic',   icon: '✨' },
+              ] as const).map(({ key, label, desc, icon }) => {
+                const active = (clip.opticalFlowQuality ?? 'good') === key;
+                return (
+                  <div
+                    key={key}
+                    onClick={() => onSetOpticalFlowQuality?.(key)}
+                    style={{
+                      padding: '8px 6px',
+                      borderRadius: 6,
+                      border: `1px solid ${active ? '#7c3aed' : '#1e293b'}`,
+                      background: active ? 'rgba(124,58,237,0.2)' : '#0f172a',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <div style={{ fontSize: 14, marginBottom: 3 }}>{icon}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: active ? '#c4b5fd' : '#94a3b8' }}>{label}</div>
+                    <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>{desc}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Warning if speed > 0.5 */}
+            {(clip.speed ?? 1) > 0.5 && (
+              <div style={{ marginTop: 8, fontSize: 10, color: '#f59e0b', display: 'flex', gap: 4, alignItems: 'center' }}>
+                ⚠ Best results at 50% speed or slower
+              </div>
+            )}
+
+            {/* Best quality warning */}
+            {(clip.opticalFlowQuality ?? 'good') === 'best' && (
+              <div style={{ marginTop: 6, fontSize: 10, color: '#94a3b8', lineHeight: 1.4 }}>
+                🎬 Best quality increases export time. Renders at {Math.min(120, Math.round(30 / (clip.speed ?? 0.5)))}fps → downsampled to {30}fps.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Show hint when enabled but speed >= 1 */}
+        {opticalFlowEnabled && (clip.speed ?? 1) >= 1 && (
+          <div style={{ fontSize: 10, color: '#64748b', marginTop: 6 }}>
+            Set clip speed below 100% to activate frame synthesis
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1074,6 +1178,7 @@ export function InspectorPanel({
   onSetClipSpeed,
   onSetSpeedRampKeyframes,
   onSetOpticalFlow,
+  onSetOpticalFlowQuality,
   clipTransform,
   onSetClipTransform,
   onToggleVoiceListening,
@@ -1453,6 +1558,7 @@ export function InspectorPanel({
                     clip={selectedSegment.clip}
                     onSetSpeedRampKeyframes={onSetSpeedRampKeyframes}
                     onSetOpticalFlow={onSetOpticalFlow}
+                    onSetOpticalFlowQuality={onSetOpticalFlowQuality}
                   />
                 )}
                 {selectedSegment.asset.hasAudio && (

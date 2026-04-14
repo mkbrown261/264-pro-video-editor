@@ -479,6 +479,7 @@ export interface TimelineClip {
   // Speed ramp (DaVinci Speed Warp)
   speedRampKeyframes?: Array<{ frame: number; speed: number }>;
   opticalFlow?: boolean;
+  opticalFlowQuality?: 'draft' | 'good' | 'best'; // draft=fast, good=balanced, best=cinematic
   // Title generator
   titleConfig?: TitleClipConfig;
   // Clip History (UX 3) — up to 5 snapshots
