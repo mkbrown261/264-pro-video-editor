@@ -36,6 +36,17 @@ let closeConfirmedGlobal = false;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ── Platform-aware icon resolution ───────────────────────────────────────────
+// In dev: __dirname = dist-electron/electron/, so ../../build-assets/ = project root
+// Packaged: icons are bundled by electron-builder from build-assets/
+function getAppIcon(): string {
+  const base = join(__dirname, "../../build-assets");
+  if (process.platform === "win32") return join(base, "icon.ico");
+  // Linux and Mac dev mode: use the full-res PNG
+  // (Mac packaged builds use the .icns from the app bundle automatically)
+  return join(base, "icon.png");
+}
 const VIDEO_FILE_EXTENSIONS = [
   "mp4",
   "mov",
@@ -98,7 +109,7 @@ if (process.platform === "darwin") {
     applicationVersion: app.getVersion(),
     version: app.getVersion(),
     credits: "© 2025 264 Pro. All rights reserved.",
-    iconPath: join(app.getAppPath(), "build-assets/icon.png")
+    iconPath: join(app.getAppPath(), "build-assets/icon.png")  // .icns used automatically when packaged
   });
 }
 
@@ -309,7 +320,7 @@ function createMainWindow(splashWindow: BrowserWindow | null): BrowserWindow {
     minHeight: 800,
     backgroundColor: "#091017",
     title: "264 Pro Video Editor",
-    icon: join(__dirname, "../../build-assets/icon.png"),
+    icon: getAppIcon(),
     show: false,          // hidden until splash dismisses
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),

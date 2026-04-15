@@ -35,8 +35,13 @@
     ]
   },
   "win": {
-    "icon": "build-assets/icon.png",
+    "icon": "build-assets/icon.ico",
     "target": "nsis"
+  },
+  "linux": {
+    "icon": "build-assets/linux-icons",
+    "category": "Video",
+    "target": ["AppImage", "deb"]
   },
   "nsis": {
     "oneClick": false,
