@@ -40,6 +40,18 @@ export interface MediaAsset {
   rotation?: number;
   /** Pixel aspect ratio, e.g. "1:1" */
   pixelAspect?: string;
+
+  // ── Proxy workflow ─────────────────────────────────────────────────────────
+  /** Path to low-res proxy file (1280p H.264) */
+  proxyPath?: string;
+  /** True when proxy has been generated and is ready to use */
+  proxyReady?: boolean;
+  /** True while the proxy is being generated in the background */
+  proxyGenerating?: boolean;
+  /** User toggle: use proxy for playback (exports always use original) */
+  proxyEnabled?: boolean;
+  /** File size in bytes (alias used by proxy size check) */
+  fileSizeBytes?: number;
 }
 
 // ── Transitions ───────────────────────────────────────────────────────────────

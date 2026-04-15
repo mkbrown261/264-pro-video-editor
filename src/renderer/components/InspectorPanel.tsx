@@ -349,6 +349,209 @@ function SpeedControl({
 }
 
 // ── Speed Ramp ────────────────────────────────────────────────────────────────
+
+const SPEED_PRESETS = {
+  smash:     [{ f: 0, s: 2 }, { f: 0.25, s: 0.25 }, { f: 0.5, s: 0.25 }, { f: 1, s: 1 }],
+  wave:      [{ f: 0, s: 0.5 }, { f: 0.5, s: 2 }, { f: 1, s: 0.5 }],
+  cinematic: [{ f: 0, s: 1 }, { f: 0.6, s: 1 }, { f: 1, s: 0.3 }],
+  rampUp:    [{ f: 0, s: 0.3 }, { f: 1, s: 2 }],
+} as const;
+
+type SpeedPresetKey = keyof typeof SPEED_PRESETS;
+
+function presetToKeyframes(
+  preset: ReadonlyArray<{ f: number; s: number }>,
+  clipDurationFrames: number
+): Array<{ frame: number; speed: number }> {
+  return preset.map(p => ({ frame: Math.round(p.f * clipDurationFrames), speed: p.s }));
+}
+
+// Canvas constants
+const CANVAS_W = 280;
+const CANVAS_H = 80;
+const SPEED_MIN = 0.1;
+const SPEED_MAX = 4;
+// Total frame range used for X-axis mapping (matches existing convention)
+const CANVAS_TOTAL_FRAMES = 300;
+const HIT_RADIUS = 8; // px distance to detect a keyframe for drag/right-click
+
+function speedToY(speed: number, H: number): number {
+  return H - ((speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)) * H;
+}
+
+function yToSpeed(y: number, H: number): number {
+  return SPEED_MIN + ((H - y) / H) * (SPEED_MAX - SPEED_MIN);
+}
+
+function frameToX(frame: number, W: number): number {
+  return (frame / CANVAS_TOTAL_FRAMES) * W;
+}
+
+function xToFrame(x: number, W: number): number {
+  return Math.round((x / W) * CANVAS_TOTAL_FRAMES);
+}
+
+/** Ease-in-out cubic interpolation between two values */
+function easeInOut(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/** Interpolate speed at a given frame position between two keyframes */
+function interpolateSpeed(
+  frame: number,
+  kfA: { frame: number; speed: number },
+  kfB: { frame: number; speed: number },
+  easing: "linear" | "ease"
+): number {
+  if (kfB.frame === kfA.frame) return kfA.speed;
+  const t = (frame - kfA.frame) / (kfB.frame - kfA.frame);
+  const tEased = easing === "ease" ? easeInOut(t) : t;
+  return kfA.speed + (kfB.speed - kfA.speed) * tEased;
+}
+
+function drawSpeedRampCanvas(
+  canvas: HTMLCanvasElement,
+  keyframes: Array<{ frame: number; speed: number }>,
+  easing: "linear" | "ease",
+  dragIndex: number | null
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Background
+  ctx.fillStyle = "#0a0f1a";
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 0.5;
+  [0.25, 0.5, 0.75].forEach(frac => {
+    ctx.beginPath();
+    ctx.moveTo(0, frac * H);
+    ctx.lineTo(W, frac * H);
+    ctx.stroke();
+  });
+  [0.25, 0.5, 0.75].forEach(frac => {
+    ctx.beginPath();
+    ctx.moveTo(frac * W, 0);
+    ctx.lineTo(frac * W, H);
+    ctx.stroke();
+  });
+
+  // 1× speed reference line (purple dashed)
+  const oneY = speedToY(1, H);
+  ctx.strokeStyle = "rgba(168,85,247,0.35)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(0, oneY);
+  ctx.lineTo(W, oneY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Curve
+  if (keyframes.length >= 2) {
+    const sorted = [...keyframes].sort((a, b) => a.frame - b.frame);
+
+    // Draw filled area under curve
+    ctx.beginPath();
+    const firstX = frameToX(sorted[0].frame, W);
+    const firstY = speedToY(sorted[0].speed, H);
+    ctx.moveTo(firstX, H);
+    ctx.lineTo(firstX, firstY);
+
+    const STEPS = 120;
+    for (let s = 0; s <= STEPS; s++) {
+      const frame = sorted[0].frame + (s / STEPS) * (sorted[sorted.length - 1].frame - sorted[0].frame);
+      // Find segment
+      let segIdx = 0;
+      for (let k = 0; k < sorted.length - 1; k++) {
+        if (frame >= sorted[k].frame) segIdx = k;
+      }
+      const speed = interpolateSpeed(frame, sorted[segIdx], sorted[Math.min(segIdx + 1, sorted.length - 1)], easing);
+      const cx = frameToX(frame, W);
+      const cy = speedToY(speed, H);
+      ctx.lineTo(cx, cy);
+    }
+    const lastX = frameToX(sorted[sorted.length - 1].frame, W);
+    ctx.lineTo(lastX, H);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(168,85,247,0.08)";
+    ctx.fill();
+
+    // Draw the curve line
+    ctx.beginPath();
+    ctx.moveTo(firstX, firstY);
+    for (let s = 1; s <= STEPS; s++) {
+      const frame = sorted[0].frame + (s / STEPS) * (sorted[sorted.length - 1].frame - sorted[0].frame);
+      let segIdx = 0;
+      for (let k = 0; k < sorted.length - 1; k++) {
+        if (frame >= sorted[k].frame) segIdx = k;
+      }
+      const speed = interpolateSpeed(frame, sorted[segIdx], sorted[Math.min(segIdx + 1, sorted.length - 1)], easing);
+      ctx.lineTo(frameToX(frame, W), speedToY(speed, H));
+    }
+    ctx.strokeStyle = "#a855f7";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Keyframe diamond dots
+    sorted.forEach((kf, idx) => {
+      const kx = frameToX(kf.frame, W);
+      const ky = speedToY(kf.speed, H);
+      const isDragging = dragIndex === keyframes.indexOf(kf) || dragIndex === idx;
+
+      // Outer glow when dragging
+      if (isDragging) {
+        ctx.beginPath();
+        ctx.arc(kx, ky, 7, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(168,85,247,0.3)";
+        ctx.fill();
+      }
+
+      // Diamond shape
+      ctx.save();
+      ctx.translate(kx, ky);
+      ctx.rotate(Math.PI / 4);
+      const ds = isDragging ? 5 : 4;
+      ctx.beginPath();
+      ctx.rect(-ds, -ds, ds * 2, ds * 2);
+      ctx.fillStyle = isDragging ? "#e9d5ff" : "#ffffff";
+      ctx.fill();
+      ctx.strokeStyle = "#a855f7";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+
+      // Speed label
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.font = "bold 8px system-ui";
+      const label = `${kf.speed.toFixed(2)}×`;
+      const lx = Math.min(W - 24, Math.max(2, kx - 10));
+      const ly = ky < 14 ? ky + 14 : ky - 5;
+      ctx.fillText(label, lx, ly);
+    });
+  } else if (keyframes.length === 1) {
+    // Single keyframe dot
+    const kf = keyframes[0];
+    const kx = frameToX(kf.frame, W);
+    const ky = speedToY(kf.speed, H);
+    ctx.beginPath();
+    ctx.arc(kx, ky, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#a855f7";
+    ctx.fill();
+  }
+
+  // Axis labels
+  ctx.fillStyle = "rgba(100,116,139,0.9)";
+  ctx.font = "8px system-ui";
+  ctx.fillText("4×", 2, 9);
+  ctx.fillText("1×", 2, oneY - 2);
+  ctx.fillText("0.1×", 2, H - 2);
+}
+
 function SpeedRampSection({
   clip,
   onSetSpeedRampKeyframes,
@@ -361,116 +564,204 @@ function SpeedRampSection({
   onSetOpticalFlowQuality?: (quality: 'draft' | 'good' | 'best') => void;
 }) {
   const speedRampCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [speedRampMode, setSpeedRampMode] = useState<"constant" | "linear" | "ease">("linear");
+  const [easing, setEasing] = useState<"linear" | "ease">("linear");
   const opticalFlowEnabled = clip.opticalFlow ?? false;
   const keyframes = clip.speedRampKeyframes ?? [];
 
-  // Draw speed ramp canvas
+  // Drag state (ref to avoid stale closures in event handlers)
+  const dragIndexRef = useRef<number | null>(null);
+  const isDraggingRef = useRef(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  // Clip duration frames for preset scaling
+  const clipDurationFrames = CANVAS_TOTAL_FRAMES;
+
+  // Redraw canvas whenever keyframes, easing, or drag state changes
   useEffect(() => {
     const canvas = speedRampCanvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const W = canvas.width;
-    const H = canvas.height;
-    ctx.fillStyle = "#0f172a";
-    ctx.fillRect(0, 0, W, H);
+    drawSpeedRampCanvas(canvas, keyframes, easing, dragIndex);
+  }, [keyframes, easing, dragIndex]);
 
-    // Grid lines
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 0.5;
-    [0.25, 0.5, 0.75].forEach(y => {
-      ctx.beginPath();
-      ctx.moveTo(0, y * H);
-      ctx.lineTo(W, y * H);
-      ctx.stroke();
+  // Find nearest keyframe index within hit radius
+  const findNearestKf = useCallback((
+    cx: number, cy: number, W: number, H: number
+  ): number => {
+    let nearest = -1;
+    let nearestDist = HIT_RADIUS;
+    keyframes.forEach((kf, idx) => {
+      const kx = frameToX(kf.frame, W);
+      const ky = speedToY(kf.speed, H);
+      const dist = Math.sqrt((cx - kx) ** 2 + (cy - ky) ** 2);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = idx;
+      }
     });
-    // 1x speed line
-    ctx.strokeStyle = "rgba(124,58,237,0.3)";
-    ctx.setLineDash([3, 3]);
-    const oneX = H - ((1 - 0.1) / (4 - 0.1)) * H;
-    ctx.beginPath();
-    ctx.moveTo(0, oneX);
-    ctx.lineTo(W, oneX);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Plot keyframes
-    if (keyframes.length > 0) {
-      ctx.strokeStyle = "#a855f7";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      keyframes.forEach((kf, i) => {
-        const x = (kf.frame / 300) * W;
-        const y = H - ((kf.speed - 0.1) / (4 - 0.1)) * H;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-      keyframes.forEach(kf => {
-        const x = (kf.frame / 300) * W;
-        const y = H - ((kf.speed - 0.1) / (4 - 0.1)) * H;
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "#a855f7";
-        ctx.fill();
-      });
-    }
-
-    // Labels
-    ctx.fillStyle = "rgba(100,116,139,0.8)";
-    ctx.font = "8px system-ui";
-    ctx.fillText("4×", 2, 10);
-    ctx.fillText("1×", 2, oneX - 2);
-    ctx.fillText("0.1×", 2, H - 2);
+    return nearest;
   }, [keyframes]);
 
-  function handleSpeedRampClick(e: React.MouseEvent<HTMLCanvasElement>) {
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0) return; // left button only
     const canvas = speedRampCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const W = rect.width;
-    const H = rect.height;
-    const frame = Math.round((x / W) * 300);
-    const speed = 0.1 + ((H - y) / H) * (4 - 0.1);
-    const clamped = Math.max(0.1, Math.min(4, speed));
-    const newKf = [...keyframes.filter(k => Math.abs(k.frame - frame) > 5), { frame, speed: clamped }]
-      .sort((a, b) => a.frame - b.frame);
-    onSetSpeedRampKeyframes(newKf);
-  }
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const nearestIdx = findNearestKf(cx, cy, W, H);
+    if (nearestIdx >= 0) {
+      // Start dragging existing keyframe
+      dragIndexRef.current = nearestIdx;
+      isDraggingRef.current = true;
+      setDragIndex(nearestIdx);
+    } else {
+      // Add new keyframe at click position
+      const frame = xToFrame(cx, W);
+      const speed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, yToSpeed(cy, H)));
+      const newKfs = [
+        ...keyframes.filter(k => Math.abs(k.frame - frame) > 5),
+        { frame, speed },
+      ].sort((a, b) => a.frame - b.frame);
+      onSetSpeedRampKeyframes(newKfs);
+    }
+  }, [keyframes, findNearestKf, onSetSpeedRampKeyframes]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDraggingRef.current || dragIndexRef.current === null) return;
+    const canvas = speedRampCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const idx = dragIndexRef.current;
+    const newFrame = Math.max(0, Math.min(CANVAS_TOTAL_FRAMES, xToFrame(cx, W)));
+    const newSpeed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, yToSpeed(cy, H)));
+
+    const updated = keyframes.map((kf, i) =>
+      i === idx ? { frame: newFrame, speed: newSpeed } : kf
+    );
+    onSetSpeedRampKeyframes(updated);
+  }, [keyframes, onSetSpeedRampKeyframes]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      dragIndexRef.current = null;
+      setDragIndex(null);
+    }
+  }, []);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const canvas = speedRampCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const nearestIdx = findNearestKf(cx, cy, W, H);
+    if (nearestIdx >= 0) {
+      onSetSpeedRampKeyframes(keyframes.filter((_, i) => i !== nearestIdx));
+    }
+  }, [keyframes, findNearestKf, onSetSpeedRampKeyframes]);
+
+  const applyPreset = useCallback((key: SpeedPresetKey) => {
+    const kfs = presetToKeyframes(SPEED_PRESETS[key], clipDurationFrames);
+    onSetSpeedRampKeyframes(kfs);
+  }, [clipDurationFrames, onSetSpeedRampKeyframes]);
 
   return (
     <div style={{ marginTop: 16, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 12 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
         Speed Ramp
       </div>
-      <canvas
-        ref={speedRampCanvasRef}
-        width={240} height={60}
-        style={{ width: "100%", height: 60, borderRadius: 6, background: "#0f172a", cursor: "crosshair", display: "block" }}
-        onClick={handleSpeedRampClick}
-        title="Click to add speed keyframe. Drag to adjust."
-      />
-      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-        {(["constant", "linear", "ease"] as const).map(mode => (
-          <button key={mode} onClick={() => setSpeedRampMode(mode)} style={{
-            flex: 1, padding: "4px 0", borderRadius: 5, border: "none",
-            background: speedRampMode === mode ? "#7c3aed" : "rgba(255,255,255,0.07)",
-            color: "white", fontSize: 10, fontWeight: 600, cursor: "pointer",
-            textTransform: "capitalize" as const,
-          }}>
-            {mode}
+
+      {/* Preset buttons */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4, marginBottom: 8 }}>
+        {([
+          { key: "smash",     label: "⚡ Smash" },
+          { key: "wave",      label: "🌊 Wave" },
+          { key: "cinematic", label: "🎬 Cinematic" },
+          { key: "rampUp",    label: "🔥 Ramp Up" },
+        ] as const).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => applyPreset(key)}
+            style={{
+              padding: "4px 2px", borderRadius: 5, border: "1px solid rgba(168,85,247,0.25)",
+              background: "rgba(168,85,247,0.08)", color: "#c4b5fd",
+              fontSize: 9, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+              overflow: "hidden", textOverflow: "ellipsis",
+            }}
+            title={label}
+          >
+            {label}
           </button>
         ))}
       </div>
+
+      {/* Canvas */}
+      <canvas
+        ref={speedRampCanvasRef}
+        width={CANVAS_W}
+        height={CANVAS_H}
+        style={{
+          width: "100%", height: CANVAS_H,
+          borderRadius: 6, background: "#0a0f1a",
+          cursor: isDraggingRef.current ? "grabbing" : "crosshair",
+          display: "block", userSelect: "none",
+        }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onContextMenu={handleContextMenu}
+        title="Click to add keyframe · Drag to move · Right-click to remove"
+      />
+      <div style={{ fontSize: 9, color: "#475569", marginTop: 3, textAlign: "center" }}>
+        Click to add · Drag to move · Right-click to remove
+      </div>
+
+      {/* Easing mode */}
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <span style={{ fontSize: 10, color: "#64748b", alignSelf: "center", marginRight: 2 }}>Easing:</span>
+        {(["linear", "ease"] as const).map(mode => (
+          <button key={mode} onClick={() => setEasing(mode)} style={{
+            flex: 1, padding: "4px 0", borderRadius: 5, border: "none",
+            background: easing === mode ? "#7c3aed" : "rgba(255,255,255,0.07)",
+            color: "white", fontSize: 10, fontWeight: 600, cursor: "pointer",
+            textTransform: "capitalize" as const,
+          }}>
+            {mode === "linear" ? "Linear" : "Ease"}
+          </button>
+        ))}
+      </div>
+
+      {/* Clear button */}
       {keyframes.length > 0 && (
         <button
           onClick={() => onSetSpeedRampKeyframes([])}
-          style={{ marginTop: 6, width: "100%", padding: "3px", borderRadius: 5, border: "none", background: "rgba(239,68,68,0.12)", color: "#f87171", fontSize: 10, cursor: "pointer" }}
+          style={{
+            marginTop: 6, width: "100%", padding: "4px", borderRadius: 5,
+            border: "none", background: "rgba(239,68,68,0.12)",
+            color: "#f87171", fontSize: 10, fontWeight: 600, cursor: "pointer",
+          }}
         >
-          Clear Keyframes
+          Clear Keyframes ({keyframes.length})
         </button>
       )}
       {/* ── Optical Flow / FlowWarp ─────────────────────────────────── */}

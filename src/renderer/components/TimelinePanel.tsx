@@ -2348,6 +2348,19 @@ export function TimelinePanel({
                           </div>
                         )}
 
+                        {/* ── Speed Ramp badge ── */}
+                        {(segment.clip.speedRampKeyframes?.length ?? 0) >= 2 && (
+                          <div style={{
+                            position: 'absolute', top: 3, right: segment.clip.opticalFlow ? 72 : 3,
+                            background: 'rgba(168,85,247,0.85)',
+                            borderRadius: 4, padding: '1px 5px',
+                            fontSize: 9, fontWeight: 700, color: '#f3e8ff',
+                            pointerEvents: 'none', zIndex: 3,
+                          }}>
+                            〜 Ramp
+                          </div>
+                        )}
+
                         {/* ── Disabled overlay (diagonal stripe pattern) ── */}
                         {!segment.clip.isEnabled && (
                           <div style={{

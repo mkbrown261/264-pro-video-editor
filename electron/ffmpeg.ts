@@ -436,6 +436,30 @@ function getXfadeFilter(transitionType: string | undefined, durationSec: number)
   }
 }
 
+// ── Speed ramp: compute weighted-average speed from keyframes ─────────────────
+// FFmpeg doesn't natively support per-frame speed variation in a simple filter
+// graph, so we compute the time-weighted average speed across all keyframe
+// segments and use that as the effective speed for setpts / atempo.
+function buildSpeedRampFilter(
+  keyframes: Array<{ frame: number; speed: number }>,
+  totalFrames: number,
+  fps: number
+): string {
+  if (!keyframes || keyframes.length < 2) return '';
+  const kfs = [...keyframes].sort((a, b) => a.frame - b.frame);
+  const totalDuration = totalFrames / fps;
+  let weightedSpeed = 0;
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const segStart = kfs[i].frame / fps;
+    const segEnd = kfs[i + 1].frame / fps;
+    const segDuration = segEnd - segStart;
+    const avgSegSpeed = (kfs[i].speed + kfs[i + 1].speed) / 2;
+    weightedSpeed += avgSegSpeed * (segDuration / totalDuration);
+  }
+  const clamped = Math.max(0.1, Math.min(4, weightedSpeed));
+  return clamped.toFixed(4);
+}
+
 // ── atempo chain helper ───────────────────────────────────────────────────────
 // atempo filter only accepts 0.5–2.0. For values outside that range we chain
 // multiple atempo filters. E.g. 4x speed = atempo=2.0,atempo=2.0
@@ -530,7 +554,18 @@ export async function exportSequence(
     const end = segment.sourceOutSeconds.toFixed(3);
     const duration = segment.durationSeconds.toFixed(3);
     const clipIndex = String(index);
-    const speed = Math.max(0.1, Math.min(4, segment.clip.speed ?? 1));
+    // Use speed ramp keyframes (weighted-average) when present, otherwise flat speed
+    const effectiveSpeed = (() => {
+      const kfs = segment.clip.speedRampKeyframes;
+      if (kfs && kfs.length >= 2) {
+        const clipFrames = segment.durationFrames ??
+          Math.round(segment.durationSeconds * sequenceFps);
+        const rampSpeed = parseFloat(buildSpeedRampFilter(kfs, clipFrames, sequenceFps));
+        return isFinite(rampSpeed) && rampSpeed > 0 ? rampSpeed : Math.max(0.1, Math.min(4, segment.clip.speed ?? 1));
+      }
+      return Math.max(0.1, Math.min(4, segment.clip.speed ?? 1));
+    })();
+    const speed = effectiveSpeed;
 
     const transitionInSeconds = (
       getClipTransitionDurationFrames(
