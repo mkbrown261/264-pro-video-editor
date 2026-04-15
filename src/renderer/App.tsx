@@ -520,6 +520,7 @@ export default function App() {
   const trimClipEnd = useEditorStore((s) => s.trimClipEnd);
   const splitSelectedClipAtPlayhead = useEditorStore((s) => s.splitSelectedClipAtPlayhead);
   const splitClipAtFrame = useEditorStore((s) => s.splitClipAtFrame);
+  const splitClipsAtBeats = useEditorStore((s) => s.splitClipsAtBeats);
   const removeSelectedClip = useEditorStore((s) => s.removeSelectedClip);
   const removeClipById = useEditorStore((s) => s.removeClipById);
   const duplicateClip = useEditorStore((s) => s.duplicateClip);
@@ -4117,13 +4118,7 @@ export default function App() {
               toast.success(`🥁 Added ${markers.length} beat markers`);
             }}
             onSplitClipsAtBeats={(beatFrames) => {
-              beatFrames.forEach(frame => {
-                const videoSegs = buildTimelineSegments(project.sequence, project.assets)
-                  .filter(s => s.track.kind === "video" && frame > s.startFrame && frame < s.endFrame);
-                videoSegs.forEach(seg => {
-                  splitClipAtFrame(seg.clip.id, frame);
-                });
-              });
+              splitClipsAtBeats(beatFrames);
               toast.success(`✂️ Auto-cut ${beatFrames.length} beats`);
             }}
             onClose={() => setBeatSyncOpen(false)}

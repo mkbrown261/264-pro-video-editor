@@ -100,6 +100,7 @@ interface EditorStore {
   trimClipEnd: (clipId: string, nextTrimEndFrames: number) => void;
   splitSelectedClipAtPlayhead: () => void;
   splitClipAtFrame: (clipId: string, frame: number) => void;
+  splitClipsAtBeats: (beatFrames: number[], targetClipIds?: string[]) => void;
   removeSelectedClip: () => void;
   removeClipById: (clipId: string) => void;
   duplicateClip: (clipId: string) => void;
@@ -1160,6 +1161,31 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   splitClipAtFrame: (clipId, frame) => {
     set(withUndo("Split Clip", (state) => splitStateAtFrame(state, clipId, frame)));
+  },
+
+  splitClipsAtBeats: (beatFrames, targetClipIds) => {
+    if (beatFrames.length === 0) return;
+    // Sort beats ascending so we process left-to-right; each call to splitStateAtFrame
+    // rebuilds segments from current state so IDs stay consistent after each split.
+    const sortedBeats = [...beatFrames].sort((a, b) => a - b);
+    set(withUndo("Beat Sync Auto-Cut", (state) => {
+      let current: EditorStore = state as EditorStore;
+      for (const frame of sortedBeats) {
+        // Find video clips that straddle this frame
+        const segs = buildTimelineSegments(current.project.sequence, current.project.assets)
+          .filter(s =>
+            s.track.kind === "video" &&
+            frame > s.startFrame &&
+            frame < s.endFrame &&
+            (!targetClipIds || targetClipIds.includes(s.clip.id))
+          );
+        for (const seg of segs) {
+          const next = splitStateAtFrame(current, seg.clip.id, frame);
+          current = { ...current, ...(next as Partial<EditorStore>) };
+        }
+      }
+      return current;
+    }));
   },
 
   removeSelectedClip: () => {
