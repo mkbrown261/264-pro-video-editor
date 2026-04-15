@@ -3790,6 +3790,8 @@ export default function App() {
             projectName={project.name ?? "Untitled Project"}
             totalDurationSeconds={totalFrames / project.sequence.settings.fps}
             lastExportedPath={lastExportedPath}
+            markers={project.sequence.markers}
+            sequenceFps={project.sequence.settings.fps}
           />
         )}
 

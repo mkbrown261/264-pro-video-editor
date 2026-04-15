@@ -1694,7 +1694,7 @@ export function TimelinePanel({
                     }}
                   />
                   <div className="marker-color-row">
-                    {["#f7c948", "#f74848", "#48f7a0", "#4891f7", "#f748d6", "#ffffff"].map(c => (
+                    {["#f59e0b", "#ef4444", "#22c55e", "#3b82f6", "#a855f7", "#ec4899"].map(c => (
                       <button
                         key={c}
                         className="marker-color-swatch"
