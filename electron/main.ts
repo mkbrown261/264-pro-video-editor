@@ -10,7 +10,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
-import type { ExportRequest } from "../src/shared/models.js";
+import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
 import {
   detectBestHWEncoder,
   exportSequence,
