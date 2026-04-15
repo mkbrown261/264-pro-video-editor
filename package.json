@@ -26,7 +26,8 @@
     "dist:mac": "npm run build && electron-builder --mac --universal",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:all": "npm run build && electron-builder --mac --win",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "postinstall": "node scripts/rename-electron-mac.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
