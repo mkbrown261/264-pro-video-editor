@@ -45,18 +45,21 @@ function createMediaUrl(sourcePath: string): string {
   return `media://asset?path=${encodeURIComponent(sourcePath)}`;
 }
 
+// True packaged build = app.isPackaged AND no dev server running
+const IS_PACKAGED = app.isPackaged && !process.env.VITE_DEV_SERVER_URL;
+
 function getFfmpegPath(): string {
   // 1. Explicit override
   if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
 
-  // 2. Packaged app — binary is in extraResources, NOT inside asar
-  if (app.isPackaged) {
+  // 2. True packaged build — binary is in extraResources
+  if (IS_PACKAGED) {
     const suffix = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
     return join(process.resourcesPath, "ffmpeg-static", suffix);
   }
 
-  // 3. Dev — ffmpeg-static npm package
-  if (typeof ffmpegStatic === "string") return ffmpegStatic;
+  // 3. Dev — ffmpeg-static npm package resolves to node_modules
+  if (typeof ffmpegStatic === "string" && ffmpegStatic) return ffmpegStatic;
 
   // 4. System fallback
   return "ffmpeg";
@@ -65,9 +68,8 @@ function getFfmpegPath(): string {
 function getFfprobePath(): string {
   if (process.env.FFPROBE_PATH) return process.env.FFPROBE_PATH;
 
-  if (app.isPackaged) {
+  if (IS_PACKAGED) {
     const suffix = process.platform === "win32" ? "ffprobe.exe" : "ffprobe";
-    // ffprobe-static bundles by platform/arch: bin/<platform>/<arch>/ffprobe
     const platform = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "win" : "linux";
     const arch = process.arch === "arm64" ? "arm64" : "x64";
     return join(process.resourcesPath, "ffprobe-static", "bin", platform, arch, suffix);
