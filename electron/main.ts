@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, shell } from "electron";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
 import { createReadStream } from "node:fs";
@@ -1937,6 +1937,17 @@ app.on("will-quit", () => {
 app.whenReady().then(() => {
   // Register media:// protocol handler
   protocol.handle("media", createMediaResponse);
+
+  // Set dock icon explicitly on Mac — works in both dev and packaged builds
+  if (process.platform === "darwin" && app.dock) {
+    try {
+      const iconPath = app.isPackaged
+        ? join(process.resourcesPath, "build-assets", "icon.png")
+        : join(process.cwd(), "build-assets", "icon.png");
+      const img = nativeImage.createFromPath(iconPath);
+      if (!img.isEmpty()) app.dock.setIcon(img);
+    } catch { /* non-critical */ }
+  }
 
   // Start auto-updater immediately — before gate or editor opens.
   // This means even users stuck on the gate screen get notified of updates.
