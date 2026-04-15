@@ -850,6 +850,8 @@ export default function App() {
   const [beatSyncOpen, setBeatSyncOpen] = useState(false);
   // Auto-Reframe panel
   const [autoReframeOpen, setAutoReframeOpen] = useState(false);
+  // Lasso multi-select — clips selected via rubber-band in TimelinePanel
+  const [lassoSelectedIds, setLassoSelectedIds] = useState<string[]>([]);
   // Settings panel (Phase 6)
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   // Phase 9 ClawFlow Intelligence state
@@ -1431,7 +1433,16 @@ export default function App() {
     onNudgePlayhead: handleStepFrames,
     onSeekToStart: () => handleSeek(0),
     onSeekToEnd: () => handleSeek(Math.max(totalFrames - 1, 0)),
-    onRemoveSelectedClip: () => { pauseViewerPlayback(); removeSelectedClip(); },
+    onRemoveSelectedClip: () => {
+      pauseViewerPlayback();
+      if (lassoSelectedIds.length > 1) {
+        // Delete all lasso-selected clips
+        lassoSelectedIds.forEach(id => removeClipById(id));
+        setLassoSelectedIds([]);
+      } else {
+        removeSelectedClip();
+      }
+    },
     onUndo: undo,
     onRedo: redo,
     onSave: () => void handleSaveProject(),
@@ -3572,6 +3583,7 @@ export default function App() {
               }}
               renderCacheEntries={renderCache.entries}
               renderingSegments={renderCache.renderingSegments}
+              onLassoSelect={(ids) => { setLassoSelectedIds(ids); }}
             />
 
             {/* Audio Mixer Panel */}
@@ -3771,6 +3783,7 @@ export default function App() {
               onAddAdjustmentLayer={addAdjustmentLayer}
               renderCacheEntries={renderCache.entries}
               renderingSegments={renderCache.renderingSegments}
+              onLassoSelect={(ids) => { setLassoSelectedIds(ids); }}
               />
             </div>
           </>

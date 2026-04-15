@@ -187,6 +187,8 @@ interface TimelinePanelProps {
   // Render cache
   renderCacheEntries?: Record<string, import('../../shared/models').RenderCacheEntry>;
   renderingSegments?: Set<string>;
+  /** Called when lasso selection changes — lifts multi-select state to parent */
+  onLassoSelect?: (clipIds: string[]) => void;
 }
 
 const MIN_PPF = 1.5;
@@ -255,6 +257,7 @@ export function TimelinePanel({
   onGenerateAITransition,
   renderCacheEntries,
   renderingSegments,
+  onLassoSelect,
 }: TimelinePanelProps) {
   const timelineEditorRef = useRef<HTMLDivElement | null>(null);
   const timelineRulerRef  = useRef<HTMLDivElement | null>(null);
@@ -268,7 +271,7 @@ export function TimelinePanel({
     onUpdateTrack, onSetTransitionDuration, onDropTransition,
     toolMode, sequenceFps,
     onAddTrack, onAddTracksAndMoveClip, onAddTracksAndDropAsset, onReorderTrack,
-    assets, markers,
+    assets, markers, onLassoSelect,
   });
   useEffect(() => {
     propsRef.current = {
@@ -277,7 +280,7 @@ export function TimelinePanel({
       onUpdateTrack, onSetTransitionDuration, onDropTransition,
       toolMode, sequenceFps,
       onAddTrack, onAddTracksAndMoveClip, onAddTracksAndDropAsset, onReorderTrack,
-      assets, markers,
+      assets, markers, onLassoSelect,
     };
   });
 
@@ -975,6 +978,8 @@ export function TimelinePanel({
             }
           });
           setLassoSelectedIds(selected);
+          // Lift lasso selection to parent so Delete/actions work on all selected clips
+          propsRef.current.onLassoSelect?.([...selected]);
           if (selected.size === 1) {
             propsRef.current.onSelectClip?.([...selected][0]);
           }
