@@ -1025,8 +1025,12 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
               fontFamily: cue.style.fontFamily,
               fontWeight: cue.style.bold ? "bold" : "normal",
               fontStyle: cue.style.italic ? "italic" : "normal",
-              WebkitTextStroke: `${cue.style.outlineWidth}px ${cue.style.outlineColor}`,
-              textShadow: `${cue.style.shadowOffset}px ${cue.style.shadowOffset}px 4px rgba(0,0,0,0.8)`,
+              WebkitTextStroke: cue.style.outlineWidth > 0 ? `${cue.style.outlineWidth}px ${cue.style.outlineColor}` : undefined,
+              textShadow: cue.style.outlineWidth > 0
+                ? `0 0 ${cue.style.outlineWidth * 2}px ${cue.style.outlineColor}, ${cue.style.shadowOffset}px ${cue.style.shadowOffset}px ${cue.style.shadowOffset * 2}px rgba(0,0,0,0.8)`
+                : cue.style.shadowOffset > 0
+                  ? `${cue.style.shadowOffset}px ${cue.style.shadowOffset}px ${cue.style.shadowOffset * 2}px rgba(0,0,0,0.8)`
+                  : "none",
               background: cue.style.backgroundColor !== "transparent"
                 ? `${cue.style.backgroundColor}${Math.round(cue.style.backgroundOpacity * 255).toString(16).padStart(2,"0")}`
                 : "transparent",

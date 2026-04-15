@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 import type { SubtitleCue, SubtitleStyle, MediaAsset } from "../../shared/models";
-import { DEFAULT_SUBTITLE_STYLE, createId } from "../../shared/models";
+import { DEFAULT_SUBTITLE_STYLE, SUBTITLE_PRESETS, createId } from "../../shared/models";
 import { toast } from "../lib/toast";
 
 interface SubtitlesPanelProps {
@@ -71,6 +71,7 @@ function generateSRT(cues: SubtitleCue[], fps: number): string {
 
 export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue, onRemoveCue, onSeekToFrame, project }: SubtitlesPanelProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [globalStyle, setGlobalStyle] = useState<SubtitleStyle>({ ...DEFAULT_SUBTITLE_STYLE });
   const [isTranscribing, setIsTranscribing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -215,11 +216,15 @@ export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue
               marginBottom: 4,
               background: playheadFrame >= cue.startFrame && playheadFrame < cue.endFrame
                 ? "rgba(124,58,237,0.18)"
-                : "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.07)",
+                : selectedCueId === cue.id
+                  ? "rgba(124,58,237,0.10)"
+                  : "rgba(255,255,255,0.04)",
+              border: selectedCueId === cue.id
+                ? "1px solid rgba(124,58,237,0.5)"
+                : "1px solid rgba(255,255,255,0.07)",
               cursor: "pointer",
             }}
-            onClick={() => onSeekToFrame(cue.startFrame)}
+            onClick={() => { onSeekToFrame(cue.startFrame); setSelectedCueId(cue.id); }}
           >
             <span style={{ fontSize: 11, color: "#64748b", minWidth: 42, fontFamily: "monospace" }}>
               {framesToDisplay(cue.startFrame, fps)}
@@ -258,6 +263,85 @@ export function SubtitlesPanel({ cues, playheadFrame, fps, onAddCue, onUpdateCue
 
       {/* Style controls */}
       <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+        {/* Preset gallery */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: "#475569",
+            textTransform: "uppercase" as const, letterSpacing: "0.08em", marginBottom: 8,
+          }}>
+            Style Presets
+          </div>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6,
+          }}>
+            {Object.entries(SUBTITLE_PRESETS).map(([key, preset]) => (
+              <div
+                key={key}
+                title={preset.name}
+                onClick={() => {
+                  const newStyle = { ...preset.style };
+                  setGlobalStyle(newStyle);
+                  if (selectedCueId) {
+                    onUpdateCue(selectedCueId, { style: newStyle });
+                    toast.success(`Applied "${preset.name}" to selected subtitle`);
+                  } else {
+                    cues.forEach(cue => onUpdateCue(cue.id, { style: newStyle }));
+                    toast.success(`Applied "${preset.name}" to all ${cues.length} subtitle${cues.length === 1 ? "" : "s"}`);
+                  }
+                }}
+                style={{
+                  padding: "8px 4px",
+                  borderRadius: 7,
+                  border: "1px solid #1e293b",
+                  background: "#0a0f1a",
+                  cursor: "pointer",
+                  textAlign: "center" as const,
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = "#7c3aed"; (e.currentTarget as HTMLDivElement).style.background = "#0f172a"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = "#1e293b"; (e.currentTarget as HTMLDivElement).style.background = "#0a0f1a"; }}
+              >
+                {/* Preview swatch */}
+                <div style={{
+                  height: 28,
+                  borderRadius: 4,
+                  marginBottom: 5,
+                  background: preset.style.backgroundColor === "transparent" || preset.style.backgroundOpacity === 0
+                    ? "linear-gradient(135deg, #1e293b, #0f172a)"
+                    : `${preset.style.backgroundColor}${Math.round(preset.style.backgroundOpacity * 255).toString(16).padStart(2, "0")}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  overflow: "hidden",
+                }}>
+                  <span style={{
+                    fontFamily: preset.style.fontFamily,
+                    color: preset.style.color,
+                    fontWeight: preset.style.bold ? 700 : 400,
+                    fontStyle: preset.style.italic ? "italic" : "normal",
+                    fontSize: 11,
+                    WebkitTextStroke: preset.style.outlineWidth > 0
+                      ? `${preset.style.outlineWidth * 0.5}px ${preset.style.outlineColor}`
+                      : undefined,
+                    textShadow: preset.style.shadowOffset > 0
+                      ? `${preset.style.shadowOffset * 0.3}px ${preset.style.shadowOffset * 0.3}px ${preset.style.shadowOffset}px rgba(0,0,0,0.8)`
+                      : "none",
+                    letterSpacing: "-0.02em",
+                  }}>
+                    Aa
+                  </span>
+                </div>
+                <div style={{ fontSize: 9, color: "#64748b", lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {preset.icon} {preset.name}
+                </div>
+              </div>
+            ))}
+          </div>
+          {selectedCueId && (
+            <div style={{ marginTop: 6, fontSize: 9, color: "#475569", textAlign: "center" as const }}>
+              Click preset to apply to selected subtitle · <span style={{ color: "#7c3aed", cursor: "pointer" }} onClick={() => setSelectedCueId(null)}>deselect</span>
+            </div>
+          )}
+        </div>
+
         <div style={{ ...labelStyle, marginBottom: 8 }}>Style Controls</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <div>
