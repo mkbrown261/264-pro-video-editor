@@ -59,12 +59,12 @@ export function ClawFlowPublishPanel({ projectName, totalDurationSeconds, lastEx
 
   // On mount, check connection status for both platforms
   useEffect(() => {
-    void api().checkPublishConnection?.('youtube').then(r => {
-      if (r) { setYtConnected(r.connected); setYtDemo(r.demo ?? false); }
-    });
-    void api().checkPublishConnection?.('tiktok').then(r => {
-      if (r) { setTtConnected(r.connected); setTtDemo(r.demo ?? false); }
-    });
+    void api().checkPublishConnection?.('youtube')
+      .then(r => { if (r) { setYtConnected(r.connected); setYtDemo(r.demo ?? false); } })
+      .catch(() => { /* ignore — not connected */ });
+    void api().checkPublishConnection?.('tiktok')
+      .then(r => { if (r) { setTtConnected(r.connected); setTtDemo(r.demo ?? false); } })
+      .catch(() => { /* ignore — not connected */ });
   }, []);
 
   const formatTime = (s: number) => {

@@ -161,7 +161,19 @@ export function useRenderCache(project: EditorProject) {
             createdAt: Date.now(),
             valid: true,
           };
-          setEntries(prev => ({ ...prev, [hash]: entry }));
+          setEntries(prev => {
+            const next = { ...prev, [hash]: entry };
+            // Trim to at most 500 entries (evict oldest by createdAt)
+            const keys = Object.keys(next);
+            if (keys.length > 500) {
+              const sorted = keys.sort(
+                (a, b) => (next[a].createdAt ?? 0) - (next[b].createdAt ?? 0)
+              );
+              const toEvict = sorted.slice(0, keys.length - 500);
+              for (const k of toEvict) delete next[k];
+            }
+            return next;
+          });
         }
       } catch {
         /* skip failed segments silently */

@@ -128,20 +128,28 @@ export function RenderQueuePanel({
 
   async function handleExportEDL() {
     if (!project) { toast.warning("No project loaded"); return; }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await (window as any).electronAPI?.exportEDL?.(project);
-    if (!result || result.canceled) return;
-    if (result.success) toast.success(`✅ EDL saved: ${result.filePath}`);
-    else toast.error(result.error ?? "EDL export failed");
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (window as any).electronAPI?.exportEDL?.(project);
+      if (!result || result.canceled) return;
+      if (result.success) toast.success(`✅ EDL saved: ${result.filePath}`);
+      else toast.error(result.error ?? "EDL export failed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "EDL export failed");
+    }
   }
 
   async function handleExportFCPXML() {
     if (!project) { toast.warning("No project loaded"); return; }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await (window as any).electronAPI?.exportFCPXML?.(project);
-    if (!result || result.canceled) return;
-    if (result.success) toast.success(`✅ FCP XML saved: ${result.filePath}`);
-    else toast.error(result.error ?? "XML export failed");
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (window as any).electronAPI?.exportFCPXML?.(project);
+      if (!result || result.canceled) return;
+      if (result.success) toast.success(`✅ FCP XML saved: ${result.filePath}`);
+      else toast.error(result.error ?? "XML export failed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "XML export failed");
+    }
   }
 
   return (

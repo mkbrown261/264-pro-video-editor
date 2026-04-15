@@ -1050,16 +1050,23 @@ ipcMain.handle('publish:connect-youtube', async (_ev) => {
     const urlModule = await import('url');
 
     const code = await new Promise<string | null>((resolve) => {
+      let resolved = false;
+      const done = (val: string | null) => { if (!resolved) { resolved = true; resolve(val); } };
       const server = http.createServer((req, res) => {
         const parsed = urlModule.parse(req.url ?? '', true);
         const code = parsed.query.code as string;
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<html><body style="font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0"><h2>✅ Connected to YouTube!</h2><p>You can close this window and return to 264 Pro.</p></body></html>');
         server.close();
-        resolve(code ?? null);
+        done(code ?? null);
+      });
+      server.on('error', (err) => {
+        done(null);
+        return void err; // port-in-use or other server error
       });
       server.listen(8642, 'localhost');
-      setTimeout(() => { server.close(); resolve(null); }, 120000);
+      const timer = setTimeout(() => { server.close(); done(null); }, 120000);
+      server.once('close', () => clearTimeout(timer));
       void shellM.openExternal(authUrl);
     });
 
@@ -1104,6 +1111,13 @@ ipcMain.handle('publish:upload-youtube', async (_ev, args: {
     const fsM = await import('fs');
 
     if (!fsM.existsSync(args.videoPath)) return { success: false, error: `Video file not found: ${args.videoPath}` };
+
+    // Warn if file is very large (readFileSync will load it all into RAM)
+    const fileStat = fsM.statSync(args.videoPath);
+    const fileSizeMB = fileStat.size / (1024 * 1024);
+    if (fileSizeMB > 500) {
+      return { success: false, error: `File is ${Math.round(fileSizeMB)}MB. Files larger than 500MB require chunked upload (not yet supported). Please export a smaller file or use the YouTube Studio website.` };
+    }
 
     const initResp = await fetch(
       'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
@@ -1160,16 +1174,23 @@ ipcMain.handle('publish:connect-tiktok', async () => {
     const authUrl = `https://www.tiktok.com/v2/auth/authorize?client_key=${encodeURIComponent(clientKey)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${csrfState}`;
 
     const code = await new Promise<string | null>((resolve) => {
+      let resolved = false;
+      const done = (val: string | null) => { if (!resolved) { resolved = true; resolve(val); } };
       const server = http.createServer((req, res) => {
         const parsed = urlModule.parse(req.url ?? '', true);
         const code = parsed.query.code as string;
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<html><body style="font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0"><h2>✅ Connected to TikTok!</h2><p>You can close this window and return to 264 Pro.</p></body></html>');
         server.close();
-        resolve(code ?? null);
+        done(code ?? null);
+      });
+      server.on('error', (err) => {
+        done(null);
+        return void err; // port-in-use or other server error
       });
       server.listen(8643, 'localhost');
-      setTimeout(() => { server.close(); resolve(null); }, 120000);
+      const timer = setTimeout(() => { server.close(); done(null); }, 120000);
+      server.once('close', () => clearTimeout(timer));
       void shellM.openExternal(authUrl);
     });
 
@@ -1200,6 +1221,10 @@ ipcMain.handle('publish:upload-tiktok', async (_ev, args: { videoPath: string; t
     const fsM = await import('fs');
     if (!fsM.existsSync(args.videoPath)) return { success: false, error: `File not found: ${args.videoPath}` };
     const fileSize = fsM.statSync(args.videoPath).size;
+    const fileSizeMB = fileSize / (1024 * 1024);
+    if (fileSizeMB > 500) {
+      return { success: false, error: `File is ${Math.round(fileSizeMB)}MB. Files larger than 500MB require chunked upload (not yet supported). Please export a smaller file.` };
+    }
     const initResp = await fetch('https://open.tiktokapis.com/v2/post/publish/video/init/', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token.accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
@@ -1216,7 +1241,9 @@ ipcMain.handle('publish:upload-tiktok', async (_ev, args: { videoPath: string; t
 
 ipcMain.handle('publish:check-connection', async (_ev, platform: string) => {
   const token = oauthTokens[platform];
-  return { connected: !!token && token.expiresAt > Date.now(), demo: token?.accessToken?.startsWith('demo_token_') ?? false };
+  if (!token) return { connected: false, demo: false };
+  const expiresAt = token.expiresAt ?? 0;
+  return { connected: expiresAt > Date.now(), demo: token.accessToken?.startsWith('demo_token_') ?? false };
 });
 
 ipcMain.handle('publish:disconnect', async (_ev, platform: string) => {
@@ -1295,7 +1322,7 @@ ipcMain.handle('lut:export', async (_ev, args: { grade: Record<string, number>; 
     const fsM = await import('fs');
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Export LUT',
-      defaultPath: `${(args.name || 'grade').replace(/[^a-zA-Z0-9_-]/g,'_')}.cube`,
+      defaultPath: `${((args.name ?? '') || 'grade').replace(/[^a-zA-Z0-9_-]/g,'_')}.cube`,
       filters: [{ name: 'LUT Files', extensions: ['cube'] }],
     });
     if (canceled || !filePath) return { success: false, canceled: true };
@@ -1546,6 +1573,7 @@ ipcMain.handle('export:fcpxml', async (_ev, project: unknown) => {
 ipcMain.handle('multicam:sync-by-audio', async (_ev, args: {
   clips: Array<{ clipId: string; assetPath: string; trimStartSeconds: number; durationSeconds: number }>;
 }) => {
+  let pcmFiles: string[] | undefined;
   try {
     const fsM = await import('fs');
     const pathM = await import('path');
@@ -1564,7 +1592,7 @@ ipcMain.handle('multicam:sync-by-audio', async (_ev, args: {
     fsM.mkdirSync(tmpDir, { recursive: true });
 
     // Step 1: Extract mono 8kHz audio PCM for each clip (fast, low memory)
-    const pcmFiles: string[] = [];
+    pcmFiles = [];
     for (let i = 0; i < args.clips.length; i++) {
       const clip = args.clips[i];
       const outPcm = pathM.join(tmpDir, `clip_${i}.pcm`);
@@ -1652,9 +1680,6 @@ ipcMain.handle('multicam:sync-by-audio', async (_ev, args: {
       offsets.push(bestLag / sampleRate);
     }
 
-    // Clean up temp files
-    try { pcmFiles.forEach(f => fsM.unlinkSync(f)); } catch { /* ignore */ }
-
     return {
       success: true,
       offsets, // offsets[i] = seconds to shift clip i relative to clip 0
@@ -1663,6 +1688,14 @@ ipcMain.handle('multicam:sync-by-audio', async (_ev, args: {
     };
   } catch(e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    // Clean up temp files regardless of success or failure
+    if (pcmFiles) {
+      try {
+        const fsClean = require('fs') as typeof import('fs');
+        pcmFiles.forEach(f => { try { fsClean.unlinkSync(f); } catch { /* ignore */ } });
+      } catch { /* ignore */ }
+    }
   }
 });
 
@@ -1679,7 +1712,10 @@ ipcMain.handle('export:stems', async (_ev, args: {
       defaultPath: app.getPath('documents'),
       properties: ['openDirectory', 'createDirectory'],
     });
-    if (canceled || !filePaths[0]) return { success: false, canceled: true, files: [] };
+    if (canceled || !filePaths || filePaths.length === 0 || !filePaths[0]) return { success: false, canceled: true, files: [] };
+
+    // Guard against empty stems array
+    if (!args.stems || args.stems.length === 0) return { success: false, error: 'No stems selected', files: [] };
 
     const { exportStems } = await import('./stems-export.js');
     const result = await exportStems({

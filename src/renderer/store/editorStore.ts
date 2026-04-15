@@ -3038,9 +3038,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   syncMulticamClips: (clipIds, offsetsSeconds) => {
     set(withUndo("Sync Multicam by Audio", (state) => {
+      // No-op if empty arrays to avoid Math.min(...[]) = Infinity
+      if (!clipIds || clipIds.length === 0 || !offsetsSeconds || offsetsSeconds.length === 0) return state;
+
       const fps = state.project.sequence.settings.fps;
       // Normalize so the earliest clip doesn't go negative
-      const minOffset = Math.min(...offsetsSeconds);
+      const minOffset = offsetsSeconds.length > 0 ? Math.min(...offsetsSeconds) : 0;
       const normalizedOffsets = offsetsSeconds.map(o => o - minOffset);
       const newClips = state.project.sequence.clips.map(c => {
         const idx = clipIds.indexOf(c.id);

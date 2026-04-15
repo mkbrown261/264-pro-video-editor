@@ -10,7 +10,7 @@ import type { EditorProject } from '../src/shared/models.js';
 // ── CMX 3600 EDL ──────────────────────────────────────────────────────────────
 
 export function generateEDL(project: EditorProject): string {
-  const fps = project.sequence.settings.fps;
+  const fps = Math.max(1, project.sequence.settings.fps);
   const title = project.name ?? 'Untitled';
 
   const lines: string[] = [
@@ -18,6 +18,11 @@ export function generateEDL(project: EditorProject): string {
     `FCM: NON-DROP FRAME`,
     '',
   ];
+
+  // Handle empty assets or missing video track gracefully
+  if (!project.assets || !project.sequence?.clips || project.sequence.clips.length === 0) {
+    return lines.join('\n');
+  }
 
   // Get all video clips sorted by start frame
   const videoTrack = project.sequence.tracks.find(t => t.kind === 'video');
@@ -27,6 +32,10 @@ export function generateEDL(project: EditorProject): string {
     .filter(c => c.trackId === videoTrack.id && c.isEnabled !== false)
     .sort((a, b) => a.startFrame - b.startFrame);
 
+  // Handle empty clips array
+  if (clips.length === 0) return lines.join('\n');
+
+  // editNumber is local — reset per call, not module-level
   let editNumber = 1;
 
   for (const clip of clips) {
@@ -36,7 +45,7 @@ export function generateEDL(project: EditorProject): string {
     const trimStart = clip.trimStartFrames ?? 0;
     const trimEnd = clip.trimEndFrames ?? 0;
     const assetTotalFrames = Math.round((asset.durationSeconds ?? 0) * fps);
-    const clipDurationFrames = assetTotalFrames - trimStart - trimEnd;
+    const clipDurationFrames = Math.max(0, assetTotalFrames - trimStart - trimEnd);
 
     if (clipDurationFrames <= 0) continue;
 
@@ -54,8 +63,10 @@ export function generateEDL(project: EditorProject): string {
     const recOutTC = framesToTC(recOut, fps);
 
     const editNum  = String(editNumber).padStart(3, '0');
+    // Sanitize reel name: strip non-ASCII (Unicode/emoji) first, then non-alphanumeric
     const reelName = (asset.name ?? 'AX')
-      .replace(/[^A-Z0-9]/gi, '')
+      .replace(/[^\x00-\x7F]/g, '_')  // replace non-ASCII with underscore
+      .replace(/[^A-Z0-9_]/gi, '')    // strip remaining non-alphanumeric
       .substring(0, 8)
       .toUpperCase() || 'AX';
 
@@ -79,7 +90,7 @@ export function generateEDL(project: EditorProject): string {
 
 function framesToTC(frames: number, fps: number): string {
   const f     = Math.max(0, Math.round(frames));
-  const fpsR  = Math.round(fps);
+  const fpsR  = Math.max(1, Math.round(fps));  // guard fps === 0
   const ff    = f % fpsR;
   const totalSec = Math.floor(f / fpsR);
   const ss    = totalSec % 60;
@@ -92,22 +103,38 @@ function pad(n: number): string { return String(n).padStart(2, '0'); }
 
 // ── FCPXML 1.10 ───────────────────────────────────────────────────────────────
 
+/** Escape a string for use in XML attribute values and text content. */
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 export function generateFCPXML(project: EditorProject): string {
-  const fps      = project.sequence.settings.fps;
+  const fps      = Math.max(1, project.sequence.settings.fps);
   const w        = project.sequence.settings.width;
   const h        = project.sequence.settings.height;
-  const title    = (project.name ?? 'Untitled').replace(/[<>&"']/g, '_');
+  const title    = xmlEscape(project.name ?? 'Untitled');
   const timebase = Math.round(fps);
   const frameDur = `1/${timebase}s`;
 
-  // Total timeline duration in frames
-  const totalFrames = project.sequence.clips.reduce((max, c) => {
-    const asset = project.assets.find(a => a.id === c.assetId);
-    const dur = Math.round((asset?.durationSeconds ?? 0) * fps)
-      - (c.trimStartFrames ?? 0)
-      - (c.trimEndFrames ?? 0);
-    return Math.max(max, c.startFrame + Math.max(0, dur));
-  }, 0);
+  // Handle empty project gracefully
+  if (!project.assets || !project.sequence?.clips) {
+    return buildFCPXMLSkeleton(title, timebase, frameDur, w, h, 0, [], []);
+  }
+
+  // Total timeline duration in frames — guard against empty clips array
+  const totalFrames = project.sequence.clips.length === 0 ? 0 :
+    project.sequence.clips.reduce((max, c) => {
+      const asset = project.assets.find(a => a.id === c.assetId);
+      const dur = Math.max(0, Math.round((asset?.durationSeconds ?? 0) * fps)
+        - (c.trimStartFrames ?? 0)
+        - (c.trimEndFrames ?? 0));
+      return Math.max(max, c.startFrame + dur);
+    }, 0);
 
   // Asset resources
   const resources: string[] = [];
@@ -118,11 +145,8 @@ export function generateFCPXML(project: EditorProject): string {
     assetsSeen.add(asset.id);
 
     const assetDurFrames = Math.round((asset.durationSeconds ?? 0) * fps);
-    const safeName = (asset.name ?? 'clip').replace(/[<>&"']/g, '_');
-    const safePath = (asset.sourcePath ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    const safeName = xmlEscape(asset.name ?? 'clip');
+    const safePath = xmlEscape(asset.sourcePath ?? '');
 
     resources.push(
       `    <asset id="r_${asset.id}" name="${safeName}" start="0s" duration="${assetDurFrames}/${timebase}s" hasVideo="1" hasAudio="${asset.hasAudio ? '1' : '0'}">`,
@@ -141,6 +165,12 @@ export function generateFCPXML(project: EditorProject): string {
 
   const clipElements: string[] = [];
 
+  // Check if any clip has a color correction so we can declare the resource
+  const hasColorCorrection = videoClips.some(c => {
+    const grade = c.colorGrade;
+    return grade && !grade.bypass && (grade.exposure !== 0 || grade.saturation !== 1 || grade.contrast !== 0);
+  });
+
   for (const clip of videoClips) {
     const asset = project.assets.find(a => a.id === clip.assetId);
     if (!asset) continue;
@@ -148,11 +178,11 @@ export function generateFCPXML(project: EditorProject): string {
     const trimStart = clip.trimStartFrames ?? 0;
     const trimEnd   = clip.trimEndFrames ?? 0;
     const assetTotalFrames = Math.round((asset.durationSeconds ?? 0) * fps);
-    const clipDur   = assetTotalFrames - trimStart - trimEnd;
+    const clipDur   = Math.max(0, assetTotalFrames - trimStart - trimEnd);
 
     if (clipDur <= 0) continue;
 
-    const safeName = (asset.name ?? 'clip').replace(/[<>&"']/g, '_');
+    const safeName = xmlEscape(asset.name ?? 'clip');
 
     clipElements.push(
       `        <clip name="${safeName}" ref="r_${asset.id}" offset="${clip.startFrame}/${timebase}s" duration="${clipDur}/${timebase}s" start="${trimStart}/${timebase}s">`,
@@ -183,12 +213,31 @@ export function generateFCPXML(project: EditorProject): string {
     clipElements.push(`        </clip>`);
   }
 
+  return buildFCPXMLSkeleton(title, timebase, frameDur, w, h, totalFrames, resources, clipElements, hasColorCorrection);
+}
+
+function buildFCPXMLSkeleton(
+  title: string,
+  timebase: number,
+  frameDur: string,
+  w: number,
+  h: number,
+  totalFrames: number,
+  resources: string[],
+  clipElements: string[],
+  hasColorCorrection = false
+): string {
+  // Add the r_colorCorrection effect resource if any clip references it
+  const colorCorrectionResource = hasColorCorrection
+    ? `\n    <effect id="r_colorCorrection" name="Color Correction" uid=".../ColorCorrection.localized"/>`
+    : '';
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
 <fcpxml version="1.10">
   <resources>
 ${resources.join('\n')}
-    <format id="r_format" name="FFVideoFormat${h}p${timebase}" frameDuration="${frameDur}" width="${w}" height="${h}"/>
+    <format id="r_format" name="FFVideoFormat${h}p${timebase}" frameDuration="${frameDur}" width="${w}" height="${h}"/>${colorCorrectionResource}
   </resources>
   <library>
     <event name="${title}">

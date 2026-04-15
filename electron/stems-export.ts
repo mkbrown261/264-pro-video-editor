@@ -32,6 +32,12 @@ export async function exportStems(
   onProgress?: (pct: number, stem: string) => void
 ): Promise<StemExportResult> {
   const { project, outputDir, format, sampleRate, stems } = request;
+
+  // Guard against empty stems array
+  if (!stems || stems.length === 0) {
+    return { success: false, files: [], error: 'No stems selected' };
+  }
+
   const fps = project.sequence.settings.fps;
   const files: Array<{ stem: string; path: string }> = [];
 
@@ -128,6 +134,9 @@ export async function exportStems(
 
     const outFile = join(outputDir, `${projectName}_${stemLabel}.${stemExt()}`);
 
+    // Ensure output directory exists per-stem (defensive, recursive)
+    mkdirSync(outputDir, { recursive: true });
+
     const inputArgs = stemData.inputs.flatMap(p => ['-i', p]);
     const args = [
       ...inputArgs,
@@ -139,10 +148,12 @@ export async function exportStems(
     ];
 
     const ok = await new Promise<boolean>((resolve) => {
+      let resolved = false;
+      const done = (val: boolean) => { if (!resolved) { resolved = true; resolve(val); } };
       const proc = spawn(ffmpegBin, args);
-      const timer = setTimeout(() => { proc.kill(); resolve(false); }, 120_000);
-      proc.on('close', (code: number | null) => { clearTimeout(timer); resolve(code === 0); });
-      proc.on('error', () => { clearTimeout(timer); resolve(false); });
+      const timer = setTimeout(() => { proc.kill(); done(false); }, 120_000);
+      proc.on('close', (code: number | null) => { clearTimeout(timer); done(code === 0); });
+      proc.on('error', () => { clearTimeout(timer); done(false); });
     });
 
     return ok ? outFile : null;

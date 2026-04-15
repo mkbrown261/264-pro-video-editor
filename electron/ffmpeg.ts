@@ -759,11 +759,12 @@ export async function exportSequence(
     // 3. We need it AFTER setpts (speed) so minterpolate gets the already-slowed stream
     if (segment.clip.opticalFlow && (segment.clip.speed ?? 1) < 1) {
       const quality = segment.clip.opticalFlowQuality ?? 'good';
+      // Guard: speed must be > 0 to avoid division by zero in interpolatedFps calculation
       const speed = Math.max(0.01, Math.min(0.999, segment.clip.speed ?? 0.5));
 
       // Target output FPS: synthesize enough frames to reach at least 60fps equivalent
       // E.g. 30fps source at 0.25x speed → need 4x frames → target 120fps, output at 30fps
-      const sourceFps = project.sequence.settings.fps;
+      const sourceFps = Math.max(1, project.sequence.settings.fps);
       const interpolatedFps = Math.min(120, Math.round(sourceFps / speed));
 
       switch (quality) {
