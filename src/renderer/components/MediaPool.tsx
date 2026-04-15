@@ -216,14 +216,34 @@ function MediaCard({
           type="button"
           title={`${asset.name} — double-click to add`}
         >
-          {thumbSrc ? (
-            <div
-              className="media-card-list-thumb"
-              style={{ backgroundImage: `url(${thumbSrc})`, backgroundSize: "cover", backgroundPosition: "center" }}
-            />
-          ) : (
-            <div className="media-card-list-thumb media-card-list-thumb--empty" />
-          )}
+          {/* List thumbnail with proxy badge overlay */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            {thumbSrc ? (
+              <div
+                className="media-card-list-thumb"
+                style={{ backgroundImage: `url(${thumbSrc})`, backgroundSize: "cover", backgroundPosition: "center" }}
+              />
+            ) : (
+              <div className="media-card-list-thumb media-card-list-thumb--empty" />
+            )}
+            {/* Proxy status badge */}
+            {asset.proxyGenerating && (
+              <div style={{
+                position: 'absolute', top: 2, left: 2,
+                background: 'rgba(245,158,11,0.9)',
+                borderRadius: 3, padding: '1px 4px',
+                fontSize: 8, fontWeight: 700, color: '#000',
+              }}>⏳ PROXY</div>
+            )}
+            {asset.proxyReady && !asset.proxyGenerating && (
+              <div style={{
+                position: 'absolute', top: 2, left: 2,
+                background: 'rgba(34,197,94,0.9)',
+                borderRadius: 3, padding: '1px 4px',
+                fontSize: 8, fontWeight: 700, color: '#000',
+              }}>✓ PROXY</div>
+            )}
+          </div>
           <div className="media-card-list-info">
             <strong className="media-card-list-name">{asset.name}</strong>
             <span className="media-card-list-meta">
@@ -277,20 +297,41 @@ function MediaCard({
         type="button"
         title={`${asset.name} — double-click to add`}
       >
-        {thumbSrc ? (
-          <div
-            className="media-card-preview"
-            style={{
-              backgroundImage: `linear-gradient(180deg, rgba(8,17,26,0.06), rgba(8,17,26,0.45)), url(${thumbSrc})`,
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-            }}
-          />
-        ) : (
-          <div className="media-card-preview media-card-preview--empty">
-            <span className="media-card-no-thumb">🎬</span>
-          </div>
-        )}
+        {/* Thumbnail wrapper with position:relative for proxy badge overlay */}
+        <div style={{ position: 'relative' }}>
+          {thumbSrc ? (
+            <div
+              className="media-card-preview"
+              style={{
+                backgroundImage: `linear-gradient(180deg, rgba(8,17,26,0.06), rgba(8,17,26,0.45)), url(${thumbSrc})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }}
+            />
+          ) : (
+            <div className="media-card-preview media-card-preview--empty">
+              <span className="media-card-no-thumb">🎬</span>
+            </div>
+          )}
+
+          {/* Proxy status badge */}
+          {asset.proxyGenerating && (
+            <div style={{
+              position: 'absolute', top: 2, left: 2,
+              background: 'rgba(245,158,11,0.9)',
+              borderRadius: 3, padding: '1px 4px',
+              fontSize: 8, fontWeight: 700, color: '#000',
+            }}>⏳ PROXY</div>
+          )}
+          {asset.proxyReady && !asset.proxyGenerating && (
+            <div style={{
+              position: 'absolute', top: 2, left: 2,
+              background: 'rgba(34,197,94,0.9)',
+              borderRadius: 3, padding: '1px 4px',
+              fontSize: 8, fontWeight: 700, color: '#000',
+            }}>✓ PROXY</div>
+          )}
+        </div>
 
         {/* Scrub progress bar at bottom of preview */}
         {scrub && (

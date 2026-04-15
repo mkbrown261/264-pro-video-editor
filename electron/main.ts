@@ -1847,6 +1847,71 @@ ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
   }
 });
 
+// ── Proxy workflow IPC handlers ───────────────────────────────────────────────
+
+ipcMain.handle('proxy:generate', async (_ev, args: {
+  assetId: string;
+  sourcePath: string;
+  proxyDir: string;
+}) => {
+  try {
+    const { spawn } = await import('child_process');
+    const { getEnvironmentStatus } = await import('./ffmpeg.js');
+    const fs = await import('fs');
+    const path = await import('path');
+
+    const ffmpeg = getEnvironmentStatus().ffmpegPath;
+
+    // Create proxy dir if needed
+    fs.mkdirSync(args.proxyDir, { recursive: true });
+
+    // Proxy filename: assetId + _proxy.mp4
+    const proxyFilename = `${args.assetId.replace(/[^a-zA-Z0-9]/g, '_')}_proxy.mp4`;
+    const proxyPath = path.join(args.proxyDir, proxyFilename);
+
+    // Already exists? Return immediately
+    if (fs.existsSync(proxyPath)) {
+      return { success: true, proxyPath };
+    }
+
+    // Generate: scale to max 1280px wide, H.264 ultrafast, 23 CRF
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpeg, [
+        '-i', args.sourcePath,
+        '-vf', 'scale=1280:-2:flags=fast_bilinear',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-y', proxyPath,
+      ]);
+      let errOut = '';
+      proc.stderr.on('data', (d: Buffer) => { errOut += d.toString(); });
+      proc.on('close', (code: number) => {
+        if (code !== 0) reject(new Error(`Proxy gen failed: ${errOut.slice(-200)}`));
+        else resolve();
+      });
+    });
+
+    return { success: true, proxyPath };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('proxy:get-dir', async () => {
+  const path = await import('path');
+  return path.join(app.getPath('userData'), 'proxies');
+});
+
+ipcMain.handle('proxy:delete', async (_ev, proxyPath: string) => {
+  try {
+    const fs = await import('fs');
+    if (fs.existsSync(proxyPath)) fs.unlinkSync(proxyPath);
+    return { success: true };
+  } catch (e) {
+    return { success: false };
+  }
+});
+
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();

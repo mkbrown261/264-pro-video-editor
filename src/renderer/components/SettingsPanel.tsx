@@ -7,6 +7,8 @@ import React, { useState, useEffect } from "react";
 
 interface SettingsPanelProps {
   onClose: () => void;
+  proxyEnabled?: boolean;
+  onToggleProxy?: () => void;
 }
 
 interface ApiKeys {
@@ -38,7 +40,7 @@ function saveKeys(keys: ApiKeys): void {
 
 type SettingsTab = "ai" | "shortcuts" | "appearance" | "defaults";
 
-export function SettingsPanel({ onClose }: SettingsPanelProps) {
+export function SettingsPanel({ onClose, proxyEnabled, onToggleProxy }: SettingsPanelProps) {
   const [tab, setTab] = useState<SettingsTab>("ai");
   const [keys, setKeys] = useState<ApiKeys>(loadKeys);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
@@ -312,8 +314,30 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           {tab === "defaults" && (
             <div style={{ color: "#94a3b8", fontSize: 12 }}>
               <p style={{ fontSize: 12, color: "#475569", marginTop: 0 }}>Project defaults and sequence settings can be configured when creating a new project.</p>
-              <div style={{ padding: 16, background: "rgba(79,142,247,0.08)", borderRadius: 10, border: "1px solid rgba(79,142,247,0.2)", fontSize: 12, color: "#93c5fd" }}>
+              <div style={{ padding: 16, background: "rgba(79,142,247,0.08)", borderRadius: 10, border: "1px solid rgba(79,142,247,0.2)", fontSize: 12, color: "#93c5fd", marginBottom: 16 }}>
                 Default sequence settings (resolution, framerate, sample rate) are set when creating a new project or through Settings → Sequence in the timeline toolbar.
+              </div>
+
+              {/* Proxy Settings */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 8 }}>
+                  🎬 Proxy Media
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
+                  Auto-generate low-res proxies for 4K+ clips to improve playback performance. Exports always use original files.
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    id="proxy-enabled"
+                    checked={proxyEnabled ?? true}
+                    onChange={() => onToggleProxy?.()}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <label htmlFor="proxy-enabled" style={{ fontSize: 12, color: '#e2e8f0', cursor: 'pointer' }}>
+                    Enable proxy workflow (auto-generate for files &gt; 100MB or 4K+)
+                  </label>
+                </div>
               </div>
             </div>
           )}

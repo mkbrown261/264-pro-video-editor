@@ -160,6 +160,11 @@ const electronAPI = {
     ipcRenderer.invoke('publish:upload-youtube', args),
   uploadTikTok: (args: { videoPath: string; title: string; privacyLevel?: string }) =>
     ipcRenderer.invoke('publish:upload-tiktok', args),
+  // ── Proxy workflow ────────────────────────────────────────────────────────
+  generateProxy: (args: { assetId: string; sourcePath: string; proxyDir: string }) =>
+    ipcRenderer.invoke('proxy:generate', args),
+  getProxyDir: () => ipcRenderer.invoke('proxy:get-dir'),
+  deleteProxy: (proxyPath: string) => ipcRenderer.invoke('proxy:delete', proxyPath),
 };
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);
 

@@ -102,6 +102,14 @@ declare global {
         outputPath: string;
         trackingMode: 'center' | 'face' | 'motion';
       }) => Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }>;
+      // ── Proxy workflow ────────────────────────────────────────────────────
+      /** Generate a low-res 1280p H.264 proxy for a media asset */
+      generateProxy?: (args: { assetId: string; sourcePath: string; proxyDir: string }) =>
+        Promise<{ success: boolean; proxyPath?: string; error?: string }>;
+      /** Get the user-data proxy storage directory */
+      getProxyDir?: () => Promise<string>;
+      /** Delete a proxy file from disk */
+      deleteProxy?: (proxyPath: string) => Promise<{ success: boolean }>;
     };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;

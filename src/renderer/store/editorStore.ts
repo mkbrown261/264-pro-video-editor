@@ -275,6 +275,8 @@ interface EditorStore {
 
   // ── Add asset to pool only ──
   addAssetToPool: (asset: import("../../shared/models").MediaAsset) => void;
+  /** Patch any fields on a MediaAsset in the pool (non-undoable, used for proxy workflow) */
+  patchAsset: (assetId: string, updates: Partial<import("../../shared/models").MediaAsset>) => void;
 
   // ── ClawFlow AI ──
   autoColorMatch: () => void;
@@ -3084,6 +3086,17 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           sequence: { ...state.project.sequence, clips: newClips },
         },
       };
+    }));
+  },
+
+  patchAsset: (assetId, updates) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        assets: state.project.assets.map((a) =>
+          a.id === assetId ? { ...a, ...updates } : a
+        ),
+      },
     }));
   },
 }));

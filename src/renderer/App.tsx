@@ -62,6 +62,8 @@ import OnboardingModal from "./components/OnboardingModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 // Render cache
 import { useRenderCache } from "./hooks/useRenderCache";
+// Proxy workflow
+import { useProxyManager } from "./hooks/useProxyManager";
 // Phase 9 ClawFlow Intelligence
 import { useClawFlowAmbient } from "./hooks/useClawFlowAmbient";
 import { useVoiceCommands } from "./hooks/useVoiceCommands";
@@ -562,6 +564,10 @@ export default function App() {
   const addKeyframe = useEditorStore((s) => s.addKeyframe);
   const setAssetWaveform = useEditorStore((s) => s.setAssetWaveform);
   const setAssetFilmstrip = useEditorStore((s) => s.setAssetFilmstrip);
+  const patchAsset = useEditorStore((s) => s.patchAsset);
+
+  // Proxy workflow
+  const proxyManager = useProxyManager(project.assets, patchAsset);
 
   // Masks
   const addMaskToClip = useEditorStore((s) => s.addMaskToClip);
@@ -1836,7 +1842,13 @@ export default function App() {
   //   2. Generates thumbnails in background, patches them into the store.
   const { triggerImport } = useAsyncImport({
     onAssetsReady: (assets) => {
-      if (assets.length) importAssets(assets);
+      if (assets.length) {
+        importAssets(assets);
+        // Kick off proxy generation for any qualifying assets (> 1920px or > 100MB)
+        if (proxyManager.proxyEnabled) {
+          assets.forEach((asset) => { void proxyManager.generateProxy(asset); });
+        }
+      }
       setExportMessage(null);
     },
     onThumbnailReady: (assetId, thumbnailUrl) => {
@@ -4272,7 +4284,11 @@ export default function App() {
 
       {/* ── SETTINGS PANEL (Phase 6) ── */}
       {settingsPanelOpen && (
-        <SettingsPanel onClose={() => setSettingsPanelOpen(false)} />
+        <SettingsPanel
+          onClose={() => setSettingsPanelOpen(false)}
+          proxyEnabled={proxyManager.proxyEnabled}
+          onToggleProxy={proxyManager.toggleProxyEnabled}
+        />
       )}
 
       {/* ── Phase 9: Style Profile Panel ── */}
