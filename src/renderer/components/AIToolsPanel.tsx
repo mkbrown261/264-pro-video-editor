@@ -192,6 +192,37 @@ const STYLE_PRESETS = [
   { label: "Clean & Minimal", value: "clean minimal composition, neutral background, professional" },
 ];
 
+// ── Higgsfield Motion Style Presets ──────────────────────────────────────────
+const HIGGSFIELD_MOTION_STYLES = [
+  { value: '', label: '✦ Default Cinematic' },
+  { value: 'smooth_dolly_forward', label: '🎬 Smooth Dolly Forward' },
+  { value: 'dramatic_zoom_in', label: '🔍 Dramatic Zoom In' },
+  { value: 'orbital_360', label: '🌀 Orbital 360°' },
+  { value: 'handheld_walk', label: '🚶 Handheld Walk' },
+  { value: 'crane_rise', label: '🏗 Crane Rise' },
+  { value: 'whip_pan', label: '⚡ Whip Pan' },
+  { value: 'parallax_drift', label: '🌊 Parallax Drift' },
+  { value: 'breathing_static', label: '🫁 Breathing Static' },
+  { value: 'cinematic_push', label: '🎥 Cinematic Push' },
+  { value: 'dutch_tilt', label: '📐 Dutch Tilt' },
+];
+
+// ── AI Prompt Enhancer ────────────────────────────────────────────────────────
+function enhancePromptForVideo(raw: string, _model: VideoGenModel, cameraMotion: string, style: string): string {
+  const cinematic = 'cinematic quality, 8K, sharp focus, professional cinematography';
+  const lighting = 'dramatic lighting, volumetric atmosphere';
+  const camera = cameraMotion ? `camera ${cameraMotion.replace(/_/g, ' ')}` : '';
+  const styleStr = style ? `${style} aesthetic` : '';
+
+  let enhanced = raw.trim();
+  if (!enhanced.includes('cinematic')) enhanced += `, ${cinematic}`;
+  if (!enhanced.includes('lighting') && !enhanced.includes('light')) enhanced += `, ${lighting}`;
+  if (!enhanced.includes('camera') && camera) enhanced += `, ${camera}`;
+  if (styleStr && !enhanced.includes(style)) enhanced += `, ${styleStr}`;
+
+  return enhanced;
+}
+
 type ToolStatus = "idle" | "running" | "polling" | "complete" | "error";
 
 interface ToolResult {
@@ -332,9 +363,10 @@ interface AIToolsPanelProps {
   isOpen: boolean;
   onClose: () => void;
   inlineMode?: InlineModeConfig;
+  onAddGeneratedClip?: (videoUrl: string, label: string) => void;
 }
 
-export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps) {
+export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }: AIToolsPanelProps) {
   // Read selected clip from editor — auto-fills the media input
   const selectedClipId = useEditorStore((s) => s.selectedClipId);
   const selectedAssetId = useEditorStore((s) => s.selectedAssetId);
@@ -369,6 +401,19 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
   const [vgResult, setVgResult] = useState<{ videoUrl?: string; requestId?: string; provider?: string; message?: string; error?: string } | null>(null);
   const [vgProgress, setVgProgress] = useState(0);
   const vgPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Higgsfield motion style / history / UI state ─────────────────────────
+  const [higgsCameraStyle, setHiggsCameraStyle] = useState('');
+  const [capturingFrame, setCapturingFrame] = useState(false);
+  const [genHistory, setGenHistory] = useState<Array<{
+    id: string;
+    model: string;
+    prompt: string;
+    videoUrl: string;
+    duration: number;
+    timestamp: number;
+  }>>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const vgModelDef = VIDEO_GEN_MODELS.find((m) => m.id === vgModel)!;
 
@@ -520,7 +565,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
         resolution: vgResolution,
         aspectRatio: vgAspectRatio,
         quality: vgQuality,
-        cameraMotion: vgCameraMotion || undefined,
+        cameraMotion: vgModelDef.proOnly ? (higgsCameraStyle || undefined) : (vgCameraMotion || undefined),
         style: vgStyle || undefined,
         negativePrompt: vgNegPrompt || undefined,
       })) as any;
@@ -533,6 +578,14 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
       if (res.status === "complete" && res.videoUrl) {
         setVgStatus("complete");
         setVgResult({ videoUrl: res.videoUrl });
+        setGenHistory(prev => [{
+          id: Date.now().toString(),
+          model: vgModelDef.label,
+          prompt: vgPrompt.slice(0, 80),
+          videoUrl: res.videoUrl,
+          duration: vgDuration,
+          timestamp: Date.now(),
+        }, ...prev].slice(0, 10));
         return;
       }
       if (res.status === "queued" && res.requestId) {
@@ -548,7 +601,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
       setVgResult({ error: e.message });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vgModel, vgPrompt, vgNegPrompt, vgImageUrl, vgDuration, vgResolution, vgAspectRatio, vgQuality, vgCameraMotion, vgStyle]);
+  }, [vgModel, vgPrompt, vgNegPrompt, vgImageUrl, vgDuration, vgResolution, vgAspectRatio, vgQuality, vgCameraMotion, vgStyle, higgsCameraStyle]);
 
   const startVgPolling = (requestId: string, provider: string) => {
     let attempts = 0;
@@ -570,6 +623,14 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
         setVgProgress(100);
         setVgStatus("complete");
         setVgResult({ videoUrl: res.videoUrl });
+        setGenHistory(prev => [{
+          id: Date.now().toString(),
+          model: vgModelDef.label,
+          prompt: vgPrompt.slice(0, 80),
+          videoUrl: res.videoUrl,
+          duration: vgDuration,
+          timestamp: Date.now(),
+        }, ...prev].slice(0, 10));
         return;
       }
       if (res.status === "error" || res.error) {
@@ -590,6 +651,31 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
     setVgStatus("idle");
     setVgResult(null);
     setVgProgress(0);
+  };
+
+  // ── Capture current viewer frame for I2V ─────────────────────────────────
+  const handleCaptureFrame = async () => {
+    setCapturingFrame(true);
+    try {
+      const video = document.querySelector<HTMLVideoElement>('video[data-viewer-video]');
+      if (!video) {
+        alert('No video playing — play a clip first');
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1920;
+      canvas.height = video.videoHeight || 1080;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      setVgImageUrl(dataUrl);
+      setVgImageName('Current Frame');
+    } catch (_e) {
+      alert('Could not capture frame');
+    } finally {
+      setCapturingFrame(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -840,6 +926,18 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
                   >
                     📂 Browse Image / Frame…
                   </button>
+                  <button
+                    onClick={handleCaptureFrame}
+                    disabled={capturingFrame}
+                    style={{
+                      width: '100%', padding: '9px', borderRadius: 9, marginTop: 6,
+                      border: '1px solid rgba(124,58,237,0.3)',
+                      background: 'rgba(124,58,237,0.08)',
+                      color: '#a78bfa', fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                    }}
+                  >
+                    {capturingFrame ? '⏳ Capturing…' : '📸 Use Current Frame'}
+                  </button>
                 </div>
               )}
 
@@ -849,7 +947,19 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
                   <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                     Prompt
                   </label>
-                  <span style={{ fontSize: 10, color: vgPrompt.length > 900 ? "#ef4444" : "rgba(255,255,255,0.2)" }}>{vgPrompt.length}/1000</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <button
+                      onClick={() => setVgPrompt(p => enhancePromptForVideo(p, vgModel, vgModelDef.proOnly ? higgsCameraStyle : vgCameraMotion, vgStyle))}
+                      style={{
+                        padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(168,85,247,0.3)',
+                        background: 'rgba(168,85,247,0.1)', color: '#a78bfa', fontSize: 10,
+                        cursor: 'pointer', fontWeight: 600,
+                      }}
+                    >
+                      ✦ Enhance
+                    </button>
+                    <span style={{ fontSize: 10, color: vgPrompt.length > 900 ? "#ef4444" : "rgba(255,255,255,0.2)" }}>{vgPrompt.length}/1000</span>
+                  </div>
                 </div>
                 <textarea
                   value={vgPrompt}
@@ -863,15 +973,32 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
               {/* Camera motion & style presets */}
               <div style={{ display: "flex", gap: 10 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Camera Motion</label>
-                  <select
-                    value={vgCameraMotion}
-                    onChange={(e) => setVgCameraMotion(e.target.value)}
-                    style={{ width: "100%", padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}
-                  >
-                    <option value="">None / Prompt-driven</option>
-                    {CAMERA_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
+                  {vgModelDef.proOnly ? (
+                    <>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "#00d4ff", opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                        ✦ Motion Style
+                      </label>
+                      <select
+                        value={higgsCameraStyle}
+                        onChange={(e) => setHiggsCameraStyle(e.target.value)}
+                        style={{ width: "100%", padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(0,212,255,0.2)", background: "rgba(0,212,255,0.06)", color: "#00d4ff", fontSize: 11, outline: "none" }}
+                      >
+                        {HIGGSFIELD_MOTION_STYLES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                    </>
+                  ) : (
+                    <>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Camera Motion</label>
+                      <select
+                        value={vgCameraMotion}
+                        onChange={(e) => setVgCameraMotion(e.target.value)}
+                        style={{ width: "100%", padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}
+                      >
+                        <option value="">None / Prompt-driven</option>
+                        {CAMERA_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                      </select>
+                    </>
+                  )}
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Style</label>
@@ -899,12 +1026,23 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
 
               {/* Config row: duration, resolution, aspect, quality */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
-                {/* Duration */}
+                {/* Duration slider */}
                 <div>
-                  <label style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>Duration</label>
-                  <select value={vgDuration} onChange={(e) => setVgDuration(Number(e.target.value))} style={{ width: "100%", padding: "7px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.1)", background: "#1a1a2e", color: "#e8e8e8", fontSize: 11, outline: "none" }}>
-                    {[5, 10, ...(vgModelDef.maxDuration >= 15 ? [15] : [])].filter((d) => d <= vgModelDef.maxDuration).map((d) => <option key={d} value={d}>{d}s</option>)}
-                  </select>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>
+                    Duration: {vgDuration}s
+                  </label>
+                  <input
+                    type="range"
+                    min={3}
+                    max={vgModelDef.maxDuration}
+                    step={1}
+                    value={vgDuration}
+                    onChange={(e) => setVgDuration(Number(e.target.value))}
+                    style={{ width: "100%", accentColor: vgModelDef.proOnly ? "#00d4ff" : "#7c3aed" }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "rgba(255,255,255,0.2)", marginTop: 2 }}>
+                    <span>3s</span><span>{vgModelDef.maxDuration}s</span>
+                  </div>
                 </div>
                 {/* Resolution */}
                 <div>
@@ -998,8 +1136,68 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode }: AIToolsPanelProps)
                         </a>
                         <button onClick={() => navigator.clipboard.writeText(vgResult!.videoUrl!).catch(() => {})} style={{ padding: "8px 14px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.6)", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Copy URL</button>
                         <button onClick={resetVg} style={{ padding: "8px 14px", borderRadius: 8, background: "transparent", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)", fontSize: 12, cursor: "pointer" }}>Generate Another</button>
+                        {onAddGeneratedClip && (
+                          <button
+                            onClick={() => {
+                              const label = `${vgModelDef.label} ${vgDuration}s`;
+                              onAddGeneratedClip(vgResult!.videoUrl!, label);
+                            }}
+                            style={{
+                              padding: '8px 14px', borderRadius: 8,
+                              background: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(168,85,247,0.2))',
+                              border: '1px solid rgba(168,85,247,0.5)',
+                              color: '#c084fc', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                            }}
+                          >
+                            ⊕ Add to Timeline
+                          </button>
+                        )}
                       </div>
                     </>
+                  )}
+                </div>
+              )}
+
+              {/* Generation history */}
+              {genHistory.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div
+                    onClick={() => setHistoryOpen(v => !v)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginBottom: historyOpen ? 8 : 0 }}
+                  >
+                    <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      🕓 History ({genHistory.length})
+                    </span>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)', marginLeft: 'auto' }}>{historyOpen ? '▲' : '▼'}</span>
+                  </div>
+                  {historyOpen && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {genHistory.map(h => (
+                        <div key={h.id} style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '8px 10px', borderRadius: 8,
+                          background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+                        }}>
+                          <video
+                            src={h.videoUrl}
+                            muted
+                            style={{ width: 64, height: 36, borderRadius: 5, objectFit: 'cover', flexShrink: 0, background: '#000' }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>{h.model} · {h.duration}s</div>
+                            <div style={{ fontSize: 11, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.prompt}</div>
+                          </div>
+                          {onAddGeneratedClip && (
+                            <button
+                              onClick={() => onAddGeneratedClip(h.videoUrl, `${h.model} ${h.duration}s`)}
+                              style={{ padding: '4px 8px', borderRadius: 5, border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.1)', color: '#c084fc', fontSize: 10, cursor: 'pointer', flexShrink: 0 }}
+                            >
+                              + Add
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}

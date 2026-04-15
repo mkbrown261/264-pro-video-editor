@@ -3883,6 +3883,22 @@ export default function App() {
       <AIToolsPanel
         isOpen={aiToolsPanelOpen}
         onClose={() => setAiToolsPanelOpen(false)}
+        onAddGeneratedClip={(videoUrl, label) => {
+          const newAsset: import("../shared/models").MediaAsset = {
+            id: createId(),
+            name: label,
+            sourcePath: videoUrl,
+            previewUrl: videoUrl,
+            thumbnailUrl: videoUrl,
+            durationSeconds: 5,
+            width: 1920,
+            height: 1080,
+            nativeFps: 24,
+            hasAudio: false,
+          };
+          importAssets([newAsset]);
+          toast.success('✓ Added to Media Pool — drag to timeline');
+        }}
       />
 
       {/* ── FOLLOW FOR FREEBIE MODAL ── */}
