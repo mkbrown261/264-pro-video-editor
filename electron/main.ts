@@ -1292,25 +1292,36 @@ ipcMain.handle('ai:transcribe', async (_ev, args: { filePath: string; language?:
     const data = await resp.json() as Record<string, unknown>;
 
     // Convert word-level timestamps to subtitle segments
-    const words = (data.words ?? []) as Array<{ word: string; start: number; end: number }>;
+    const rawWords = (data.words ?? []) as Array<{ word: string; start: number; end: number }>;
+    const fullText = (data.text as string) ?? '';
 
-    if (words.length === 0 && data.text) {
-      // No word timestamps — return as single segment
-      return { success: true, segments: [{ startMs: 0, endMs: 5000, text: data.text as string }] };
+    if (rawWords.length === 0 && fullText) {
+      // No word timestamps — return as single segment + single word spanning whole clip
+      return {
+        success: true,
+        transcript: fullText,
+        words: [{ word: fullText, start: 0, end: 5 }],
+        segments: [{ startMs: 0, endMs: 5000, text: fullText }],
+      };
     }
 
-    // Group words into ~6-word subtitle lines
+    // Group words into ~6-word subtitle lines (for subtitle overlays)
     const segments: Array<{ startMs: number; endMs: number; text: string }> = [];
     const GROUP_SIZE = 6;
-    for (let i = 0; i < words.length; i += GROUP_SIZE) {
-      const group = words.slice(i, i + GROUP_SIZE);
+    for (let i = 0; i < rawWords.length; i += GROUP_SIZE) {
+      const group = rawWords.slice(i, i + GROUP_SIZE);
       segments.push({
         startMs: Math.round(group[0].start * 1000),
         endMs: Math.round(group[group.length - 1].end * 1000),
         text: group.map(w => w.word).join(' ').trim(),
       });
     }
-    return { success: true, segments };
+    return {
+      success: true,
+      transcript: fullText,
+      words: rawWords,   // raw word-level data: { word, start, end } (seconds)
+      segments,
+    };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }

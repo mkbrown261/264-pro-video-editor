@@ -96,15 +96,62 @@ export function TextBasedEditingPanel({
     setIsTranscribing(true);
     try {
       const asset = assets.find(a => a.id === selectedAssetId);
-      const api = (window as unknown as { electronAPI?: { transcribeAudio?: (path: string) => Promise<Transcript> } }).electronAPI;
+      const api = (window as unknown as {
+        electronAPI?: {
+          transcribeAudio?: (args: { filePath: string; language?: string }) => Promise<{
+            success: boolean;
+            error?: string;
+            transcript?: string;
+            words?: Array<{ word: string; start: number; end: number }>;
+            segments?: Array<{ startMs: number; endMs: number; text: string }>;
+          }>;
+        };
+      }).electronAPI;
+
       if (api?.transcribeAudio && asset?.sourcePath) {
-        const result = await api.transcribeAudio(asset.sourcePath);
-        onSetTranscript(selectedAssetId, result);
+        const result = await api.transcribeAudio({ filePath: asset.sourcePath });
+        if (result?.success && result.words && result.words.length > 0) {
+          // Convert Groq word-level output (seconds) → TranscriptWord[] (ms)
+          const words: TranscriptWord[] = result.words.map((w) => ({
+            word: w.word.trim(),
+            startMs: Math.round(w.start * 1000),
+            endMs: Math.round(w.end * 1000),
+            confidence: 1,
+            selected: false,
+          }));
+          onSetTranscript(selectedAssetId, {
+            assetId: selectedAssetId,
+            words,
+            language: 'en',
+            generatedAt: Date.now(),
+          });
+        } else if (result?.success && result.transcript) {
+          // Fallback: no per-word timestamps — treat whole text as one word entry
+          onSetTranscript(selectedAssetId, {
+            assetId: selectedAssetId,
+            words: [{
+              word: result.transcript,
+              startMs: 0,
+              endMs: Math.round((asset.durationSeconds ?? 5) * 1000),
+              confidence: 1,
+              selected: false,
+            }],
+            language: 'en',
+            generatedAt: Date.now(),
+          });
+        } else if (result?.error) {
+          console.error('Transcription error:', result.error);
+          // Surface the error to the user via a toast-like alert
+          alert(`Transcription failed: ${result.error}`);
+        }
       } else {
-        // Mock transcript
+        // No API available — fall back to mock transcript for development/demo
         const mock = generateMockTranscript(selectedAssetId, asset?.name ?? 'Asset');
         onSetTranscript(selectedAssetId, mock);
       }
+    } catch (err) {
+      console.error('Transcription exception:', err);
+      alert(`Transcription error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsTranscribing(false);
     }
@@ -134,10 +181,15 @@ export function TextBasedEditingPanel({
     input.click();
   };
 
-  const handleWordMouseDown = useCallback((index: number) => {
-    setSelectionStart(index);
-    setSelectionEnd(index);
-    setIsDragging(true);
+  const handleWordMouseDown = useCallback((index: number, e: React.MouseEvent) => {
+    if (e.shiftKey) {
+      // Shift-click: extend selection from existing anchor
+      setSelectionEnd(index);
+    } else {
+      setSelectionStart(index);
+      setSelectionEnd(index);
+      setIsDragging(true);
+    }
   }, []);
 
   const handleWordMouseEnter = useCallback((index: number) => {
@@ -145,8 +197,9 @@ export function TextBasedEditingPanel({
     setSelectionEnd(index);
   }, [isDragging]);
 
-  const handleWordClick = useCallback((word: TranscriptWord) => {
-    // Jump playhead to word start
+  const handleWordClick = useCallback((word: TranscriptWord, e: React.MouseEvent) => {
+    if (e.shiftKey) return; // Shift-click is handled by mouseDown — skip playhead jump
+    // Jump playhead to word start on plain click
     const frame = Math.round((word.startMs / 1000) * sequenceFps);
     onSetPlayheadFrame(frame);
   }, [sequenceFps, onSetPlayheadFrame]);
@@ -264,9 +317,9 @@ export function TextBasedEditingPanel({
                 <span key={i}>
                   <span
                     ref={isActive ? activeWordRef : undefined}
-                    onMouseDown={() => handleWordMouseDown(i)}
+                    onMouseDown={(e) => handleWordMouseDown(i, e)}
                     onMouseEnter={() => handleWordMouseEnter(i)}
-                    onClick={() => handleWordClick(word)}
+                    onClick={(e) => handleWordClick(word, e)}
                     title={`${formatMs(word.startMs)} → ${formatMs(word.endMs)}${isLowConf ? ' (low confidence)' : ''}`}
                     style={{
                       padding: '1px 3px',
