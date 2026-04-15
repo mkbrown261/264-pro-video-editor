@@ -619,12 +619,14 @@ ipcMain.handle("media:open-files", async (event) => {
   }
 
   // Fast probe: metadata + thumbnail only, returns immediately
-  let assets;
+  let assets: MediaAsset[];
   try {
     assets = await probeMediaFiles(result.filePaths);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
-    return { success: false, error: message };
+    // Show error to user instead of silently returning nothing
+    dialog.showErrorBox("Import Failed", `Could not read media files:\n\n${message}`);
+    return [];
   }
 
   // Kick off proxy generation in the background (non-blocking).
