@@ -1,7 +1,7 @@
 {
   "appId": "app.264pro.videoeditor",
   "productName": "264 Pro",
-  "copyright": "Copyright © 2025 264 Pro",
+  "copyright": "Copyright \u00a9 2025 264 Pro",
   "directories": {
     "output": "release",
     "buildResources": "build-assets"
@@ -15,12 +15,23 @@
     {
       "from": "node_modules/ffmpeg-static",
       "to": "ffmpeg-static",
-      "filter": ["**/*"]
+      "filter": [
+        "**/*"
+      ]
     },
     {
       "from": "node_modules/ffprobe-static",
       "to": "ffprobe-static",
-      "filter": ["**/*"]
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "build-assets",
+      "to": "build-assets",
+      "filter": [
+        "**/*"
+      ]
     }
   ],
   "mac": {
@@ -31,7 +42,9 @@
     "notarize": false,
     "artifactName": "${productName}-${version}-${arch}-mac.${ext}",
     "target": [
-      { "target": "zip" }
+      {
+        "target": "zip"
+      }
     ]
   },
   "win": {
@@ -41,7 +54,10 @@
   "linux": {
     "icon": "build-assets/linux-icons",
     "category": "Video",
-    "target": ["AppImage", "deb"]
+    "target": [
+      "AppImage",
+      "deb"
+    ]
   },
   "nsis": {
     "oneClick": false,

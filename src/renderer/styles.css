@@ -821,6 +821,14 @@ kbd {
 }
 .tl-header-right { gap: 5px; }
 
+/* View-options group — S/M/L clip height + thumbnail + name + playhead toggles */
+.tl-view-options {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
 .tl-section-label {
   font-size: 0.62rem;
   font-weight: 700;

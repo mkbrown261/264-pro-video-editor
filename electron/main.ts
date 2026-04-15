@@ -41,10 +41,16 @@ const __dirname = dirname(__filename);
 // In dev: __dirname = dist-electron/electron/, so ../../build-assets/ = project root
 // Packaged: icons are bundled by electron-builder from build-assets/
 function getAppIcon(): string {
-  const base = join(__dirname, "../../build-assets");
+  // In dev: __dirname = <project>/dist-electron/electron/ → need ../../../build-assets
+  // In packaged app (Mac): icon is resolved from the .app bundle automatically via electron-builder
+  // In packaged app (Win/Linux): resourcesPath contains the icon
+  if (app.isPackaged) {
+    if (process.platform === "win32") return join(process.resourcesPath, "build-assets", "icon.ico");
+    return join(process.resourcesPath, "build-assets", "icon.png");
+  }
+  // Dev mode — walk up from dist-electron/electron/ to project root
+  const base = join(__dirname, "../../../build-assets");
   if (process.platform === "win32") return join(base, "icon.ico");
-  // Linux and Mac dev mode: use the full-res PNG
-  // (Mac packaged builds use the .icns from the app bundle automatically)
   return join(base, "icon.png");
 }
 const VIDEO_FILE_EXTENSIONS = [
