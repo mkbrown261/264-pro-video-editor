@@ -40,15 +40,15 @@ const __dirname = dirname(__filename);
 // ── Platform-aware icon resolution ───────────────────────────────────────────
 // In dev: __dirname = dist-electron/electron/, so ../../build-assets/ = project root
 // Icon path resolution:
-// Dev:      __dirname = <project>/dist-electron/electron/  → ../../build-assets = project root
-// Packaged: icons land in Resources/build-assets/ via extraResources
+// Use app.getAppPath() which always returns the project root in dev,
+// and the app bundle root when packaged — no __dirname path gymnastics needed.
 function getAppIcon(): string {
   if (app.isPackaged) {
     if (process.platform === "win32") return join(process.resourcesPath, "build-assets", "icon.ico");
     return join(process.resourcesPath, "build-assets", "icon.png");
   }
-  // Dev mode: dist-electron/electron/ → ../../ = project root
-  const base = join(__dirname, "../../build-assets");
+  // Dev mode: app.getAppPath() = project root on all platforms
+  const base = join(app.getAppPath(), "build-assets");
   if (process.platform === "win32") return join(base, "icon.ico");
   return join(base, "icon.png");
 }
