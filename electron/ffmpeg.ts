@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { app } from "electron";
 import ffmpegStatic from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import type {
@@ -45,15 +46,34 @@ function createMediaUrl(sourcePath: string): string {
 }
 
 function getFfmpegPath(): string {
-  return (
-    process.env.FFMPEG_PATH ||
-    (typeof ffmpegStatic === "string" ? ffmpegStatic : null) ||
-    "ffmpeg"
-  );
+  // 1. Explicit override
+  if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+
+  // 2. Packaged app — binary is in extraResources, NOT inside asar
+  if (app.isPackaged) {
+    const suffix = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+    return join(process.resourcesPath, "ffmpeg-static", suffix);
+  }
+
+  // 3. Dev — ffmpeg-static npm package
+  if (typeof ffmpegStatic === "string") return ffmpegStatic;
+
+  // 4. System fallback
+  return "ffmpeg";
 }
 
 function getFfprobePath(): string {
-  return process.env.FFPROBE_PATH || ffprobeStatic.path || "ffprobe";
+  if (process.env.FFPROBE_PATH) return process.env.FFPROBE_PATH;
+
+  if (app.isPackaged) {
+    const suffix = process.platform === "win32" ? "ffprobe.exe" : "ffprobe";
+    // ffprobe-static bundles by platform/arch: bin/<platform>/<arch>/ffprobe
+    const platform = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "win" : "linux";
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    return join(process.resourcesPath, "ffprobe-static", "bin", platform, arch, suffix);
+  }
+
+  return ffprobeStatic.path || "ffprobe";
 }
 
 // ── Hardware encoder detection ────────────────────────────────────────────────
@@ -262,7 +282,7 @@ export function getEnvironmentStatus(): EnvironmentStatus {
 
   if (!ffmpegAvailable) {
     warnings.push(
-      "FFmpeg is unavailable. Install dependencies or set FFMPEG_PATH before exporting."
+      `FFmpeg is unavailable at "${ffmpegPath}". ${app.isPackaged ? "This is a packaging issue — please reinstall 264 Pro." : "Run: npm install ffmpeg-static"}`
     );
   }
 
