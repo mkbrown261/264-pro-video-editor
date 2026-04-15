@@ -473,7 +473,7 @@ function SpeedRampSection({
           Clear Keyframes
         </button>
       )}
-      {/* ── Optical Flow / Speed Warp ─────────────────────────────────── */}
+      {/* ── Optical Flow / FlowWarp ─────────────────────────────────── */}
       <div style={{
         marginTop: 12,
         padding: 12,
@@ -502,7 +502,7 @@ function SpeedRampSection({
             </div>
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: opticalFlowEnabled ? '#c4b5fd' : '#94a3b8' }}>
-                ✨ Speed Warp
+                ✨ FlowWarp
               </div>
               <div style={{ fontSize: 10, color: '#475569', marginTop: 1 }}>
                 {opticalFlowEnabled ? 'Optical flow frame synthesis active' : 'AI-powered slow motion'}

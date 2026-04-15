@@ -1204,7 +1204,7 @@ const EFFECT_LIBRARY: EffectDef[] = [
       { key: "strength", label: "Strength", type: "range", min: 0, max: 1, step: 0.05 }
     ]
   },
-  // ── DaVinci-parity Professional Effects ──────────────────────────────────────
+  // ── Professional Effects ──────────────────────────────────────
   {
     type: "noise_reduction",
     label: "Noise Reduction",

@@ -42,7 +42,7 @@ import type { MaskTool } from "./components/MaskingCanvas";
 import { FollowForFreebie } from "./components/FollowForFreebie";
 import { SubtitlesPanel } from "./components/SubtitlesPanel";
 import { TitleGeneratorPanel } from "./components/TitleGeneratorPanel";
-import { FairlightPanel } from "./components/FairlightPanel";
+import { ClawSoundPanel } from "./components/ClawSoundPanel";
 import { TextBasedEditingPanel } from "./components/TextBasedEditingPanel";
 import { ShortcutsPanel } from "./components/ShortcutsPanel";
 // Phase 4 new imports
@@ -613,7 +613,7 @@ export default function App() {
   const closeAllGaps          = useEditorStore((s) => s.closeAllGaps);
   const syncMulticamClips     = useEditorStore((s) => s.syncMulticamClips);
 
-  // Phase 8: DaVinci parity
+  // Phase 8: professional parity
   const addAdjustmentLayer    = useEditorStore((s) => s.addAdjustmentLayer);
   const setDuckingSettings    = useEditorStore((s) => s.setDuckingSettings);
 
@@ -2124,7 +2124,7 @@ export default function App() {
     showToast(`✓ Settings saved: ${settingsDraft.width}×${settingsDraft.height} @ ${settingsDraft.fps}fps`);
   }
 
-  // ── Settings modal (DaVinci-style tabbed settings) ─────────────────────────
+  // ── Settings modal (tabbed settings) ─────────────────────────
   function renderSettingsModal() {
     if (!showSettings) return null;
 
@@ -2180,7 +2180,7 @@ export default function App() {
 
     return (
       <div className="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}>
-        <div className="settings-modal settings-modal-davinci">
+        <div className="settings-modal settings-modal-264">
           {/* Header */}
           <div className="settings-modal-header">
             <div className="settings-modal-title-row">
@@ -2671,9 +2671,9 @@ export default function App() {
                 }
               }}
               type="button"
-              title={page === "fusion" ? "Open Fusion node compositor" : page === "audio" ? "Fairlight Audio Engineering" : undefined}
+              title={page === "fusion" ? "Open Fusion node compositor" : page === "audio" ? "ClawSound Audio Engineering" : undefined}
             >
-              {page === "fusion" ? "⬡ Fusion" : page === "audio" ? "🎚 Audio" : page.charAt(0).toUpperCase() + page.slice(1)}
+              {page === "fusion" ? "⬡ NodeFX" : page === "audio" ? "🎚 Audio" : page.charAt(0).toUpperCase() + page.slice(1)}
             </button>
           ))}
           <button
@@ -3763,10 +3763,10 @@ export default function App() {
           </>
         )}
 
-        {/* ── AUDIO PAGE (Fairlight) ── */}
+        {/* ── AUDIO PAGE (ClawSound) ── */}
         {activePage === "audio" && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <FairlightPanel
+            <ClawSoundPanel
               tracks={project.sequence.tracks}
               fps={project.sequence.settings.fps}
               onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}

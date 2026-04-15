@@ -350,7 +350,7 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
       const settings = project.sequence?.settings ?? {};
       const memSummary = projectMemory.getSummary();
 
-      // Resolve selected clip name for richer context
+      // Find selected clip name for richer context
       const selectedClip = selectedClipId
         ? clips.find((c: any) => c.id === selectedClipId)
         : null;

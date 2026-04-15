@@ -80,7 +80,7 @@ function OnboardingModal({
       id: 1,
       icon: "⚡",
       headline: "LIGHTNING TIMELINE",
-      subheadline: "The timeline DaVinci Resolve wishes it had.",
+      subheadline: "The timeline built for creators who mean business.",
       body: [
         "J · K · L playback. S to split. Ripple delete.",
         "Infinite tracks. Fixed playhead mode.",

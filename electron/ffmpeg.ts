@@ -647,7 +647,7 @@ export async function exportSequence(
       }
     }
 
-    // ── Clip effects (DaVinci-parity professional effects) ─────────────────
+    // ── Clip effects (professional effects) ─────────────────
     if (segment.clip.effects && segment.clip.effects.length > 0) {
       for (const effect of segment.clip.effects.filter(e => e.enabled)) {
         switch (effect.type) {
@@ -777,7 +777,7 @@ export async function exportSequence(
 
         case 'good':
           // Balanced: Motion Compensated Interpolation with OBMC
-          // This is the DaVinci Speed Warp equivalent at good quality
+          // This is the FlowWarp at good quality
           videoFilters.push(
             `minterpolate='fps=${interpolatedFps}:mi_mode=mci:mc_mode=aobmc:me_algo=epzs:search_param=64'`
           );

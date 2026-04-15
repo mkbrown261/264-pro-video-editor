@@ -1,6 +1,6 @@
 // src/shared/compositing.ts
 // Complete data model for the 264 Pro Fusion / Compositing page
-// DaVinci Resolve Fusion parity — node-based visual compositor
+// NodeFX — node-based visual compositor
 
 // ── Node Types ────────────────────────────────────────────────────────────────
 

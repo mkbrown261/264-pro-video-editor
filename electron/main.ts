@@ -1453,7 +1453,7 @@ ipcMain.handle('render-cache:render-segment', async (_ev, args: {
       filters.push(`colorchannelmixer=rr=${rBoost}:bb=${bBoost}`);
     }
 
-    // Resolve ffmpeg — same logic as getFfmpegPath() in ffmpeg.ts
+    // Find ffmpeg — same logic as getFfmpegPath() in ffmpeg.ts
     let ffmpegBin: string;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import type { TimelineTrack, EQBand, CompressorSettings, DuckingSettings, EditorProject } from "../../shared/models";
 import { createId } from "../../shared/models";
 
-interface FairlightPanelProps {
+interface ClawSoundPanelProps {
   tracks: TimelineTrack[];
   fps: number;
   onUpdateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
@@ -72,7 +72,7 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project }: FairlightPanelProps) {
+export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project }: ClawSoundPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
@@ -339,7 +339,7 @@ export function FairlightPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0d1117", color: "#e2e8f0", fontSize: 12, overflow: "hidden", position: "relative" }}>
       {/* Header */}
       <div style={{ padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>🎚 Fairlight Audio</span>
+        <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>🎚 ClawSound</span>
         <span style={{ marginLeft: "auto", fontSize: 10, color: "#7c3aed", fontWeight: 700, letterSpacing: "0.08em" }}>264 PRO AUDIO</span>
       </div>
 

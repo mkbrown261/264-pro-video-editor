@@ -364,10 +364,10 @@ export function RenderQueuePanel({
               flex: 1, padding: "8px 0", borderRadius: 6, border: "1px solid #334155",
               background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 600,
             }}
-            title="Export CMX 3600 EDL for DaVinci Resolve and Premiere Pro"
+            title="Export CMX 3600 EDL for major NLEs"
           >
             📋 Export EDL
-            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>DaVinci · Premiere</div>
+            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>NLE Compatible</div>
           </button>
           <button
             onClick={() => { void handleExportFCPXML(); }}
@@ -376,10 +376,10 @@ export function RenderQueuePanel({
               flex: 1, padding: "8px 0", borderRadius: 6, border: "1px solid #334155",
               background: "#0f172a", color: "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 600,
             }}
-            title="Export FCPXML 1.10 for Final Cut Pro X"
+            title="Export FCPXML 1.10 Apple XML format"
           >
             🎬 Export FCP XML
-            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>Final Cut Pro X</div>
+            <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>Apple XML</div>
           </button>
         </div>
       </div>

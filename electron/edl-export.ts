@@ -1,8 +1,8 @@
 /**
  * EDL & FCP XML Export
  * ─────────────────────────────────────────────────────────────────────────────
- * generateEDL   → CMX 3600 EDL  (DaVinci Resolve, Premiere Pro, Avid)
- * generateFCPXML → FCPXML 1.10  (Final Cut Pro X)
+ * generateEDL   → CMX 3600 EDL  (NLE compatible)
+ * generateFCPXML → FCPXML 1.10  (Apple XML)
  */
 
 import type { EditorProject } from '../src/shared/models.js';

@@ -337,7 +337,7 @@ const NodeCanvas: React.FC<NodeCanvasProps> = ({
     // - If it looks like a trackpad (small steps) → pan vertically
     const isMouseWheel = Math.abs(e.deltaY) >= 100 || e.deltaMode === 1;
     if (isMouseWheel) {
-      // Mouse wheel = zoom (DaVinci style)
+      // Mouse wheel = zoom (professional)
       const factor = e.deltaY < 0 ? 1.12 : 0.9;
       setZoom(z => {
         const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));

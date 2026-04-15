@@ -47,7 +47,7 @@ void main() {
 //   gain   [-1..1]  0 = neutral  (highlight scale; shader adds 1 internally)
 //   offset [-1..1]  0 = neutral  (global additive shift after LGG)
 //
-// DaVinci-style LGG formula (corrected):
+// LGG formula (corrected):
 //   t  = (gain+1) * (c  + lift*(1-c))      -- lift shadows, scale gain
 //   t  = clamp(t, 0, 1)
 //   t  = pow(t, 1 / clamp(1+gamma, 0.1, 10))  -- gamma midtone curve
@@ -91,7 +91,7 @@ vec3 safePow3(vec3 base, vec3 exp) {
   );
 }
 
-// ── DaVinci-style Lift/Gamma/Gain/Offset ───────────────────────────────────
+// ── Lift/Gamma/Gain/Offset ───────────────────────────────────
 //
 //  lift  [-1,1] 0=neutral : shifts shadows  (additive, weighted by (1-c))
 //  gamma [-1,1] 0=neutral : adjusts midtones via power curve
@@ -163,7 +163,7 @@ void main() {
   col *= pow(2.0, u_exposure);
   col  = clamp(col, 0.0, 1.0);
 
-  // 2. Lift / Gamma / Gain / Offset (DaVinci LGG)
+  // 2. Lift / Gamma / Gain / Offset (LGG)
   col = lift_gamma_gain_offset(col, u_lift, u_gamma, u_gain, u_offset);
 
   // 3. Contrast (S-curve around pivot 0.5)

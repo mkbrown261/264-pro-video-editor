@@ -369,7 +369,7 @@ export type EffectType =
   | "ai_color_match"
   | "filmnoise"
   | "chromatic_aberration"
-  // DaVinci-parity professional effects
+  // Professional effects
   | "noise_reduction"
   | "sharpening"
   | "film_grain"
@@ -476,7 +476,7 @@ export interface TimelineClip {
     scaleY?: KeyframeTrack<number>;
     rotation?: KeyframeTrack<number>;
   };
-  // Speed ramp (DaVinci Speed Warp)
+  // Speed ramp (FlowWarp)
   speedRampKeyframes?: Array<{ frame: number; speed: number }>;
   opticalFlow?: boolean;
   opticalFlowQuality?: 'draft' | 'good' | 'best'; // draft=fast, good=balanced, best=cinematic
