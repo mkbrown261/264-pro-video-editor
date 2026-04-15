@@ -95,6 +95,13 @@ declare global {
         offsets?: number[];
         error?: string;
       }>;
+      /** Auto-Reframe — AI crop to target aspect ratio (9:16, 1:1, 4:5, 16:9, 4:3) */
+      reframeAnalyzeAndExport?: (args: {
+        sourcePath: string;
+        targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
+        outputPath: string;
+        trackingMode: 'center' | 'face' | 'motion';
+      }) => Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }>;
     };
     editorApi: {
       openMediaFiles: () => Promise<MediaAsset[]>;

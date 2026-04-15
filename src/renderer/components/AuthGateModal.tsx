@@ -1,15 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-// ── Window type augmentation for Electron APIs ────────────────────────────────
-declare global {
-  interface Window {
-    electronAPI?: {
-      openExternal?: (url: string) => void;
-      startAuthFlow?: (state: string) => void;
-      getAppVersion?: () => Promise<string>;
-    };
-  }
-}
+// ── Window type augmentation removed — see vite-env.d.ts for full ElectronAPI type ──
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const FS_BASE = "https://flowst8.cc";

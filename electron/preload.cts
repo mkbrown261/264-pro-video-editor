@@ -143,6 +143,14 @@ const electronAPI = {
   // ── Multicam Audio Sync ───────────────────────────────────────────────────
   syncMulticamByAudio: (args: { clips: Array<{ clipId: string; assetPath: string; trimStartSeconds: number; durationSeconds: number }> }) =>
     ipcRenderer.invoke('multicam:sync-by-audio', args),
+  // ── Auto-Reframe ──────────────────────────────────────────────────────────
+  reframeAnalyzeAndExport: (args: {
+    sourcePath: string;
+    targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
+    outputPath: string;
+    trackingMode: 'center' | 'face' | 'motion';
+  }): Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }> =>
+    ipcRenderer.invoke('reframe:analyze-and-export', args),
   // ── Publish OAuth ─────────────────────────────────────────────────────────
   connectYouTube: () => ipcRenderer.invoke('publish:connect-youtube'),
   connectTikTok: () => ipcRenderer.invoke('publish:connect-tiktok'),

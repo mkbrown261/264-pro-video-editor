@@ -56,6 +56,7 @@ import { SmartSuggestionsBar } from "./components/SmartSuggestionsBar";
 import { type BatchPreset } from "./components/RenderQueuePanel";
 // Phase 5 new imports
 import { BeatSyncPanel } from "./components/BeatSyncPanel";
+import { AutoReframePanel } from "./components/AutoReframePanel";
 // Phase 6 new imports
 import OnboardingModal from "./components/OnboardingModal";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -847,6 +848,8 @@ export default function App() {
   const [shortcutsPanelOpen, setShortcutsPanelOpen] = useState(false);
   // Beat Sync panel
   const [beatSyncOpen, setBeatSyncOpen] = useState(false);
+  // Auto-Reframe panel
+  const [autoReframeOpen, setAutoReframeOpen] = useState(false);
   // Settings panel (Phase 6)
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   // Phase 9 ClawFlow Intelligence state
@@ -3000,6 +3003,15 @@ export default function App() {
             🥁 Beat Sync
           </button>
           <button
+            className={`panel-toggle-btn${autoReframeOpen ? " on" : ""}`}
+            onClick={() => setAutoReframeOpen(v => !v)}
+            title="Auto-Reframe — AI crop to any aspect ratio (9:16, 1:1, 4:5, 16:9, 4:3)"
+            type="button"
+            style={{ borderColor: "rgba(59,130,246,0.3)", color: autoReframeOpen ? "#93c5fd" : "#3b82f6" }}
+          >
+            🎯 Reframe
+          </button>
+          <button
             className="panel-toggle-btn"
             onClick={() => { closeAllGaps(); toast.success("✅ All timeline gaps closed"); }}
             title="Close All Gaps — ripple all clips together"
@@ -3905,6 +3917,7 @@ export default function App() {
                 { text: "Auto-match all clip exposures", action: () => { autoColorMatch(); toast.success("🎨 Auto Color Match applied"); } },
                 { text: "Normalize audio to -14 LUFS (streaming)", action: () => { normalizeAudioLevels(-14); toast.success("🎚 Audio normalized to -14 LUFS"); } },
                 { text: "Detect beats + auto-cut to music", action: () => { setBeatSyncOpen(true); setClawbotOpen(false); } },
+                { text: "Auto-Reframe clip to 9:16 / TikTok", action: () => { setAutoReframeOpen(true); setClawbotOpen(false); } },
                 { text: "Close all timeline gaps", action: () => { closeAllGaps(); toast.success("✅ All gaps closed"); } },
               ].map(item => (
                 <button
@@ -4122,6 +4135,17 @@ export default function App() {
               toast.success(`✂️ Auto-cut ${beatFrames.length} beats`);
             }}
             onClose={() => setBeatSyncOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* ── AUTO-REFRAME PANEL ── */}
+      {autoReframeOpen && (
+        <div style={{ position: "fixed", top: 80, right: 320, zIndex: 5100 }}>
+          <AutoReframePanel
+            assets={project.assets}
+            onAddAsset={(asset) => importAssets([asset])}
+            onClose={() => setAutoReframeOpen(false)}
           />
         </div>
       )}

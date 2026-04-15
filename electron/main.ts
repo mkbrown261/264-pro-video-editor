@@ -1743,6 +1743,110 @@ ipcMain.handle('export:stems', async (_ev, args: {
   }
 });
 
+// ── Auto-Reframe: AI crop to target aspect ratio via FFmpeg ───────────────────
+ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
+  sourcePath: string;
+  targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
+  outputPath: string;
+  trackingMode: 'center' | 'face' | 'motion';
+}) => {
+  try {
+    const { spawn } = await import('child_process');
+
+    // Resolve ffmpeg/ffprobe paths using the same approach as other handlers
+    let ffmpegBin = 'ffmpeg';
+    let ffprobeBin = 'ffprobe';
+    try {
+      const ffmpegStatic = require('ffmpeg-static');
+      const p = (ffmpegStatic as { default?: string }).default ?? (ffmpegStatic as string);
+      if (typeof p === 'string' && p) {
+        ffmpegBin = p;
+        ffprobeBin = p.replace(/ffmpeg([^/\\]*)$/, 'ffprobe$1');
+      }
+    } catch { /* use system ffmpeg/ffprobe */ }
+
+    // Step 1: Probe source dimensions
+    const probeResult = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const proc = spawn(ffprobeBin, [
+        '-v', 'quiet', '-print_format', 'json', '-show_streams', args.sourcePath
+      ]);
+      let out = '';
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      proc.on('close', (code: number) => {
+        if (code !== 0) { reject(new Error('ffprobe failed')); return; }
+        try {
+          const data = JSON.parse(out);
+          const vs = data.streams?.find((s: { codec_type: string }) => s.codec_type === 'video') as { width?: number; height?: number } | undefined;
+          resolve({ width: vs?.width ?? 1920, height: vs?.height ?? 1080 });
+        } catch { reject(new Error('ffprobe parse failed')); }
+      });
+      proc.on('error', reject);
+    });
+
+    const { width: srcW, height: srcH } = probeResult;
+
+    // Step 2: Compute crop dimensions for target aspect ratio
+    const aspectMap: Record<string, [number, number]> = {
+      '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9], '4:3': [4, 3]
+    };
+    const [aw, ah] = aspectMap[args.targetAspect] ?? [9, 16];
+
+    let cropW: number, cropH: number;
+    if (srcW / srcH > aw / ah) {
+      cropH = srcH;
+      cropW = Math.round(srcH * aw / ah);
+    } else {
+      cropW = srcW;
+      cropH = Math.round(srcW * ah / aw);
+    }
+    // Ensure even dimensions (H.264 requirement)
+    cropW = cropW % 2 === 0 ? cropW : cropW - 1;
+    cropH = cropH % 2 === 0 ? cropH : cropH - 1;
+
+    // Step 3: Build crop filter for tracking mode
+    let cropFilter: string;
+    if (args.trackingMode === 'center') {
+      const x = Math.round((srcW - cropW) / 2);
+      const y = Math.round((srcH - cropH) / 2);
+      cropFilter = `crop=${cropW}:${cropH}:${x}:${y}`;
+    } else if (args.trackingMode === 'motion') {
+      // Slightly above-center bias — action tends to be in the middle third
+      const x = Math.round((srcW - cropW) / 2);
+      const y = Math.round((srcH - cropH) * 0.35);
+      cropFilter = `crop=${cropW}:${cropH}:${x}:${y}`;
+    } else {
+      // face mode — upper-center heuristic (faces occupy upper ~40% of frame)
+      const x = Math.round((srcW - cropW) / 2);
+      const y = Math.round((srcH - cropH) * 0.25);
+      cropFilter = `crop=${cropW}:${cropH}:${x}:${y}`;
+    }
+
+    // Step 4: Run FFmpeg crop + scale pass
+    const filterChain = `${cropFilter},scale=${cropW}:${cropH}:flags=lanczos`;
+
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegBin, [
+        '-i', args.sourcePath,
+        '-vf', filterChain,
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+        '-c:a', 'copy',
+        '-y', args.outputPath
+      ]);
+      let errOut = '';
+      proc.stderr.on('data', (d: Buffer) => { errOut += d.toString(); });
+      proc.on('close', (code: number) => {
+        if (code !== 0) reject(new Error(`FFmpeg reframe failed: ${errOut.slice(-400)}`));
+        else resolve();
+      });
+      proc.on('error', reject);
+    });
+
+    return { success: true, outputPath: args.outputPath, cropW, cropH };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();
