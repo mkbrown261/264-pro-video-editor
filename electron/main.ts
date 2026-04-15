@@ -39,17 +39,16 @@ const __dirname = dirname(__filename);
 
 // ── Platform-aware icon resolution ───────────────────────────────────────────
 // In dev: __dirname = dist-electron/electron/, so ../../build-assets/ = project root
-// Packaged: icons are bundled by electron-builder from build-assets/
+// Icon path resolution:
+// Dev:      __dirname = <project>/dist-electron/electron/  → ../../build-assets = project root
+// Packaged: icons land in Resources/build-assets/ via extraResources
 function getAppIcon(): string {
-  // In dev: __dirname = <project>/dist-electron/electron/ → need ../../../build-assets
-  // In packaged app (Mac): icon is resolved from the .app bundle automatically via electron-builder
-  // In packaged app (Win/Linux): resourcesPath contains the icon
   if (app.isPackaged) {
     if (process.platform === "win32") return join(process.resourcesPath, "build-assets", "icon.ico");
     return join(process.resourcesPath, "build-assets", "icon.png");
   }
-  // Dev mode — walk up from dist-electron/electron/ to project root
-  const base = join(__dirname, "../../../build-assets");
+  // Dev mode: dist-electron/electron/ → ../../ = project root
+  const base = join(__dirname, "../../build-assets");
   if (process.platform === "win32") return join(base, "icon.ico");
   return join(base, "icon.png");
 }
