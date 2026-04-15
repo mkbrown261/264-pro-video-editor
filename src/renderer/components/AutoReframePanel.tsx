@@ -55,7 +55,16 @@ export function AutoReframePanel({ assets, onAddAsset, onClose }: AutoReframePan
 
       setProgress("⚙️ Reframing with FFmpeg…");
 
-      const result = await window.electronAPI?.reframeAnalyzeAndExport?.({
+      // Cast to access reframeAnalyzeAndExport — declared in vite-env.d.ts
+      const api = window.electronAPI as (typeof window.electronAPI & {
+        reframeAnalyzeAndExport?: (args: {
+          sourcePath: string;
+          targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
+          outputPath: string;
+          trackingMode: 'center' | 'face' | 'motion';
+        }) => Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }>;
+      });
+      const result = await api?.reframeAnalyzeAndExport?.({
         sourcePath: asset.sourcePath,
         targetAspect,
         outputPath,
