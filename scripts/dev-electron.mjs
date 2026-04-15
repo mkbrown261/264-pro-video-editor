@@ -3,7 +3,7 @@
  * Watches dist-electron/ for changes from tsc --watch and restarts Electron.
  */
 import { spawn } from "node:child_process";
-import { watch, existsSync, readFileSync } from "node:fs";
+import { watch, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -15,20 +15,47 @@ const MAIN_JS = join(ROOT, "dist-electron", "electron", "main.js");
 const PRELOAD_CJS = join(ROOT, "dist-electron", "electron", "preload.cjs");
 const VITE_URL = process.env.VITE_DEV_SERVER_URL ?? "http://localhost:5173";
 
-// Use the same resolution logic as the official electron package
+// Find the Electron binary — handles renamed binaries (e.g. '264 Pro') and stock 'Electron'
 function getElectronBin() {
+  const distDir = join(ROOT, "node_modules", "electron", "dist");
+
+  // 1. On Mac: scan dist/ for any .app and grab the first binary in MacOS/
+  //    This works whether the binary is named 'Electron' or '264 Pro'
+  if (process.platform === "darwin" && existsSync(distDir)) {
+    try {
+      const apps = readdirSync(distDir).filter(f => f.endsWith(".app"));
+      for (const appBundle of apps) {
+        const macosDir = join(distDir, appBundle, "Contents", "MacOS");
+        if (existsSync(macosDir)) {
+          const bins = readdirSync(macosDir);
+          if (bins.length > 0) {
+            const bin = join(macosDir, bins[0]);
+            if (existsSync(bin)) {
+              console.log(`[dev] Found binary: ${bin}`);
+              return bin;
+            }
+          }
+        }
+      }
+    } catch { /* fall through */ }
+  }
+
+  // 2. Try require('electron') — returns correct path for stock installs
   try {
     const require = createRequire(import.meta.url);
-    return require("electron");
-  } catch {
-    // fallback
-    const pathTxt = join(ROOT, "node_modules", "electron", "path.txt");
-    if (existsSync(pathTxt)) {
-      const rel = readFileSync(pathTxt, "utf8").trim();
-      return join(ROOT, "node_modules", "electron", "dist", rel);
-    }
-    return "electron";
+    const p = require("electron");
+    if (existsSync(p)) return p;
+  } catch { /* fall through */ }
+
+  // 3. path.txt fallback
+  const pathTxt = join(ROOT, "node_modules", "electron", "path.txt");
+  if (existsSync(pathTxt)) {
+    const rel = readFileSync(pathTxt, "utf8").trim();
+    const p = join(ROOT, "node_modules", "electron", "dist", rel);
+    if (existsSync(p)) return p;
   }
+
+  return "electron";
 }
 
 let electronProcess = null;
