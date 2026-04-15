@@ -1,4 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, shell } from "electron";
+
+// Set app name immediately — fixes dock tooltip showing "Electron" in dev mode
+app.name = "264 Pro";
+process.title = "264 Pro";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
 import { createReadStream } from "node:fs";
