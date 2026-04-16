@@ -215,5 +215,10 @@ const flowstateAPI = {
   // ── Sign out of FlowState ─────────────────────────────────────────────────
   signOut: (): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke("flowstate:sign-out"),
+  // ── fal.ai key management (direct video generation fallback) ──────────────
+  setFalKey: (key: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke("fal:set-key", key),
+  getFalKey: (): Promise<string | null> =>
+    ipcRenderer.invoke("fal:get-key"),
 };
 contextBridge.exposeInMainWorld("flowstateAPI", flowstateAPI);

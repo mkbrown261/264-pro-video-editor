@@ -1133,6 +1133,15 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                     <>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#fca5a5", marginBottom: 6 }}>✕ Generation Failed</div>
                       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", lineHeight: 1.6 }}>{vgResult.error}</div>
+                      {(vgResult.error || "").toLowerCase().includes("fal.ai api key") || (vgResult.error || "").toLowerCase().includes("no fal.ai") ? (
+                        <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.25)", fontSize: 11, color: "#67e8f9", lineHeight: 1.5 }}>
+                          💡 Add your free fal.ai key in <strong>Settings → AI & API Keys</strong> to enable direct video generation. Get a key at <strong>fal.ai/dashboard/keys</strong>.
+                        </div>
+                      ) : (vgResult.error || "").includes("500") || (vgResult.error || "").toLowerCase().includes("server error") ? (
+                        <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.25)", fontSize: 11, color: "#67e8f9", lineHeight: 1.5 }}>
+                          💡 The ClawFlow backend is currently unavailable. Add a free <strong>fal.ai API key</strong> in Settings → AI & API Keys to generate videos directly.
+                        </div>
+                      ) : null}
                       <button onClick={resetVg} style={{ marginTop: 10, padding: "7px 16px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer" }}>Try Again</button>
                     </>
                   )}

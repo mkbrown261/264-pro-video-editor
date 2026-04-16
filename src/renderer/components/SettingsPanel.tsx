@@ -15,6 +15,7 @@ interface ApiKeys {
   higgsfield: string;
   replicate: string;
   openai: string;
+  fal: string;
 }
 
 const STORAGE_KEY = "264pro_api_keys";
@@ -22,12 +23,18 @@ const STORAGE_KEY = "264pro_api_keys";
 function loadKeys(): ApiKeys {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { higgsfield: "", replicate: "", openai: "" };
+    if (!raw) return { higgsfield: "", replicate: "", openai: "", fal: "" };
     // Simple XOR decode for storage obfuscation (not true encryption)
     const decoded = atob(raw);
-    return JSON.parse(decoded) as ApiKeys;
+    const parsed = JSON.parse(decoded) as Partial<ApiKeys>;
+    return {
+      higgsfield: parsed.higgsfield ?? "",
+      replicate:  parsed.replicate  ?? "",
+      openai:     parsed.openai     ?? "",
+      fal:        parsed.fal        ?? "",
+    };
   } catch {
-    return { higgsfield: "", replicate: "", openai: "" };
+    return { higgsfield: "", replicate: "", openai: "", fal: "" };
   }
 }
 
@@ -46,12 +53,26 @@ export function SettingsPanel({ onClose, proxyEnabled, onToggleProxy }: Settings
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<Record<string, string>>({});
 
+  // On mount: if localStorage doesn't have a fal key, check the main-process file
+  useEffect(() => {
+    const loaded = loadKeys();
+    if (!loaded.fal && (window as any).flowstateAPI?.getFalKey) {
+      (window as any).flowstateAPI.getFalKey().then((k: string | null) => {
+        if (k) setKeys(prev => ({ ...prev, fal: k }));
+      });
+    }
+  }, []);
+
   const updateKey = (field: keyof ApiKeys, value: string) => {
     setKeys(prev => ({ ...prev, [field]: value }));
   };
 
   const handleSave = () => {
     saveKeys(keys);
+    // Persist fal.ai key to main process file so IPC handlers can read it directly
+    if (keys.fal && (window as any).flowstateAPI?.setFalKey) {
+      void (window as any).flowstateAPI.setFalKey(keys.fal);
+    }
     onClose();
   };
 
@@ -234,6 +255,36 @@ export function SettingsPanel({ onClose, proxyEnabled, onToggleProxy }: Settings
                   <button type="button" onClick={() => handleTest("openai", keys.openai)} style={btnStyle}>Test</button>
                 </div>
                 {testStatus["openai"] && <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>{testStatus["openai"]}</div>}
+              </div>
+
+              <div style={{ height: 1, background: "rgba(255,255,255,0.07)" }} />
+
+              {/* fal.ai — Seedance / Wan / Nano Banana video generation */}
+              <div>
+                <label style={labelStyle}>fal.ai (Seedance 2.0 / Wan / Nano Banana video generation)</label>
+                <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                  <input
+                    type={showKeys["fal"] ? "text" : "password"}
+                    placeholder="fal-••••••••••••••••••••••••••••"
+                    value={keys.fal}
+                    onChange={e => updateKey("fal", e.target.value)}
+                    style={inputStyle}
+                  />
+                  <button type="button" onClick={() => setShowKeys(p => ({ ...p, fal: !p.fal }))} style={btnStyle}>
+                    {showKeys["fal"] ? "Hide" : "Show"}
+                  </button>
+                  <button type="button" onClick={() => handleTest("fal", keys.fal)} style={btnStyle}>Test</button>
+                </div>
+                {testStatus["fal"] && <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>{testStatus["fal"]}</div>}
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "#475569" }}>→ Get key: fal.ai/dashboard/keys (free tier available)</span>
+                  <button type="button" onClick={() => window.open?.("https://fal.ai/dashboard/keys", "_blank")} style={{ ...btnStyle, background: "rgba(6,182,212,0.15)", borderColor: "rgba(6,182,212,0.3)", color: "#67e8f9" }}>
+                    Get Free Key
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>
+                  Required for direct video generation when the ClawFlow backend is unavailable.
+                </div>
               </div>
 
               <div style={{ height: 1, background: "rgba(255,255,255,0.07)" }} />

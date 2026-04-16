@@ -912,7 +912,105 @@ ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) =>
   }
 });
 
-// ── AI Video Generation — Seedance 2.0 / Higgsfield / Nano Banana ─────────────
+// ── fal.ai direct video generation helpers ────────────────────────────────────
+// Maps 264 Pro model IDs to their fal.ai endpoint IDs
+// Full REST URL: https://queue.fal.run/{endpointId}
+const FAL_MODEL_MAP: Record<string, string> = {
+  seedance_t2v:    'bytedance/seedance-2.0/text-to-video',
+  seedance_i2v:    'bytedance/seedance-2.0/image-to-video',
+  wan_t2v:         'fal-ai/wan/v2.7/text-to-video',
+  wan_i2v:         'fal-ai/wan/v2.7/image-to-video',
+  nano_banana_2k:  'bytedance/seedance-2.0/text-to-video',
+  nano_banana_4k:  'bytedance/seedance-2.0/text-to-video',
+  higgsfield_t2v:  'bytedance/seedance-2.0/text-to-video',
+  higgsfield_i2v:  'bytedance/seedance-2.0/image-to-video',
+};
+
+async function getFalKey(): Promise<string | null> {
+  const keyPath = join(app.getPath('userData'), FAL_KEY_FILE);
+  try {
+    const k = (await readFile(keyPath, 'utf8')).trim();
+    return k || null;
+  } catch { return null; }
+}
+
+// Build fal.ai REST request body from 264 Pro params
+function buildFalBody(params: {
+  model: string; prompt: string; imageUrl?: string; duration?: number;
+  resolution?: string; aspectRatio?: string; quality?: string;
+  cameraMotion?: string; style?: string; negativePrompt?: string;
+}): Record<string, unknown> {
+  // duration must be a string per fal.ai Seedance schema: "4" through "15" or "auto"
+  const durNum = Math.max(4, Math.min(15, params.duration || 5));
+  const durStr = String(durNum);
+  const isI2V = params.model.includes('i2v') && params.imageUrl;
+  // Seedance only supports 480p or 720p — never 1080p
+  const resolution = params.resolution === '1080p' ? '720p' : (params.resolution || '720p');
+  // Validate aspect ratio (Seedance supports: auto, 21:9, 16:9, 4:3, 1:1, 3:4, 9:16)
+  const validAR = ['16:9', '9:16', '4:3', '3:4', '1:1', '21:9', 'auto'];
+  const aspectRatio = validAR.includes(params.aspectRatio || '') ? (params.aspectRatio || '16:9') : '16:9';
+  const body: Record<string, unknown> = {
+    prompt: params.prompt,
+    duration: durStr,
+    aspect_ratio: aspectRatio,
+    resolution,
+    generate_audio: true,
+  };
+  if (isI2V && params.imageUrl) {
+    body['image_url'] = params.imageUrl;
+  }
+  // Wan models may support negative_prompt; Seedance does not — include anyway (harmless)
+  if (params.negativePrompt) body['negative_prompt'] = params.negativePrompt;
+  return body;
+}
+
+async function runFalDirect(params: {
+  model: string; prompt: string; imageUrl?: string; duration?: number;
+  resolution?: string; aspectRatio?: string; quality?: string;
+  cameraMotion?: string; style?: string; negativePrompt?: string;
+}): Promise<Record<string, unknown>> {
+  const falKey = await getFalKey();
+  if (!falKey) {
+    return { error: 'No fal.ai API key configured. Open Settings → AI & API Keys to add your key from fal.ai/dashboard/keys.' };
+  }
+  const endpointId = FAL_MODEL_MAP[params.model] || 'fal-ai/bytedance/seedance-2.0';
+  const body = buildFalBody(params);
+
+  // Submit job to fal.ai queue
+  const submitRes = await fetch(`https://queue.fal.run/${endpointId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Key ${falKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const submitText = await submitRes.text();
+  let submitData: Record<string, unknown>;
+  try { submitData = JSON.parse(submitText); } catch {
+    return { error: `fal.ai submit error (${submitRes.status}): ${submitText.slice(0, 200)}` };
+  }
+  if (!submitRes.ok || submitData['error']) {
+    const errMsg = (submitData['error'] as string) || submitText.slice(0, 200);
+    return { error: `fal.ai: ${errMsg}` };
+  }
+  // Encode the status_url and response_url into the requestId so polling works
+  // fal docs: status_url = https://queue.fal.run/{endpointId}/requests/{uuid}/status
+  //           response_url = https://queue.fal.run/{endpointId}/requests/{uuid}
+  const statusUrl = (submitData['status_url'] as string) ||
+    `https://queue.fal.run/${endpointId}/requests/${submitData['request_id']}/status`;
+  const responseUrl = (submitData['response_url'] as string) ||
+    `https://queue.fal.run/${endpointId}/requests/${submitData['request_id']}`;
+  const encodedId = JSON.stringify({ statusUrl, responseUrl });
+  return {
+    status: 'queued',
+    requestId: encodedId,
+    provider: 'fal_direct',
+    message: 'Video generation queued via fal.ai',
+  };
+}
+
+// ── AI Video Generation — Seedance 2.0 / Higgsfield / Wan ─────────────────────
 ipcMain.handle("flowstate:video-gen", async (_event, params: {
   model: string;
   prompt: string;
@@ -937,14 +1035,89 @@ ipcMain.handle("flowstate:video-gen", async (_event, params: {
       body: JSON.stringify(params),
     });
     const text4 = await res.text();
+    // If FlowState backend is healthy, return its response
+    if (res.ok) {
+      try { return JSON.parse(text4); } catch { /* fall through to fal.ai */ }
+    }
+    // 5xx or JSON parse failure — try direct fal.ai route
+    if (res.status >= 500 || res.status === 0) {
+      console.log(`[video-gen] FlowState returned ${res.status} — falling back to fal.ai direct`);
+      return await runFalDirect(params);
+    }
+    // 4xx (auth / bad request) — return the error from FlowState
     try { return JSON.parse(text4); } catch { return { error: `Server error (${res.status}): ${text4.slice(0, 200)}` }; }
   } catch (e: unknown) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    // Network error — try direct fal.ai
+    console.log('[video-gen] FlowState network error — falling back to fal.ai direct:', e);
+    return await runFalDirect(params);
   }
 });
 
 // ── Poll AI Video Generation status ───────────────────────────────────────────
 ipcMain.handle("flowstate:video-gen-poll", async (_event, requestId: string, provider: string) => {
+  // Direct fal.ai polling (when provider = 'fal_direct')
+  if (provider === 'fal_direct') {
+    const falKey = await getFalKey();
+    if (!falKey) return { error: 'No fal.ai API key configured.' };
+    try {
+      // requestId is a JSON string: { statusUrl, responseUrl }
+      let statusUrl: string;
+      let responseUrl: string;
+      try {
+        const decoded = JSON.parse(requestId) as { statusUrl: string; responseUrl: string };
+        statusUrl = decoded.statusUrl;
+        responseUrl = decoded.responseUrl;
+      } catch {
+        // Fallback if old-format plain UUID is passed
+        statusUrl = `https://queue.fal.run/requests/${requestId}/status`;
+        responseUrl = `https://queue.fal.run/requests/${requestId}`;
+      }
+
+      const statusRes = await fetch(statusUrl, {
+        headers: { 'Authorization': `Key ${falKey}` },
+      });
+      const statusText = await statusRes.text();
+      let statusData: Record<string, unknown>;
+      try { statusData = JSON.parse(statusText); } catch {
+        return { error: `fal.ai poll error: ${statusText.slice(0, 200)}` };
+      }
+      const falStatus = (statusData['status'] as string || '').toUpperCase();
+      if (falStatus === 'COMPLETED') {
+        // Fetch result from response_url
+        const resultRes = await fetch(responseUrl, {
+          headers: { 'Authorization': `Key ${falKey}` },
+        });
+        const resultText = await resultRes.text();
+        let resultData: Record<string, unknown>;
+        try { resultData = JSON.parse(resultText); } catch {
+          return { error: `fal.ai result parse error: ${resultText.slice(0, 200)}` };
+        }
+        // Seedance 2.0 returns { video: { url, content_type, file_name, file_size } }
+        // Wan returns { video: { url, ... } }
+        const video = resultData['video'] as Record<string, unknown> | undefined;
+        const videoUrl: string | undefined =
+          (video?.['url'] as string) ||
+          (resultData['video_url'] as string) ||
+          ((resultData['output'] as Record<string, unknown>[])?.[0]?.['url'] as string);
+        if (videoUrl) return { status: 'complete', videoUrl };
+        // Check if there's an error in the completed result
+        if (resultData['error']) return { error: String(resultData['error']) };
+        return { error: 'fal.ai generation complete but no video URL found. Check fal.ai dashboard.' };
+      }
+      if (falStatus === 'ERROR' || falStatus === 'FAILED') {
+        const errMsg = (statusData['error'] as string) || 'Generation failed on fal.ai';
+        return { error: errMsg };
+      }
+      // IN_QUEUE or IN_PROGRESS — return progress info
+      const queuePos = statusData['queue_position'] as number | undefined;
+      const pct = falStatus === 'IN_PROGRESS' ? 50 : (queuePos != null ? Math.max(5, 35 - queuePos * 3) : undefined);
+      return { status: 'processing', percent: pct, queuePosition: queuePos };
+    } catch (e: unknown) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  // Default: proxy through FlowState backend
   const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
   try {
     const token = (await readFile(tokenPath, 'utf8')).trim();
@@ -968,6 +1141,25 @@ ipcMain.handle("flowstate:sign-out", async () => {
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+});
+
+// ── fal.ai API key storage ───────────────────────────────────────────────────
+const FAL_KEY_FILE = 'fal_api_key.txt';
+ipcMain.handle("fal:set-key", async (_event, key: string) => {
+  const keyPath = join(app.getPath('userData'), FAL_KEY_FILE);
+  try {
+    await writeFile(keyPath, key.trim(), 'utf8');
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+ipcMain.handle("fal:get-key", async () => {
+  const keyPath = join(app.getPath('userData'), FAL_KEY_FILE);
+  try {
+    const k = (await readFile(keyPath, 'utf8')).trim();
+    return k || null;
+  } catch { return null; }
 });
 
 // ── R2 Cloud Storage IPC ──────────────────────────────────────────────────────
