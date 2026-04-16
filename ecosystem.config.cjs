@@ -1,12 +1,12 @@
 module.exports = {
   apps: [
     {
-      name: 'webapp-dev',
-      script: 'npx',
-      args: 'vite preview --port 3000 --host 0.0.0.0',
+      name: 'webapp-264pro',
+      script: 'node',
+      args: 'serve.mjs',
+      cwd: '/home/user/264pro',
       env: {
         NODE_ENV: 'production',
-        PORT: 3000
       },
       watch: false,
       instances: 1,

@@ -34,10 +34,12 @@ async function getAuthState(): Promise<AuthState> {
     const user = await window.flowstateAPI?.getUser?.();
     if (!user) return { signedIn: false, tier: "", hasClawflow: false, email: "" };
     const tier = (user.tier ?? "free").toLowerCase();
+    // ClawFlow access: any paid tier grants full AI tool access
+    const CLAWFLOW_TIERS = ["clawflow", "pro", "personal_pro", "team", "team_starter", "team_growth", "enterprise"];
     return {
       signedIn: true,
       tier,
-      hasClawflow: tier === "clawflow",
+      hasClawflow: CLAWFLOW_TIERS.includes(tier),
       email: user.email ?? "",
     };
   } catch {

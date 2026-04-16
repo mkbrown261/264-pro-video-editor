@@ -426,6 +426,20 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vgModel]);
 
+  // Auto-populate inputUrl from timeline selected clip when panel opens or selection changes
+  useEffect(() => {
+    if (inputUrl) return; // Don't overwrite if user already set something
+    const clip = project.sequence.clips.find((c) => c.id === selectedClipId);
+    const asset = clip
+      ? project.assets.find((a) => a.id === clip.assetId)
+      : project.assets.find((a) => a.id === selectedAssetId);
+    if (asset?.sourcePath) {
+      setInputUrl(`media://localhost?path=${encodeURIComponent(asset.sourcePath)}`);
+      setInputFileName(asset.name);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClipId, selectedAssetId, isOpen]);
+
   // ── Auth gate — shown when user clicks Run without access ───────────────────
   const { modal, checkAndRun, closeModal } = useAuthGate();
 

@@ -86,8 +86,8 @@ function OnboardingModal({
         "Infinite tracks. Fixed playhead mode.",
         "Beat sync that cuts your video to music automatically.",
       ],
-      cta: "Try Timeline",
-      ctaHandler: onFinish,
+      cta: "Next: Color Grading →",
+      // No ctaHandler — falls through to the default "advance to next slide" logic
       bgAccent: "#f59e0b",
     },
     {

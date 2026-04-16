@@ -10,7 +10,7 @@
  * It is horizontally scrollable so all tracks are always accessible.
  */
 
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { TimelineTrack } from "../../shared/models";
 import type { AudioEngine } from "../lib/AudioScheduler";
 
@@ -64,11 +64,15 @@ interface ChannelStripProps {
   onMute: () => void;
   onSolo: () => void;
   onVolumeChange: (v: number) => void;
+  /** Live RMS level 0–1 from AnalyserNode, or null when not playing */
+  liveLevel: number | null;
 }
 
-function ChannelStrip({ track, onMute, onSolo, onVolumeChange }: ChannelStripProps) {
+function ChannelStrip({ track, onMute, onSolo, onVolumeChange, liveLevel }: ChannelStripProps) {
   const isAudio = track.kind === "audio";
   const vol = track.volume ?? 1;
+  // Show live level when playing, fall back to gain-based display otherwise
+  const displayLevel = liveLevel !== null ? liveLevel : (track.muted ? 0 : vol * 0.5);
 
   return (
     <div className={`mixer-channel${track.muted ? " mixer-channel--muted" : ""}${track.solo ? " mixer-channel--solo" : ""}`}>
@@ -78,13 +82,14 @@ function ChannelStrip({ track, onMute, onSolo, onVolumeChange }: ChannelStripPro
         <span className="mixer-channel-name-text">{track.name || (track.kind === "audio" ? "Audio" : "Video")}</span>
       </div>
 
-      {/* VU bars (simple, no analyser — just shows gain level) */}
+      {/* VU bars — live RMS level when playing, static gain otherwise */}
       <div className="mixer-vu-simple">
         <div
           className="mixer-vu-fill"
           style={{
-            height: `${Math.min(100, (track.muted ? 0 : vol) * 50)}%`,
-            background: vol > 1.6 ? "#e53935" : vol > 1.1 ? "#f7c948" : "#2fc77a",
+            height: `${Math.min(100, displayLevel * 100)}%`,
+            background: displayLevel > 0.8 ? "#e53935" : displayLevel > 0.55 ? "#f7c948" : "#2fc77a",
+            transition: liveLevel !== null ? "none" : "height 0.1s",
           }}
         />
       </div>
@@ -134,6 +139,28 @@ export function AudioMixerPanel({
   onClose,
 }: AudioMixerPanelProps) {
 
+  // ── Real-time VU levels — updated every animation frame ─────────────────
+  const [trackLevels, setTrackLevels] = useState<Record<string, number>>({});
+  const [masterLevel, setMasterLevel] = useState<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const tick = () => {
+      const engine = audioEngineRef.current;
+      if (engine) {
+        const levels: Record<string, number> = {};
+        for (const track of tracks) {
+          levels[track.id] = engine.getTrackLevel(track.id);
+        }
+        setTrackLevels(levels);
+        setMasterLevel(engine.getMasterLevel());
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [audioEngineRef, tracks]);
+
   const handleTrackVolume = useCallback((trackId: string, vol: number) => {
     onUpdateTrack(trackId, { volume: vol });
     // Apply immediately to the live audio engine (if playing)
@@ -180,6 +207,7 @@ export function AudioMixerPanel({
               onMute={() => handleMute(track)}
               onSolo={() => handleSolo(track)}
               onVolumeChange={(v) => handleTrackVolume(track.id, v)}
+              liveLevel={trackLevels[track.id] ?? null}
             />
           ))}
 
@@ -197,8 +225,12 @@ export function AudioMixerPanel({
               <div
                 className="mixer-vu-fill"
                 style={{
-                  height: `${Math.min(100, masterVolume * 50)}%`,
-                  background: masterVolume > 1.6 ? "#e53935" : masterVolume > 1.1 ? "#f7c948" : "#2fc77a",
+                  height: masterLevel !== null
+                    ? `${Math.min(100, masterLevel * 100)}%`
+                    : `${Math.min(100, masterVolume * 50)}%`,
+                  background: (masterLevel ?? masterVolume * 0.5) > 0.8 ? "#e53935"
+                    : (masterLevel ?? masterVolume * 0.5) > 0.55 ? "#f7c948" : "#2fc77a",
+                  transition: masterLevel !== null ? "none" : "height 0.1s",
                 }}
               />
             </div>

@@ -54,7 +54,7 @@ export function ClawFlowPublishPanel({
   sequenceFps,
 }: ClawFlowPublishPanelProps) {
   // Platforms
-  const [platforms, setPlatforms] = useState({ youtube: true, tiktok: false, instagram: false, twitter: false });
+  const [platforms, setPlatforms] = useState({ youtube: false, tiktok: false, instagram: false, twitter: false });
 
   // Title / Description
   const [title, setTitle] = useState('');
@@ -64,10 +64,11 @@ export function ClawFlowPublishPanel({
   // Thumbnail
   const [selectedThumb, setSelectedThumb] = useState(0);
   const thumbColors = ['#1e293b', '#0f172a', '#1a1a2e'];
+  const safeDuration = totalDurationSeconds > 0 ? totalDurationSeconds : 60;
   const thumbTimes = [
-    Math.round(totalDurationSeconds * 0.1),
-    Math.round(totalDurationSeconds * 0.5),
-    Math.round(totalDurationSeconds * 0.85),
+    Math.round(safeDuration * 0.1),
+    Math.round(safeDuration * 0.5),
+    Math.round(safeDuration * 0.85),
   ];
 
   // Tags
@@ -168,12 +169,21 @@ export function ClawFlowPublishPanel({
   async function handlePublish() {
     const selectedPlatforms = Object.entries(platforms).filter(([, v]) => v).map(([k]) => k);
     if (selectedPlatforms.length === 0) {
-      toast.error('Select at least one platform');
+      toast.error('Select at least one platform to publish to');
       return;
     }
 
     if (!lastExportedPath) {
-      toast.error('Export your video first, then publish.');
+      toast.error('Export your video first (Edit → Export), then publish here.');
+      return;
+    }
+
+    // Verify at least one selected platform has a connection
+    const needsYT = selectedPlatforms.includes('youtube') && !ytConnected;
+    const needsTT = selectedPlatforms.includes('tiktok') && !ttConnected;
+    const onlySocial = selectedPlatforms.every(p => p === 'youtube' || p === 'tiktok');
+    if (onlySocial && needsYT && needsTT) {
+      toast.error('Connect at least one social account before publishing.');
       return;
     }
 

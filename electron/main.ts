@@ -861,7 +861,13 @@ ipcMain.handle("flowstate:api-call", async (_event, path: string, method: string
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-    return res.json();
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      // Server returned non-JSON (HTML error page, plain text, etc.)
+      return { error: `Server error (${res.status}): ${text.slice(0, 200)}` };
+    }
   } catch (e: unknown) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -884,7 +890,8 @@ ipcMain.handle("flowstate:ai-tool", async (_event, tool: string, options: {
       },
       body: JSON.stringify({ tool, ...options }),
     });
-    return res.json();
+    const text2 = await res.text();
+    try { return JSON.parse(text2); } catch { return { error: `Server error (${res.status}): ${text2.slice(0, 200)}` }; }
   } catch (e: unknown) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -898,7 +905,8 @@ ipcMain.handle("flowstate:ai-tool-poll", async (_event, predictionId: string) =>
     const res = await fetch(`${FS_BASE_URL}/api/264pro/ai-tool/poll/${predictionId}`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
-    return res.json();
+    const text3 = await res.text();
+    try { return JSON.parse(text3); } catch { return { error: `Server error (${res.status}): ${text3.slice(0, 200)}` }; }
   } catch (e: unknown) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -928,7 +936,8 @@ ipcMain.handle("flowstate:video-gen", async (_event, params: {
       },
       body: JSON.stringify(params),
     });
-    return res.json();
+    const text4 = await res.text();
+    try { return JSON.parse(text4); } catch { return { error: `Server error (${res.status}): ${text4.slice(0, 200)}` }; }
   } catch (e: unknown) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -943,7 +952,8 @@ ipcMain.handle("flowstate:video-gen-poll", async (_event, requestId: string, pro
     const res = await fetch(url, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
-    return res.json();
+    const text5 = await res.text();
+    try { return JSON.parse(text5); } catch { return { error: `Server error (${res.status}): ${text5.slice(0, 200)}` }; }
   } catch (e: unknown) {
     return { error: e instanceof Error ? e.message : String(e) };
   }

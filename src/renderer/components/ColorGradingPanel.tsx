@@ -140,20 +140,70 @@ const COLOR_LOOKS: ColorLook[] = [
 ];
 
 interface OneClickLooksBarProps {
-  onApplyLook: (look: Partial<ColorGrade>) => void;
+  /** Full grade replace — receives a complete merged grade (default + look scaled by intensity) */
+  onApplyLook: (fullGrade: Partial<ColorGrade>) => void;
+  onResetToDefault: () => void;
 }
 
-function OneClickLooksBar({ onApplyLook }: OneClickLooksBarProps) {
+/** Lerp a partial color look against the default grade at a given intensity (0–1) */
+function scaleLookByIntensity(look: Partial<ColorGrade>, intensity: number): Partial<ColorGrade> {
+  if (intensity === 1) return look;
+  const def = createDefaultColorGrade();
+  const result: Partial<ColorGrade> = {};
+  for (const key of Object.keys(look) as Array<keyof ColorGrade>) {
+    const lookVal = look[key];
+    const defVal = (def as unknown as Record<string, unknown>)[key];
+    if (typeof lookVal === "number" && typeof defVal === "number") {
+      (result as Record<string, unknown>)[key] = defVal + (lookVal - defVal) * intensity;
+    } else if (lookVal !== null && lookVal !== undefined && typeof lookVal === "object" && !Array.isArray(lookVal)) {
+      // RGBValue — lerp each channel
+      const rv = lookVal as { r: number; g: number; b: number };
+      const dv = (defVal as { r: number; g: number; b: number }) ?? { r: 0, g: 0, b: 0 };
+      (result as Record<string, unknown>)[key] = {
+        r: dv.r + (rv.r - dv.r) * intensity,
+        g: dv.g + (rv.g - dv.g) * intensity,
+        b: dv.b + (rv.b - dv.b) * intensity,
+      };
+    } else {
+      (result as Record<string, unknown>)[key] = lookVal;
+    }
+  }
+  return result;
+}
+
+function OneClickLooksBar({ onApplyLook, onResetToDefault }: OneClickLooksBarProps) {
   const [appliedId, setAppliedId] = useState<string | null>(null);
+  const [intensity, setIntensity] = useState(1.0);
+
+  const applyLook = (look: ColorLook, newIntensity?: number) => {
+    const int = newIntensity ?? intensity;
+    setAppliedId(look.id);
+    // Reset to default first, then apply scaled look — avoids stacking looks
+    onResetToDefault();
+    onApplyLook(scaleLookByIntensity(look.grade, int));
+  };
+
+  const currentLook = appliedId ? COLOR_LOOKS.find(l => l.id === appliedId) ?? null : null;
+
   return (
-    <div style={{ padding: "6px 8px 4px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>One-Click Looks</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+    <div style={{ padding: "6px 8px 6px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+        <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>One-Click Looks</div>
+        {appliedId && (
+          <button
+            type="button"
+            onClick={() => { setAppliedId(null); onResetToDefault(); }}
+            style={{ fontSize: 9, background: "none", border: "none", color: "rgba(255,255,255,0.3)", cursor: "pointer", padding: "0 4px" }}
+            title="Remove look"
+          >✕ Clear</button>
+        )}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: appliedId ? 8 : 0 }}>
         {COLOR_LOOKS.map(look => (
           <button
             key={look.id}
             type="button"
-            onClick={() => { setAppliedId(look.id); onApplyLook(look.grade); }}
+            onClick={() => applyLook(look)}
             title={`Apply ${look.label} look`}
             style={{
               padding: "3px 7px",
@@ -171,6 +221,26 @@ function OneClickLooksBar({ onApplyLook }: OneClickLooksBarProps) {
           </button>
         ))}
       </div>
+      {/* Intensity slider — only visible when a look is applied */}
+      {currentLook && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+          <span style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", minWidth: 52 }}>Intensity</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={intensity}
+            onChange={e => {
+              const v = Number(e.target.value);
+              setIntensity(v);
+              if (currentLook) applyLook(currentLook, v);
+            }}
+            style={{ flex: 1, accentColor: "#4f8ef7" }}
+          />
+          <span style={{ fontSize: 9, color: "#4f8ef7", minWidth: 32, textAlign: "right" }}>{Math.round(intensity * 100)}%</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -977,7 +1047,15 @@ export function ColorGradingPanel({
 
       {/* ── One-Click Color Looks (UX 1) ── */}
       <OneClickLooksBar
-        onApplyLook={(partial) => handleUpdate(partial)}
+        onApplyLook={(fullGrade) => {
+          // Apply the look as a full grade replacement (reset default + apply scaled look)
+          if (!colorGrade) onEnableGrade();
+          // Merge the look on top of the default grade for a clean result
+          onUpdateGrade({ ...createDefaultColorGrade(), ...fullGrade });
+        }}
+        onResetToDefault={() => {
+          onUpdateGrade(createDefaultColorGrade());
+        }}
       />
 
       {/* ── Node Graph ── */}

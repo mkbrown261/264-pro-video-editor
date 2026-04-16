@@ -196,13 +196,24 @@ export class AudioEngine {
   /** Per-track gain nodes, keyed by track ID. */
   private trackGains = new Map<string, GainNode>();
 
+  /** Per-track analyser nodes for real-time VU metering, keyed by track ID. */
+  private trackAnalysers = new Map<string, AnalyserNode>();
+
+  /** Master analyser for the master channel VU meter. */
+  private masterAnalyser: AnalyserNode | null = null;
+
   // ── Lazy AudioContext ──────────────────────────────────────────────────────
   private getCtx(): AudioContext {
     if (!this.ctx || this.ctx.state === "closed") {
       this.ctx = new AudioContext();
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = 1;
-      this.masterGain.connect(this.ctx.destination);
+      // Master analyser sits between master gain and destination
+      this.masterAnalyser = this.ctx.createAnalyser();
+      this.masterAnalyser.fftSize = 256;
+      this.masterAnalyser.smoothingTimeConstant = 0.8;
+      this.masterGain.connect(this.masterAnalyser);
+      this.masterAnalyser.connect(this.ctx.destination);
     }
     return this.ctx;
   }
@@ -211,7 +222,11 @@ export class AudioEngine {
     if (!this.masterGain) {
       this.masterGain = ctx.createGain();
       this.masterGain.gain.value = 1;
-      this.masterGain.connect(ctx.destination);
+      this.masterAnalyser = ctx.createAnalyser();
+      this.masterAnalyser.fftSize = 256;
+      this.masterAnalyser.smoothingTimeConstant = 0.8;
+      this.masterGain.connect(this.masterAnalyser);
+      this.masterAnalyser.connect(ctx.destination);
     }
     return this.masterGain;
   }
@@ -221,10 +236,44 @@ export class AudioEngine {
     if (!tg) {
       tg = ctx.createGain();
       tg.gain.value = 1;
-      tg.connect(this.getMasterGain(ctx));
+      // Per-track analyser for VU metering
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      tg.connect(analyser);
+      analyser.connect(this.getMasterGain(ctx));
       this.trackGains.set(trackId, tg);
+      this.trackAnalysers.set(trackId, analyser);
     }
     return tg;
+  }
+
+  // ── Real-time VU level reading (0–1 RMS) ──────────────────────────────────
+  /** Returns the RMS level (0–1) for a track, or 0 if not playing. */
+  getTrackLevel(trackId: string): number {
+    const analyser = this.trackAnalysers.get(trackId);
+    if (!analyser) return 0;
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / buf.length);
+  }
+
+  /** Returns the RMS level (0–1) for the master channel, or 0 if not playing. */
+  getMasterLevel(): number {
+    if (!this.masterAnalyser) return 0;
+    const buf = new Uint8Array(this.masterAnalyser.frequencyBinCount);
+    this.masterAnalyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / buf.length);
   }
 
   // ── Preload ────────────────────────────────────────────────────────────────
@@ -267,11 +316,43 @@ export class AudioEngine {
     const now = ctx.currentTime;
 
     if (seamResume) {
-      // CROSSFADE: fade out existing nodes over XFADE_S while new nodes
-      // fade in over the same window. No gap, no silence, no stutter.
-      this._fadeOutAll(ctx, now, XFADE_S);
-      // New nodes start immediately (at now) and fade in over XFADE_S.
-      this._scheduleNodes(ctx, segments, playheadFrame, fps, now, XFADE_S);
+      // SMART SEAM: only fade out clips that are no longer active; only schedule
+      // clips that are genuinely new. This prevents overlap-stutter where a clip
+      // that is already playing gets stopped and immediately restarted at a seam.
+      const incomingClipIds = new Set(segments.map((s) => s.clip.id));
+
+      // Separate currently-playing nodes into "keep" (still active) and "depart" (no longer active)
+      const departedIds: number[] = [];
+      const keptClipIds = new Set<string>();
+      for (const [nodeId, src] of this.activeSources) {
+        const clipId = (src as ActiveSource & { clipId?: string }).clipId;
+        if (clipId && incomingClipIds.has(clipId)) {
+          keptClipIds.add(clipId);
+        } else {
+          departedIds.push(nodeId);
+        }
+      }
+
+      // Fade out departed clips
+      for (const nodeId of departedIds) {
+        const src = this.activeSources.get(nodeId);
+        this.activeSources.delete(nodeId);
+        if (src) {
+          try {
+            src.gainNode.gain.cancelScheduledValues(now);
+            src.gainNode.gain.setValueAtTime(src.gainNode.gain.value, now);
+            src.gainNode.gain.linearRampToValueAtTime(0, now + XFADE_S);
+            const stopAt = Math.max(src.scheduledAt, now) + XFADE_S + 0.001;
+            src.source.stop(stopAt);
+          } catch { /* already stopped */ }
+        }
+      }
+
+      // Schedule only clips that aren't already playing
+      const newSegments = segments.filter((s) => !keptClipIds.has(s.clip.id));
+      if (newSegments.length > 0) {
+        this._scheduleNodes(ctx, newSegments, playheadFrame, fps, now, XFADE_S);
+      }
     } else {
       // HARD START: stop existing nodes immediately, start new ones after
       // a small latency budget to ensure all start() calls are committed.
@@ -330,7 +411,9 @@ export class AudioEngine {
     }
     this.ctx = null;
     this.masterGain = null;
+    this.masterAnalyser = null;
     this.trackGains.clear();
+    this.trackAnalysers.clear();
     this.bufferCache.clear();
     this.activeSources.clear();
     this.pendingFetches.clear();
@@ -404,7 +487,7 @@ export class AudioEngine {
       source.start(startAt, safeSourceOffset, safeDuration);
 
       const nodeId = ++_nodeIdCounter;
-      const entry: ActiveSource = { source, gainNode, scheduledAt: startAt };
+      const entry: ActiveSource & { clipId: string } = { source, gainNode, scheduledAt: startAt, clipId: seg.clip.id };
       this.activeSources.set(nodeId, entry);
 
       // onended uses the monotonic nodeId — never affects a different node

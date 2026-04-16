@@ -208,6 +208,12 @@ interface FlowStatePanelProps {
   isOpen: boolean;
   onClose: () => void;
   onAddImageToMediaPool?: (imageUrl: string, name: string) => void;
+  // Clawbot action handlers — execute real fixes instead of just suggesting
+  onAutoColorMatch?: () => void;
+  onNormalizeAudio?: (targetDb: number) => void;
+  onCloseGaps?: () => void;
+  onOpenBeatSync?: () => void;
+  onOpenSubtitles?: () => void;
 }
 
 type Tab = "assistant" | "projects" | "session" | "learn" | "generate";
@@ -235,7 +241,16 @@ const ASPECT_RATIOS = [
   { value: "4:3",  label: "4:3" },
 ];
 
-export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowStatePanelProps) {
+export function FlowStatePanel({
+  isOpen,
+  onClose,
+  onAddImageToMediaPool,
+  onAutoColorMatch,
+  onNormalizeAudio,
+  onCloseGaps,
+  onOpenBeatSync,
+  onOpenSubtitles,
+}: FlowStatePanelProps) {
   const [user, setUser] = useState<FSUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("assistant");
@@ -271,6 +286,8 @@ export function FlowStatePanel({ isOpen, onClose, onAddImageToMediaPool }: FlowS
   const [genBusy, setGenBusy] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [genImages, setGenImages] = useState<GeneratedImage[]>([]);
+  const [genRefImageUrl, setGenRefImageUrl] = useState<string>("");
+  const [genRefImageDragging, setGenRefImageDragging] = useState(false);
 
   const project        = useEditorStore((s) => s.project);
   const selectedClipId = useEditorStore((s) => s.selectedClipId);
@@ -757,7 +774,18 @@ Be specific, not generic. Surprising insights only.`;
                       </span>
                       <span style={{ flex: 1, lineHeight: 1.4 }}>{issue.message}</span>
                       <button
-                        onClick={() => void sendChat(`Fix this issue: ${issue.message}`)}
+                        onClick={() => {
+                          // Execute the fix directly instead of just sending a chat message
+                          if (issue.type === "gap" && onCloseGaps) {
+                            onCloseGaps();
+                          } else if (issue.type === "clipping" || issue.type === "loudness") {
+                            onNormalizeAudio?.(-14);
+                          } else if (issue.type === "masking" && onOpenBeatSync) {
+                            onOpenBeatSync();
+                          } else {
+                            void sendChat(`Fix this issue: ${issue.message}`);
+                          }
+                        }}
                         style={{
                           background: "rgba(168,85,247,0.2)",
                           border: "1px solid rgba(168,85,247,0.3)",
@@ -770,7 +798,7 @@ Be specific, not generic. Surprising insights only.`;
                           whiteSpace: "nowrap",
                         }}
                       >
-                        Fix →
+                        Fix ✓
                       </button>
                     </div>
                   ))}
@@ -780,13 +808,17 @@ Be specific, not generic. Surprising insights only.`;
               {/* Suggested actions from Clawbot */}
               {suggestedActions.length > 0 && (
                 <div style={{
-                  padding: "8px 12px",
-                  background: "rgba(16,185,129,0.06)",
-                  borderBottom: "1px solid rgba(16,185,129,0.15)",
+                  padding: "10px 14px",
+                  background: "rgba(16,185,129,0.07)",
+                  borderBottom: "1px solid rgba(16,185,129,0.18)",
+                  borderTop: "1px solid rgba(16,185,129,0.12)",
                   flexShrink: 0,
                 }}>
-                  <div style={{ fontSize: 9, fontWeight: 700, color: "#10b981", marginBottom: 5, letterSpacing: "0.05em" }}>CLAWBOT SUGGESTS</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                    <span style={{ fontSize: 12 }}>🤖</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: "#10b981", letterSpacing: "0.07em", textTransform: "uppercase" as const }}>ClawBot Suggests</span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
                     {suggestedActions.slice(0, 3).map((action: any, i: number) => (
                       <button
                         key={i}
@@ -800,6 +832,33 @@ Be specific, not generic. Surprising insights only.`;
                           });
                           // Track tool usage
                           if (action.tool) projectMemory.recordTool(action.tool);
+
+                          // Local actions — execute immediately without API round-trip
+                          if (action.action === "auto_color_match" && onAutoColorMatch) {
+                            onAutoColorMatch();
+                            setSuggestedActions([]);
+                            return;
+                          }
+                          if (action.action === "normalize_audio" && onNormalizeAudio) {
+                            onNormalizeAudio(action.targetDb ?? -14);
+                            setSuggestedActions([]);
+                            return;
+                          }
+                          if (action.action === "close_gaps" && onCloseGaps) {
+                            onCloseGaps();
+                            setSuggestedActions([]);
+                            return;
+                          }
+                          if (action.action === "open_beat_sync" && onOpenBeatSync) {
+                            onOpenBeatSync();
+                            setSuggestedActions([]);
+                            return;
+                          }
+                          if (action.action === "open_subtitles" && onOpenSubtitles) {
+                            onOpenSubtitles();
+                            setSuggestedActions([]);
+                            return;
+                          }
 
                           // External (Layer 3) actions — route through execute-action on the hub
                           const externalActions = ["slack_post", "slack_standup", "notion_create_task", "notion_update_page"];
@@ -838,19 +897,23 @@ Be specific, not generic. Surprising insights only.`;
                         }}
                         style={{
                           background: ["slack_post","slack_standup","notion_create_task","notion_update_page"].includes(action.action)
-                            ? "rgba(168,85,247,0.15)"
-                            : "rgba(16,185,129,0.15)",
+                            ? "rgba(168,85,247,0.12)"
+                            : "rgba(16,185,129,0.1)",
                           border: ["slack_post","slack_standup","notion_create_task","notion_update_page"].includes(action.action)
-                            ? "1px solid rgba(168,85,247,0.3)"
-                            : "1px solid rgba(16,185,129,0.3)",
+                            ? "1px solid rgba(168,85,247,0.4)"
+                            : "1px solid rgba(16,185,129,0.35)",
                           color: ["slack_post","slack_standup","notion_create_task","notion_update_page"].includes(action.action)
                             ? "#c084fc"
                             : "#34d399",
-                          borderRadius: 5,
-                          padding: "4px 9px",
-                          fontSize: 10,
+                          borderRadius: 8,
+                          padding: "9px 12px",
+                          fontSize: 12,
                           cursor: "pointer",
                           fontWeight: 600,
+                          textAlign: "left" as const,
+                          width: "100%",
+                          lineHeight: 1.4,
+                          boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
                         }}
                       >
                         {action.action === "tool" ? `🔧 ${action.tool}` :
@@ -864,9 +927,9 @@ Be specific, not generic. Surprising insights only.`;
                     ))}
                     <button
                       onClick={() => setSuggestedActions([])}
-                      style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 10, cursor: "pointer" }}
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "rgba(255,255,255,0.4)", fontSize: 10, cursor: "pointer", padding: "4px 8px", width: "100%", textAlign: "left" as const }}
                     >
-                      ✕
+                      ✕ Dismiss suggestions
                     </button>
                   </div>
                 </div>
@@ -1158,8 +1221,63 @@ Be specific, not generic. Surprising insights only.`;
                 </div>
               ) : (
                 <>
+                  {/* Reference Image */}
+                  <div style={{ padding: "10px 12px 6px" }}>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 5, fontWeight: 600 }}>REFERENCE IMAGE <span style={{ fontWeight: 400, opacity: 0.6 }}>(optional)</span></div>
+                    <div
+                      onDragOver={e => { e.preventDefault(); setGenRefImageDragging(true); }}
+                      onDragLeave={() => setGenRefImageDragging(false)}
+                      onDrop={e => {
+                        e.preventDefault();
+                        setGenRefImageDragging(false);
+                        const url = e.dataTransfer.getData("text/plain") || e.dataTransfer.getData("text/uri-list");
+                        if (url) setGenRefImageUrl(url);
+                        const file = e.dataTransfer.files[0];
+                        if (file && file.type.startsWith("image/")) {
+                          const reader = new FileReader();
+                          reader.onload = ev => setGenRefImageUrl(ev.target?.result as string ?? "");
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      style={{
+                        border: `1px dashed ${genRefImageDragging ? "rgba(168,85,247,0.7)" : genRefImageUrl ? "rgba(168,85,247,0.5)" : "rgba(255,255,255,0.12)"}`,
+                        borderRadius: 7,
+                        padding: genRefImageUrl ? "4px" : "8px",
+                        background: genRefImageDragging ? "rgba(168,85,247,0.1)" : "rgba(255,255,255,0.03)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        minHeight: 40,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {genRefImageUrl ? (
+                        <>
+                          <img src={genRefImageUrl} alt="ref" style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4, flexShrink: 0 }} />
+                          <div style={{ flex: 1, fontSize: 10, color: "rgba(255,255,255,0.5)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {genRefImageUrl.startsWith("data:") ? "Uploaded image" : genRefImageUrl.split("/").pop()?.slice(0, 40)}
+                          </div>
+                          <button onClick={() => setGenRefImageUrl("")} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.35)", cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>✕</button>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ flex: 1, fontSize: 10, color: "rgba(255,255,255,0.3)", textAlign: "center" }}>
+                            Drop image here or paste URL
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="https://…"
+                            value={genRefImageUrl}
+                            onChange={e => setGenRefImageUrl(e.target.value)}
+                            style={{ flex: 2, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, color: "#e8e8e8", fontSize: 10, padding: "4px 7px", outline: "none" }}
+                          />
+                        </>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Prompt */}
-                  <div style={{ padding: "12px 12px 8px" }}>
+                  <div style={{ padding: "6px 12px 8px" }}>
                     <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 6, fontWeight: 600 }}>PROMPT</div>
                     <textarea
                       className="fs-gen-prompt"
@@ -1226,11 +1344,9 @@ Be specific, not generic. Surprising insights only.`;
                         setGenBusy(true);
                         setGenError(null);
                         try {
-                          const res = await fsApi.apiCall("/api/264pro/generate-image", "POST", {
-                            prompt,
-                            model: genModel,
-                            aspectRatio: genAspect,
-                          }) as { imageUrl?: string; error?: string };
+                          const genBody: Record<string, string> = { prompt, model: genModel, aspectRatio: genAspect };
+                          if (genRefImageUrl.trim()) genBody.referenceImageUrl = genRefImageUrl.trim();
+                          const res = await fsApi.apiCall("/api/264pro/generate-image", "POST", genBody) as { imageUrl?: string; error?: string };
                           if (res?.error) throw new Error(res.error);
                           const url = res?.imageUrl;
                           if (!url) throw new Error("No image returned");

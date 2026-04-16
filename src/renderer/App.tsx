@@ -703,6 +703,7 @@ export default function App() {
   // ── Storyboard ────────────────────────────────────────────────────────────
   const [storyboardOpen, setStoryboardOpen] = useState(false);
   const [editScopesOpen, setEditScopesOpen] = useState(false);
+  const [colorScopesOpen, setColorScopesOpen] = useState(true);
 
   // ── Viewer maximize ────────────────────────────────────────────────────────
   // When true: both side panels collapse and timeline shrinks to minimum
@@ -1868,14 +1869,24 @@ export default function App() {
     if (!window.editorApi) { setBridgeReady(false); setExportMessage("Export unavailable."); return; }
     setExportMessage(null);
     if (!segments.length) { setExportMessage("Add clips before exporting."); return; }
+    // Guard: don't allow concurrent exports
+    if (exportBusy) return;
     const codec = opts?.codec;
     const ext = (codec === "libvpx-vp9") ? "webm" : (codec === "prores_ks") ? "mov" : "mp4";
     const suggestedName = `${project.sequence.name}.${ext}`;
+    // Safety timeout — reset exportBusy after 10 minutes max regardless of export state
+    let safetyTimer: ReturnType<typeof setTimeout> | null = null;
     try {
       const outputPath = await window.editorApi.chooseExportFile(suggestedName);
       if (!outputPath) return;
       setExportBusy(true);
       setExportProgress(0);
+      // Safety timeout: reset busy flag if export hangs for >10 minutes
+      safetyTimer = setTimeout(() => {
+        setExportBusy(false);
+        setExportProgress(0);
+        setExportMessage("✗ Export timed out after 10 minutes.");
+      }, 10 * 60 * 1000);
       // Subscribe to progress events
       const unsubProgress = window.editorApi.onExportProgress?.((pct) => {
         setExportProgress(pct);
@@ -1906,6 +1917,7 @@ export default function App() {
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : "Render failed.");
     } finally {
+      if (safetyTimer) clearTimeout(safetyTimer);
       setExportBusy(false);
     }
   }
@@ -3694,9 +3706,32 @@ export default function App() {
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
               />
-              {/* Professional Video Scopes — live pixel data via Canvas2D */}
-              <div className="color-scopes-strip">
-                <VideoScopesPanel videoRef={colorPageVideoRef} width={300} height={160} refreshMs={150} />
+              {/* Professional Video Scopes — collapsible strip */}
+              <div className="color-scopes-strip" style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  title={colorScopesOpen ? "Hide Scopes" : "Show Scopes"}
+                  onClick={() => setColorScopesOpen(v => !v)}
+                  style={{
+                    position: "absolute",
+                    top: 4,
+                    right: 4,
+                    zIndex: 10,
+                    background: "rgba(0,0,0,0.55)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: 5,
+                    color: "rgba(255,255,255,0.7)",
+                    fontSize: 10,
+                    padding: "2px 7px",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  {colorScopesOpen ? "▾ Scopes" : "▸ Scopes"}
+                </button>
+                {colorScopesOpen && (
+                  <VideoScopesPanel videoRef={colorPageVideoRef} width={300} height={160} refreshMs={150} />
+                )}
               </div>
             </div>
 
@@ -3818,6 +3853,7 @@ export default function App() {
               duckingSettings={project.duckingSettings}
               onSetDuckingSettings={setDuckingSettings}
               project={project}
+              onAddAudioTrack={() => addTrack("audio")}
             />
           </div>
         )}
@@ -3861,6 +3897,11 @@ export default function App() {
       <FlowStatePanel
         isOpen={flowstatePanelOpen}
         onClose={() => setFlowstatePanelOpen(false)}
+        onAutoColorMatch={() => { autoColorMatch(); toast.success("🎨 Auto Color Match applied"); }}
+        onNormalizeAudio={(db) => { normalizeAudioLevels(db as -14 | -23); toast.success(`🎚 Audio normalized to ${db} LUFS`); }}
+        onCloseGaps={() => { closeAllGaps(); toast.success("✅ All gaps closed"); }}
+        onOpenBeatSync={() => { setBeatSyncOpen(true); setFlowstatePanelOpen(false); }}
+        onOpenSubtitles={() => { setSubtitlesPanelOpen(true); setFlowstatePanelOpen(false); }}
         onAddImageToMediaPool={(imageUrl, name) => {
           const newAsset: import("../shared/models").MediaAsset = {
             id: `ai_img_${Date.now()}`,
@@ -3939,10 +3980,13 @@ export default function App() {
               ))}
             </div>
             {clawbotSuggestions.length > 0 && (
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.08em", marginBottom: 8 }}>SUGGESTIONS</div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ fontSize: 13 }}>🤖</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: "#a855f7", letterSpacing: "0.07em", textTransform: "uppercase" as const }}>ClawBot Analysis</span>
+                </div>
                 {clawbotSuggestions.map((s, i) => (
-                  <div key={i} style={{ fontSize: 12, color: "#cbd5e1", padding: "6px 10px", marginBottom: 4, background: "rgba(255,255,255,0.04)", borderRadius: 6 }}>
+                  <div key={i} style={{ fontSize: 12, color: "#e2e8f0", padding: "9px 12px", marginBottom: 6, background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.25)", borderRadius: 8, lineHeight: 1.5 }}>
                     {s}
                   </div>
                 ))}

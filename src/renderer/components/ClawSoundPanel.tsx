@@ -15,6 +15,8 @@ interface ClawSoundPanelProps {
   onSetDuckingSettings?: (settings: DuckingSettings[]) => void;
   /** Full project — required for stems export */
   project?: EditorProject;
+  /** Callback to add a new audio track when panel is empty */
+  onAddAudioTrack?: () => void;
 }
 
 const DEFAULT_EQ_BANDS: EQBand[] = [
@@ -72,7 +74,7 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project }: ClawSoundPanelProps) {
+export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project, onAddAudioTrack }: ClawSoundPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
@@ -341,8 +343,36 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
       <div style={{ padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>🎚 ClawSound</span>
         <span style={{ marginLeft: "auto", fontSize: 10, color: "#7c3aed", fontWeight: 700, letterSpacing: "0.08em" }}>264 PRO AUDIO</span>
+        {onAddAudioTrack && (
+          <button
+            onClick={onAddAudioTrack}
+            title="Add audio track"
+            style={{ padding: "3px 9px", borderRadius: 6, border: "1px solid rgba(124,58,237,0.4)", background: "rgba(124,58,237,0.12)", color: "#c4b5fd", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+          >+ Audio Track</button>
+        )}
       </div>
 
+      {/* Empty state — no audio tracks yet */}
+      {audioTracks.length === 0 && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: 32 }}>
+          <div style={{ fontSize: 40 }}>🎵</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>No Audio Tracks</div>
+          <div style={{ fontSize: 12, color: "#64748b", textAlign: "center", maxWidth: 280, lineHeight: 1.6 }}>
+            Add an audio track to your timeline to mix, EQ, and master your audio here. Drag audio clips onto your timeline or add an audio track below.
+          </div>
+          {onAddAudioTrack && (
+            <button
+              onClick={onAddAudioTrack}
+              style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#7c3aed,#a855f7)", color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", boxShadow: "0 4px 20px rgba(124,58,237,0.35)" }}
+            >+ Add Audio Track</button>
+          )}
+          <div style={{ fontSize: 10, color: "#334155", textAlign: "center" }}>
+            Tip: You can also drag audio files directly from the Media Pool to the timeline
+          </div>
+        </div>
+      )}
+
+      {audioTracks.length > 0 && (<>
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         {/* Track list */}
         <div style={{ width: 120, borderRight: "1px solid rgba(255,255,255,0.07)", overflowY: "auto", padding: "6px 0" }}>
@@ -796,6 +826,7 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
           {stemsExporting ? "⏳ Exporting Stems…" : "⬇ Export Stems"}
         </button>
       </div>
+      </>)}{/* end audioTracks.length > 0 */}
     </div>
   );
 }

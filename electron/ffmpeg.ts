@@ -561,7 +561,28 @@ export async function exportSequence(
   const assetInputIndexes = new Map(
     uniqueAssets.map((asset, index) => [asset.id, index])
   );
+
+  // Count how many times each asset is used across video segments so we can
+  // insert split[] filters for assets used more than once. FFmpeg cannot read
+  // the same input stream multiple times in a filter graph without a split.
+  const assetUsageCounts = new Map<string, number>();
+  for (const seg of videoSegments) {
+    assetUsageCounts.set(seg.asset.id, (assetUsageCounts.get(seg.asset.id) ?? 0) + 1);
+  }
+  // Tracks how many times we've already pulled from each asset so we pick
+  // the correct split output label (split[out0][out1]…).
+  const assetUsageIndex = new Map<string, number>();
+
   const filterParts: string[] = [];
+  // Pre-generate split nodes for multi-use assets
+  for (const [assetId, count] of assetUsageCounts.entries()) {
+    if (count > 1) {
+      const inputIdx = assetInputIndexes.get(assetId)!;
+      const splitOuts = Array.from({ length: count }, (_, i) => `[split_${assetId}_${i}:v]`).join("");
+      filterParts.push(`[${inputIdx}:v]split=${count}${splitOuts}`);
+    }
+  }
+
   let concatInputs = "";
 
   for (const [index, segment] of videoSegments.entries()) {
@@ -571,7 +592,18 @@ export async function exportSequence(
       throw new Error(`Missing asset input for clip ${segment.clip.id}`);
     }
 
-    const inputLabel = String(inputIndex);
+    // Use split output for multiply-referenced assets, direct input for single-use
+    const useCount = assetUsageCounts.get(segment.asset.id) ?? 1;
+    // inputRef is the bracketed stream reference used at the start of video filters
+    let inputRef: string;
+    if (useCount > 1) {
+      const useIdx = assetUsageIndex.get(segment.asset.id) ?? 0;
+      assetUsageIndex.set(segment.asset.id, useIdx + 1);
+      // split outputs are already labelled with :v direction in the split node
+      inputRef = `[split_${segment.asset.id}_${useIdx}:v]`;
+    } else {
+      inputRef = `[${inputIndex}:v]`;
+    }
     const start = segment.sourceInSeconds.toFixed(3);
     const end = segment.sourceOutSeconds.toFixed(3);
     const duration = segment.durationSeconds.toFixed(3);
@@ -866,7 +898,7 @@ export async function exportSequence(
     }
 
     filterParts.push(
-      `[${inputLabel}:v]${videoFilters.join(",")}[v${clipIndex}]`
+      `${inputRef}${videoFilters.join(",")}[v${clipIndex}]`
     );
 
     // ── Audio filter chain ─────────────────────────────────────────────────
@@ -898,8 +930,9 @@ export async function exportSequence(
     }
 
     if (segment.asset.hasAudio) {
+      // Audio always reads directly from the input index (no split needed — audio streams are independent)
       filterParts.push(
-        `[${inputLabel}:a]${audioFilters.join(",")}[a${clipIndex}]`
+        `[${inputIndex}:a]${audioFilters.join(",")}[a${clipIndex}]`
       );
     } else {
       filterParts.push(

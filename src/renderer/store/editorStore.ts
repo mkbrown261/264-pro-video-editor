@@ -2960,40 +2960,46 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Auto Color Match", (state) => {
       const segs = buildTimelineSegments(state.project.sequence, state.project.assets)
         .filter(s => s.track.kind === "video");
-      if (segs.length < 2) return state;
+      if (segs.length < 1) return state;
 
-      // Score each clip by how far it deviates from neutral — lowest score = reference
-      const scoreGrade = (cg: ColorGrade | null | undefined): number => {
-        if (!cg) return 0;
-        return (
-          Math.abs(cg.exposure ?? 0) +
-          Math.abs(cg.contrast ?? 0) +
-          Math.abs(cg.saturation ? cg.saturation - 1 : 0) +
-          Math.abs(cg.temperature ?? 0)
-        );
-      };
+      // Compute the average exposure, temperature, contrast, saturation across all clips
+      // that HAVE a color grade. Use those averages as the target for ungraded clips.
+      const gradedSegs = segs.filter(s => s.clip.colorGrade != null);
 
-      let refIdx = 0;
-      let refScore = Infinity;
-      segs.forEach((seg, i) => {
-        const score = scoreGrade(seg.clip.colorGrade);
-        if (score < refScore) { refScore = score; refIdx = i; }
-      });
-      const ref = segs[refIdx];
-      const refGrade = ref.clip.colorGrade ?? createDefaultColorGrade();
+      // If no clip has been manually graded yet, apply a sensible cinematic base grade
+      // so the user sees an immediate result (avoids "does nothing" for fresh timelines).
+      const baseGrade: Partial<ColorGrade> = gradedSegs.length === 0
+        ? { exposure: 0, contrast: 0.08, saturation: 0.95, temperature: 3 }
+        : {
+            exposure:    gradedSegs.reduce((s, g) => s + (g.clip.colorGrade!.exposure    ?? 0),   0) / gradedSegs.length,
+            temperature: gradedSegs.reduce((s, g) => s + (g.clip.colorGrade!.temperature ?? 0),   0) / gradedSegs.length,
+            contrast:    gradedSegs.reduce((s, g) => s + (g.clip.colorGrade!.contrast    ?? 0),   0) / gradedSegs.length,
+            saturation:  gradedSegs.reduce((s, g) => s + (g.clip.colorGrade!.saturation  ?? 1),   0) / gradedSegs.length,
+          };
 
       const newClips = state.project.sequence.clips.map(clip => {
         const seg = segs.find(s => s.clip.id === clip.id);
-        if (!seg || clip.id === ref.clip.id) return clip;
+        if (!seg) return clip;
         const existing = clip.colorGrade ?? createDefaultColorGrade();
         return {
           ...clip,
+          colorGradeEnabled: true,
           colorGrade: {
             ...existing,
-            exposure:    existing.exposure    * 0.3 + (refGrade.exposure    ?? 0) * 0.7,
-            temperature: (existing.temperature ?? 0) * 0.3 + (refGrade.temperature ?? 0) * 0.7,
-            contrast:    (existing.contrast    ?? 0) * 0.3 + (refGrade.contrast    ?? 0) * 0.7,
-            saturation:  (existing.saturation  ?? 1) * 0.3 + (refGrade.saturation  ?? 1) * 0.7,
+            // Blend 50% toward the target — clips with existing grades move toward average,
+            // clips without grades adopt the base grade directly.
+            exposure:    clip.colorGrade
+              ? (existing.exposure    * 0.5 + (baseGrade.exposure    ?? 0) * 0.5)
+              : (baseGrade.exposure   ?? 0),
+            temperature: clip.colorGrade
+              ? ((existing.temperature ?? 0) * 0.5 + (baseGrade.temperature ?? 0) * 0.5)
+              : (baseGrade.temperature ?? 0),
+            contrast:    clip.colorGrade
+              ? ((existing.contrast    ?? 0) * 0.5 + (baseGrade.contrast    ?? 0) * 0.5)
+              : (baseGrade.contrast    ?? 0),
+            saturation:  clip.colorGrade
+              ? ((existing.saturation  ?? 1) * 0.5 + (baseGrade.saturation  ?? 1) * 0.5)
+              : (baseGrade.saturation  ?? 1),
           },
         };
       });
