@@ -5,10 +5,10 @@ interface PrecisionTrimPanelProps {
   project: EditorProject;
   fps: number;
   selectedClipId: string | null;
-  onRippleTrim: (clipId: string, side: 'start' | 'end', deltaFrames: number) => void;
-  onRollTrim: (clipId: string, deltaFrames: number) => void;
-  onSlip: (clipId: string, deltaFrames: number) => void;
-  onSlide: (clipId: string, deltaFrames: number) => void;
+  onRippleTrim?: (clipId: string, side: 'start' | 'end', deltaFrames: number) => void;
+  onRollTrim?: (clipId: string, deltaFrames: number) => void;
+  onSlip?: (clipId: string, deltaFrames: number) => void;
+  onSlide?: (clipId: string, deltaFrames: number) => void;
   onClose: () => void;
 }
 
@@ -39,11 +39,11 @@ export const PrecisionTrimPanel: React.FC<PrecisionTrimPanelProps> = ({
   const applyDelta = useCallback((delta: number) => {
     if (!selectedClipId) return;
     switch (mode) {
-      case 'ripple_start': onRippleTrim(selectedClipId, 'start', delta); break;
-      case 'ripple_end':   onRippleTrim(selectedClipId, 'end', delta); break;
-      case 'roll':         onRollTrim(selectedClipId, delta); break;
-      case 'slip':         onSlip(selectedClipId, delta); break;
-      case 'slide':        onSlide(selectedClipId, delta); break;
+      case 'ripple_start': onRippleTrim?.(selectedClipId, 'start', delta); break;
+      case 'ripple_end':   onRippleTrim?.(selectedClipId, 'end', delta); break;
+      case 'roll':         onRollTrim?.(selectedClipId, delta); break;
+      case 'slip':         onSlip?.(selectedClipId, delta); break;
+      case 'slide':        onSlide?.(selectedClipId, delta); break;
     }
   }, [selectedClipId, mode, onRippleTrim, onRollTrim, onSlip, onSlide]);
 
