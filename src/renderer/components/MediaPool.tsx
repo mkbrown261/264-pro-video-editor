@@ -464,8 +464,13 @@ function MediaPoolImpl({
         filterType === "all" ? true :
         filterType === "audio" ? a.hasAudio && a.durationSeconds < 1 :
         true; // video — show everything for now
-      // Bin filter: null = all assets, otherwise only assets in that bin
-      const matchesBin = activeBinId === null ? true : assetBins[a.id] === activeBinId;
+      // Bin filter: null = all, smart bins (__ prefix), or manual bin id
+      let matchesBin = true;
+      if (activeBinId === '__smart_video') matchesBin = !a.hasAudio || a.durationSeconds >= 1;
+      else if (activeBinId === '__smart_audio') matchesBin = a.hasAudio && a.durationSeconds > 0 && !(a.sourcePath?.match(/\.(mp4|mov|avi|mkv|webm|hevc)$/i));
+      else if (activeBinId === '__smart_short') matchesBin = a.durationSeconds > 0 && a.durationSeconds < 30;
+      else if (activeBinId === '__smart_recent') matchesBin = true; // date sort handled by sortAssets
+      else if (activeBinId !== null) matchesBin = assetBins[a.id] === activeBinId;
       return matchesSearch && matchesType && matchesBin;
     }),
     sortKey,
@@ -565,6 +570,29 @@ function MediaPoolImpl({
               >
                 <span style={{ opacity: 0.6 }}>&#128240;</span> All Media <span style={{ marginLeft: 'auto', opacity: 0.4 }}>{assets.length}</span>
               </button>
+              {/* Smart Bins — auto-filter virtual bins */}
+              {[{
+                id: '__smart_video', label: '🎥 Video', filter: (a: import('../../shared/models').MediaAsset) => !a.hasAudio || a.durationSeconds >= 1,
+              }, {
+                id: '__smart_audio', label: '🎵 Audio', filter: (a: import('../../shared/models').MediaAsset) => a.hasAudio && a.durationSeconds > 0 && !a.sourcePath?.match(/\.(mp4|mov|avi|mkv|webm|hevc)$/i),
+              }, {
+                id: '__smart_short', label: '⚡ Shorts (<30s)', filter: (a: import('../../shared/models').MediaAsset) => a.durationSeconds > 0 && a.durationSeconds < 30,
+              }, {
+                id: '__smart_recent', label: '🕒 Recent', filter: (_a: import('../../shared/models').MediaAsset) => true, // show most recent 10
+              }].map(smart => {
+                const count = smart.id === '__smart_recent' ? Math.min(assets.length, 10) : assets.filter(smart.filter).length;
+                if (count === 0 && smart.id !== '__smart_recent') return null;
+                return (
+                  <button
+                    key={smart.id}
+                    type="button"
+                    onClick={() => setActiveBinId(smart.id as any)}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 2px 22px', fontSize: 10, background: activeBinId === smart.id ? 'rgba(59,138,247,0.12)' : 'none', border: 'none', cursor: 'pointer', color: activeBinId === smart.id ? '#3b8af7' : 'var(--text-s)', textAlign: 'left', fontStyle: 'italic' }}
+                  >
+                    {smart.label} <span style={{ marginLeft: 'auto', opacity: 0.4 }}>{count}</span>
+                  </button>
+                );
+              })}
               {bins.filter(b => !b.parentId).map(bin => {
                 const count = Object.values(assetBins).filter(bid => bid === bin.id).length;
                 return (

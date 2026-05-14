@@ -71,6 +71,7 @@ import { updateFromCut, updateFromGrade, updateFromTransition } from "./lib/Claw
 import { StyleProfilePanel } from "./components/StyleProfilePanel";
 import { ClawFlowPublishPanel } from "./components/ClawFlowPublishPanel";
 import { ProjectIntelligencePanel } from "./components/ProjectIntelligencePanel";
+import { TimelineIndexPanel } from "./components/TimelineIndexPanel";
 
 // Pages: edit | color | fusion | audio | publish
 type AppPage = "edit" | "color" | "fusion" | "audio" | "publish";
@@ -677,6 +678,7 @@ export default function App() {
   const [mixerOpen, setMixerOpen] = useState(() => {
     try { return localStorage.getItem("264pro_mixer_open") === "true"; } catch { return false; }
   });
+  const [timelineIndexOpen, setTimelineIndexOpen] = useState(false);
 
   // Audio engine ref (populated by ViewerPanel's onAudioEngineRef callback)
   const audioEngineRef = useRef<import("./lib/AudioScheduler").AudioEngine | null>(null);
@@ -2831,6 +2833,14 @@ export default function App() {
             🎚 Mixer
           </button>
           <button
+            className={`panel-toggle-btn${timelineIndexOpen ? " on" : ""}`}
+            onClick={() => setTimelineIndexOpen(v => !v)}
+            title="Timeline Index — search clips, markers and color labels"
+            type="button"
+          >
+            🗂 Index
+          </button>
+          <button
             className={`panel-toggle-btn${renderQueueOpen ? " on" : ""}`}
             onClick={() => setRenderQueueOpen((v) => !v)}
             title="Render Queue"
@@ -3366,6 +3376,22 @@ export default function App() {
               onAddToQueue={handleAddToQueue}
               />
             </div>{/* /inspector-collapse */}
+
+            {/* ── Timeline Index Panel (collapsible, overlays media area) ── */}
+            {timelineIndexOpen && (
+              <div style={{ position: 'absolute', top: 0, left: 0, width: 220, height: '100%', zIndex: 30, boxShadow: '4px 0 16px rgba(0,0,0,0.5)' }}>
+                <TimelineIndexPanel
+                  clips={project.sequence.clips}
+                  tracks={project.sequence.tracks}
+                  markers={project.sequence.markers ?? []}
+                  assets={project.assets}
+                  fps={project.sequence.settings.fps}
+                  playheadFrame={playback.playheadFrame}
+                  onSeek={(frame) => { seekToFrame(frame); }}
+                  onSelectClip={(clipId) => { selectClip(clipId); }}
+                />
+              </div>
+            )}
 
             {/* Timeline resize handle — stays in grid-area: tl-resize */}
             <div
