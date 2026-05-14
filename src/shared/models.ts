@@ -843,10 +843,22 @@ export type EditorSequence = TimelineSequence;
 
 // ── EditorProject ─────────────────────────────────────────────────────────────
 
+/** Media Pool bin (folder) for organizing assets */
+export interface MediaBin {
+  id: string;
+  name: string;
+  parentId?: string; // undefined = root level
+  color?: string;    // optional color tag
+}
+
 export interface EditorProject {
   id: string;
   name: string;
   assets: MediaAsset[];
+  /** Optional bin folders for media pool organization */
+  bins?: MediaBin[];
+  /** Asset-to-bin mapping: assetId -> binId (undefined = root/unsorted) */
+  assetBins?: Record<string, string>;
   sequence: TimelineSequence;
   subtitleCues?: SubtitleCue[];
   transcripts?: Record<string, Transcript>;   // keyed by assetId
@@ -907,6 +919,15 @@ export interface ExportRequest {
   outputHeight?: number;
   /** Loudness normalization target in LUFS. -14 = YouTube/Spotify, -23 = Broadcast/EBU R128. Omit to skip normalization. */
   loudnormTarget?: -14 | -23;
+  /** Optional burn-in overlays baked into the exported video. */
+  burnIn?: {
+    /** Show timecode (HH:MM:SS:FF) in top-left corner */
+    timecode?: boolean;
+    /** Watermark text (e.g. channel name or © notice) shown in bottom-right */
+    watermarkText?: string;
+    /** Watermark opacity 0–1 (default 0.7) */
+    watermarkOpacity?: number;
+  };
 }
 
 export interface ExportResponse {

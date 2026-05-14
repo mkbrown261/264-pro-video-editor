@@ -984,6 +984,29 @@ export async function exportSequence(
   // Use [afinal] if audio-only tracks were mixed in, otherwise use [aout]
   let finalAudioLabel = allAudioLabels.length > 0 ? "[afinal]" : "[aout]";
 
+  // ── Burn-in overlays (optional) — timecode and/or watermark text ────────────
+  if (request.burnIn?.timecode || request.burnIn?.watermarkText) {
+    const burnFilters: string[] = [];
+    if (request.burnIn.timecode) {
+      // Timecode overlay: top-left, white text with dark shadow
+      burnFilters.push(
+        `drawtext=fontfile=/System/Library/Fonts/Helvetica.ttc:text='%{pts\\:hms}':fontsize=24:fontcolor=white:bordercolor=black:borderw=2:x=20:y=20`
+      );
+    }
+    if (request.burnIn.watermarkText) {
+      const opacity = request.burnIn.watermarkOpacity ?? 0.7;
+      const escaped = request.burnIn.watermarkText.replace(/'/g, "\\'").replace(/:/g, '\\:');
+      burnFilters.push(
+        `drawtext=fontfile=/System/Library/Fonts/Helvetica.ttc:text='${escaped}':fontsize=22:fontcolor=white@${opacity.toFixed(2)}:bordercolor=black@${(opacity * 0.5).toFixed(2)}:borderw=1:x=w-tw-20:y=h-th-20`
+      );
+    }
+    // Chain burn-in filters onto vout
+    filterParts.push(`[vout]${burnFilters.join(',')}[vout_burned]`);
+    // Remap: replace [vout] reference in args with [vout_burned]
+    // We'll use a flag to select the right map label below
+  }
+  const finalVideoLabel = (request.burnIn?.timecode || request.burnIn?.watermarkText) ? '[vout_burned]' : '[vout]';
+
   // ── Loudness normalization (optional) — EBU R128 / YouTube standard ─────────
   if (request.loudnormTarget) {
     const target = request.loudnormTarget;
@@ -1055,7 +1078,7 @@ export async function exportSequence(
     "-filter_complex",
     filterParts.join(";"),
     "-map",
-    "[vout]",
+    finalVideoLabel,  // [vout] normally, [vout_burned] when burn-in overlays are active
     "-map",
     finalAudioLabel,  // BUG #3 fix: use [afinal] when audio-only tracks are mixed in
     ...getVideoCodecArgs(codec, hwEncoder),

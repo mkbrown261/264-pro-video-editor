@@ -1175,6 +1175,8 @@ function ExportPresetPanel({
   const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
   const [selectedCodec, setSelectedCodec] = useState<ExportCodec>("libx264");
   const [youtubeNormalize, setYoutubeNormalize] = useState(true); // default on — -14 LUFS
+  const [burnInTimecode, setBurnInTimecode]     = useState(false);
+  const [watermarkText, setWatermarkText]       = useState('');
   const [selectedResIdx, setSelectedResIdx] = useState<number>(0); // 0 = Original
   const preset = EXPORT_PRESETS.find((p) => p.id === selectedPreset) ?? EXPORT_PRESETS[0];
   const resPre = EXPORT_RESOLUTION_PRESETS[selectedResIdx] ?? EXPORT_RESOLUTION_PRESETS[0];
@@ -1394,6 +1396,28 @@ function ExportPresetPanel({
               />
               🎧 YouTube Normalize (-14 LUFS)
             </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 4, fontSize: 11, color: "var(--text-s)", cursor: "pointer", userSelect: "none" }}
+              title="Burn timecode (HH:MM:SS) into the top-left corner of the exported video."
+            >
+              <input
+                type="checkbox"
+                checked={burnInTimecode}
+                onChange={e => setBurnInTimecode(e.target.checked)}
+                style={{ accentColor: "#f7c948", width: 13, height: 13, cursor: "pointer" }}
+              />
+              ⏱ Burn Timecode
+            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+              <span style={{ fontSize: 11, color: "var(--text-s)", whiteSpace: "nowrap" }}>Watermark:</span>
+              <input
+                type="text"
+                placeholder="e.g. @YourChannel"
+                value={watermarkText}
+                onChange={e => setWatermarkText(e.target.value)}
+                style={{ flex: 1, fontSize: 11, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, padding: "2px 6px", color: "var(--text-p)" }}
+              />
+            </div>
             <button
               className="panel-action export-btn"
               style={{ marginTop: 4, background: "rgba(59,138,247,0.12)", borderColor: "rgba(59,138,247,0.35)", color: "#3b8af7" }}
@@ -1408,6 +1432,7 @@ function ExportPresetPanel({
                   outputHeight: resPre.height,
                   label: `${preset.label} · ${codecLabel} · ${resLabel}${normLabel}`,
                   loudnormTarget: youtubeNormalize ? -14 : undefined,
+                  burnIn: (burnInTimecode || !!watermarkText.trim()) ? { timecode: burnInTimecode, watermarkText: watermarkText.trim() || undefined } : undefined,
                 });
               }}
               type="button"

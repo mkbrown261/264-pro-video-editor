@@ -597,8 +597,12 @@ export default function App() {
   const fixedPlayheadMode = useEditorStore((s) => s.fixedPlayheadMode);
 
   // Precision Trim
-  const rippleTrim = useEditorStore((s) => s.rippleTrim);
-  const rollTrim   = useEditorStore((s) => s.rollTrim);
+  const rippleTrim    = useEditorStore((s) => s.rippleTrim);
+  const rollTrim      = useEditorStore((s) => s.rollTrim);
+  const createBin     = useEditorStore((s) => s.createBin);
+  const renameBin     = useEditorStore((s) => s.renameBin);
+  const deleteBin     = useEditorStore((s) => s.deleteBin);
+  const moveAssetToBin = useEditorStore((s) => s.moveAssetToBin);
   const slip       = useEditorStore((s) => s.slip);
   const slide      = useEditorStore((s) => s.slide);
   const toggleFixedPlayheadMode = useEditorStore((s) => s.toggleFixedPlayheadMode);
@@ -1923,7 +1927,7 @@ export default function App() {
   }
 
   // ── Render Queue ───────────────────────────────────────────────────────────
-  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23 }) {
+  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number } }) {
     const job: RenderJob = {
       id: `rj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       label: opts.label,
@@ -1934,6 +1938,7 @@ export default function App() {
       progress: 0,
       createdAt: Date.now(),
       loudnormTarget: opts.loudnormTarget,
+      burnIn: opts.burnIn,
     };
     setRenderJobs((prev) => [...prev, job]);
     setRenderQueueOpen(true);
@@ -1981,6 +1986,7 @@ export default function App() {
           outputWidth: pendingJob.outputWidth,
           outputHeight: pendingJob.outputHeight,
           loudnormTarget: pendingJob.loudnormTarget,
+          burnIn: pendingJob.burnIn,
         });
         setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "done" as const, progress: 100, outputPath: result.outputPath } : j));
       } catch (err) {
@@ -3121,6 +3127,12 @@ export default function App() {
                 fsTier={fsTier}
                 fsLinked={fsLinked}
                 onImageToVideo={(asset) => setImageToVideoAsset(asset)}
+                bins={project.bins}
+                assetBins={project.assetBins}
+                onCreateBin={createBin}
+                onRenameBin={renameBin}
+                onDeleteBin={deleteBin}
+                onMoveAssetToBin={moveAssetToBin}
               />
             </div>
 

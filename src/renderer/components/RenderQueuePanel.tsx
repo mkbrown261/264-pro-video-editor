@@ -26,6 +26,7 @@ export interface RenderJob {
   errorMessage?: string;   // set on error
   createdAt: number;       // Date.now()
   loudnormTarget?: -14 | -23; // optional loudness normalization
+  burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number };
 }
 
 // ── Batch Export Presets (GAP D) ──────────────────────────────────────────────

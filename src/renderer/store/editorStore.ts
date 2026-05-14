@@ -281,6 +281,11 @@ interface EditorStore {
   // ── ClawFlow AI ──
   autoColorMatch: () => void;
   normalizeAudioLevels: (targetDb: -14 | -23) => void;
+  // ── Media Bins ───────────────────────────────────────────────────────────────
+  createBin: (name: string, parentId?: string) => string;
+  renameBin: (binId: string, name: string) => void;
+  deleteBin: (binId: string) => void;
+  moveAssetToBin: (assetId: string, binId: string | null) => void;
   closeAllGaps: () => void;
   // ── Multicam Audio Sync ──
   syncMulticamClips: (clipIds: string[], offsetsSeconds: number[]) => void;
@@ -3035,6 +3040,50 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         },
       };
     }));
+  },
+
+  // ── Media Bins ───────────────────────────────────────────────────────────────
+  createBin: (name, parentId) => {
+    const id = `bin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    set((state) => ({
+      project: {
+        ...state.project,
+        bins: [...(state.project.bins ?? []), { id, name, parentId }],
+      },
+    }));
+    return id;
+  },
+
+  renameBin: (binId, name) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        bins: (state.project.bins ?? []).map((b) => b.id === binId ? { ...b, name } : b),
+      },
+    }));
+  },
+
+  deleteBin: (binId) => {
+    set((state) => {
+      // Remove bin and un-assign any assets in it
+      const assetBins = { ...(state.project.assetBins ?? {}) };
+      Object.keys(assetBins).forEach((aid) => { if (assetBins[aid] === binId) delete assetBins[aid]; });
+      return {
+        project: {
+          ...state.project,
+          bins: (state.project.bins ?? []).filter((b) => b.id !== binId && b.parentId !== binId),
+          assetBins,
+        },
+      };
+    });
+  },
+
+  moveAssetToBin: (assetId, binId) => {
+    set((state) => {
+      const assetBins = { ...(state.project.assetBins ?? {}) };
+      if (binId === null) { delete assetBins[assetId]; } else { assetBins[assetId] = binId; }
+      return { project: { ...state.project, assetBins } };
+    });
   },
 
   closeAllGaps: () => {

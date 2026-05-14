@@ -5,7 +5,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import ReactDOM from "react-dom";
-import type { ClipTransitionType, MediaAsset } from "../../shared/models";
+import type { ClipTransitionType, MediaAsset, MediaBin } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 import { formatDuration, formatFileSize } from "../lib/format";
 import { TransitionsPanel } from "./TransitionsPanel";
@@ -30,6 +30,14 @@ interface MediaPoolProps {
   fsLinked?: boolean;
   /** Callback when Image-to-Video is requested for an image asset */
   onImageToVideo?: (asset: MediaAsset) => void;
+  /** Media bins (folders) for organizing assets */
+  bins?: MediaBin[];
+  /** assetId → binId mapping */
+  assetBins?: Record<string, string>;
+  onCreateBin?: (name: string) => void;
+  onRenameBin?: (binId: string, name: string) => void;
+  onDeleteBin?: (binId: string) => void;
+  onMoveAssetToBin?: (assetId: string, binId: string | null) => void;
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -396,6 +404,12 @@ export function MediaPool({
   fsTier,
   fsLinked,
   onImageToVideo,
+  bins = [],
+  assetBins = {},
+  onCreateBin,
+  onRenameBin,
+  onDeleteBin,
+  onMoveAssetToBin,
 }: MediaPoolProps) {
   const isSubscribed = (fsLinked === true) && (fsTier !== undefined) && (fsTier !== "free");
   const [activeTab, setActiveTab] = useState<"media" | "transitions">("media");
@@ -406,6 +420,14 @@ export function MediaPool({
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [filterType, setFilterType] = useState<"all" | "video" | "audio">("all");
+  // ── Bin state ──
+  const [activeBinId, setActiveBinId] = useState<string | null>(null); // null = show all
+  const [collapsedBins, setCollapsedBins] = useState<Set<string>>(new Set());
+  const [renamingBinId, setRenamingBinId] = useState<string | null>(null);
+  const [renamingBinValue, setRenamingBinValue] = useState("");
+  const [newBinName, setNewBinName] = useState("");
+  const [showNewBinInput, setShowNewBinInput] = useState(false);
+  const [dragOverBinId, setDragOverBinId] = useState<string | null>(null);
 
   const toggleViewMode = () => {
     const next = viewMode === "grid" ? "list" : "grid";
@@ -434,7 +456,7 @@ export function MediaPool({
     }
   };
 
-  // Filter + search + sort
+  // Filter + search + sort + active bin
   const filtered = sortAssets(
     assets.filter((a) => {
       const matchesSearch = a.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -442,7 +464,9 @@ export function MediaPool({
         filterType === "all" ? true :
         filterType === "audio" ? a.hasAudio && a.durationSeconds < 1 :
         true; // video — show everything for now
-      return matchesSearch && matchesType;
+      // Bin filter: null = all assets, otherwise only assets in that bin
+      const matchesBin = activeBinId === null ? true : assetBins[a.id] === activeBinId;
+      return matchesSearch && matchesType && matchesBin;
     }),
     sortKey,
     sortDir
@@ -501,6 +525,98 @@ export function MediaPool({
       {/* ── Media tab ── */}
       {activeTab === "media" && (
         <>
+          {/* ── Bin Sidebar ───────────────────────────────────────── */}
+          {(bins.length > 0 || onCreateBin) && (
+            <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 4 }}>
+              {/* Bin list */}
+              <div style={{ display: 'flex', alignItems: 'center', padding: '4px 8px 2px', gap: 4 }}>
+                <span style={{ flex: 1, fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--text-s)', textTransform: 'uppercase' }}>Bins</span>
+                {onCreateBin && (
+                  <button
+                    type="button"
+                    title="New bin"
+                    style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', color: 'var(--text-s)', cursor: 'pointer', padding: '0 2px' }}
+                    onClick={() => setShowNewBinInput(v => !v)}
+                  >+</button>
+                )}
+              </div>
+              {showNewBinInput && (
+                <form
+                  style={{ display: 'flex', gap: 4, padding: '2px 8px 4px' }}
+                  onSubmit={e => { e.preventDefault(); if (newBinName.trim()) { onCreateBin?.(newBinName.trim()); setNewBinName(''); setShowNewBinInput(false); } }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={newBinName}
+                    onChange={e => setNewBinName(e.target.value)}
+                    placeholder="Bin name"
+                    style={{ flex: 1, fontSize: 11, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '2px 6px', color: 'var(--text-p)' }}
+                    onBlur={() => { if (!newBinName.trim()) setShowNewBinInput(false); }}
+                  />
+                  <button type="submit" style={{ fontSize: 11, padding: '2px 7px', background: 'rgba(168,85,247,0.2)', border: '1px solid rgba(168,85,247,0.4)', borderRadius: 4, color: '#c084fc', cursor: 'pointer' }}>Add</button>
+                </form>
+              )}
+              {/* All assets row */}
+              <button
+                type="button"
+                onClick={() => setActiveBinId(null)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px', fontSize: 11, background: activeBinId === null ? 'rgba(168,85,247,0.15)' : 'none', border: 'none', cursor: 'pointer', color: activeBinId === null ? '#c084fc' : 'var(--text-s)', textAlign: 'left' }}
+              >
+                <span style={{ opacity: 0.6 }}>&#128240;</span> All Media <span style={{ marginLeft: 'auto', opacity: 0.4 }}>{assets.length}</span>
+              </button>
+              {bins.filter(b => !b.parentId).map(bin => {
+                const count = Object.values(assetBins).filter(bid => bid === bin.id).length;
+                return (
+                  <div
+                    key={bin.id}
+                    onDragOver={e => { e.preventDefault(); setDragOverBinId(bin.id); }}
+                    onDragLeave={() => setDragOverBinId(null)}
+                    onDrop={e => {
+                      e.preventDefault(); setDragOverBinId(null);
+                      const assetId = e.dataTransfer.getData('asset-id');
+                      if (assetId) onMoveAssetToBin?.(assetId, bin.id);
+                    }}
+                    style={{ background: dragOverBinId === bin.id ? 'rgba(168,85,247,0.18)' : 'none', borderRadius: 4 }}
+                  >
+                    {renamingBinId === bin.id ? (
+                      <form
+                        style={{ display: 'flex', gap: 4, padding: '2px 8px' }}
+                        onSubmit={e => { e.preventDefault(); if (renamingBinValue.trim()) { onRenameBin?.(bin.id, renamingBinValue.trim()); } setRenamingBinId(null); }}
+                      >
+                        <input autoFocus type="text" value={renamingBinValue} onChange={e => setRenamingBinValue(e.target.value)}
+                          style={{ flex: 1, fontSize: 11, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '2px 6px', color: 'var(--text-p)' }}
+                          onBlur={() => setRenamingBinId(null)} />
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setActiveBinId(bin.id)}
+                        onDoubleClick={() => { setRenamingBinId(bin.id); setRenamingBinValue(bin.name); }}
+                        title={`${bin.name} \u2014 Double-click to rename, drag clips here to move`}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px 3px 18px', fontSize: 11, background: activeBinId === bin.id ? 'rgba(168,85,247,0.15)' : 'none', border: 'none', cursor: 'pointer', color: activeBinId === bin.id ? '#c084fc' : 'var(--text-s)', textAlign: 'left' }}
+                      >
+                        <span style={{ opacity: 0.6 }}>{collapsedBins.has(bin.id) ? '\u25b6' : '\u25bc'}</span>
+                        <span
+                          onClick={e => { e.stopPropagation(); setCollapsedBins(p => { const n = new Set(p); n.has(bin.id) ? n.delete(bin.id) : n.add(bin.id); return n; }); }}
+                          style={{ marginRight: 2 }}
+                        />
+                        &#128193; {bin.name}
+                        <span style={{ marginLeft: 'auto', opacity: 0.4 }}>{count}</span>
+                        <button
+                          type="button"
+                          title="Delete bin"
+                          onClick={e => { e.stopPropagation(); onDeleteBin?.(bin.id); if (activeBinId === bin.id) setActiveBinId(null); }}
+                          style={{ fontSize: 10, background: 'none', border: 'none', color: 'rgba(239,68,68,0.6)', cursor: 'pointer', padding: '0 2px', marginLeft: 2 }}
+                        >\u2715</button>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Search + filter bar */}
           {assets.length > 0 && (
             <div className="media-pool-toolbar">
