@@ -73,6 +73,7 @@ import { ClawFlowPublishPanel } from "./components/ClawFlowPublishPanel";
 import { ProjectIntelligencePanel } from "./components/ProjectIntelligencePanel";
 import { TimelineIndexPanel } from "./components/TimelineIndexPanel";
 import { ClawGuide, useClawGuide } from "./components/ClawGuide";
+import { TranscriptEditor } from "./components/TranscriptEditor";
 
 // Pages: edit | color | fusion | audio | publish
 type AppPage = "edit" | "color" | "fusion" | "audio" | "publish";
@@ -552,6 +553,8 @@ export default function App() {
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
   const updateTrack = useEditorStore((s) => s.updateTrack);
   const patchClip = useEditorStore((s) => s.patchClip);
+  const setMagneticTimeline = useEditorStore((s) => s.setMagneticTimeline);
+  const magneticTimeline = useEditorStore((s) => s.project.sequence.settings.magneticTimeline !== false);
   const addAssetToPool = useEditorStore((s) => s.addAsset);
   const insertClip = useEditorStore((s) => s.insertClip);
   const addTrack = useEditorStore((s) => s.addTrack);
@@ -680,6 +683,8 @@ export default function App() {
     try { return localStorage.getItem("264pro_mixer_open") === "true"; } catch { return false; }
   });
   const [timelineIndexOpen, setTimelineIndexOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [shuttleSpeed, setShuttleSpeed] = useState(1); // J/K/L shuttle speed multiplier
   const [clawGuideEnabled, setClawGuideEnabled] = useState(() => {
     try { return localStorage.getItem("264pro_claw_guide") !== "false"; } catch { return true; }
   });
@@ -1497,9 +1502,28 @@ export default function App() {
     onAddMarker: () => addMarker({ frame: playback.playheadFrame, label: "", color: "#f7c948" }),
     onJKLShuttle: (direction) => {
       if (direction === 0) {
+        // K — stop and reset shuttle speed
         pauseViewerPlayback();
+        setShuttleSpeed(1);
+      } else if (direction === 1) {
+        // L — play forward, each press doubles speed (1x → 2x → 4x → 8x)
+        if (playback.isPlaying && shuttleSpeed > 0) {
+          const next = Math.min(8, shuttleSpeed * 2);
+          setShuttleSpeed(next);
+          if (selectedClipId) patchClip(selectedClipId, { speed: next });
+        } else {
+          setShuttleSpeed(1);
+          handleTogglePlayback();
+        }
       } else {
-        handleTogglePlayback();
+        // J — play reverse (shuttle speed, but we simulate by seeking backward rapidly)
+        if (playback.isPlaying) {
+          pauseViewerPlayback();
+          setShuttleSpeed(1);
+        } else {
+          // Jump backward 30 frames (reverse preview)
+          handleSeek(Math.max(0, playback.playheadFrame - 30));
+        }
       }
     },
     onToggleMediaPool: () => {
@@ -2869,6 +2893,32 @@ export default function App() {
             🗂 Index
           </button>
           <button
+            className={`panel-toggle-btn${transcriptOpen ? " on" : ""}`}
+            onClick={() => setTranscriptOpen(v => !v)}
+            title="Transcript Editor — Descript-style text-based editing + Scene Detection"
+            type="button"
+            style={{
+              background: transcriptOpen ? 'rgba(167,139,250,0.15)' : undefined,
+              borderColor: transcriptOpen ? 'rgba(167,139,250,0.4)' : undefined,
+              color: transcriptOpen ? '#a78bfa' : undefined,
+            }}
+          >
+            📝 Transcript
+          </button>
+          <button
+            className="panel-toggle-btn"
+            onClick={() => setMagneticTimeline(!magneticTimeline)}
+            title={magneticTimeline ? 'Magnetic Timeline ON — gaps auto-close on delete (click to disable)' : 'Magnetic Timeline OFF — gaps stay open on delete (click to enable)'}
+            type="button"
+            style={{
+              background: magneticTimeline ? 'rgba(52,211,153,0.12)' : 'rgba(255,255,255,0.04)',
+              borderColor: magneticTimeline ? 'rgba(52,211,153,0.4)' : 'rgba(255,255,255,0.12)',
+              color: magneticTimeline ? '#34d399' : 'rgba(255,255,255,0.3)',
+            }}
+          >
+            🧲 {magneticTimeline ? 'Magnetic' : 'No Snap'}
+          </button>
+          <button
             className={`panel-toggle-btn${renderQueueOpen ? " on" : ""}`}
             onClick={() => setRenderQueueOpen((v) => !v)}
             title="Render Queue"
@@ -3421,6 +3471,38 @@ export default function App() {
                 />
               </div>
             )}
+
+            {/* ── Transcript Editor Panel ── */}
+            {transcriptOpen && (() => {
+              const inspClip = project.sequence.clips.find(c => c.id === selectedClipId);
+              const inspAsset = inspClip ? project.assets.find(a => a.id === inspClip.assetId) : null;
+              return (
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 340, height: '100%', zIndex: 30, boxShadow: '-4px 0 16px rgba(0,0,0,0.5)', background: '#0d1117', borderLeft: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, gap: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa' }}>📝 Transcript & Scenes</span>
+                    <button type="button" onClick={() => setTranscriptOpen(false)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 16 }}>×</button>
+                  </div>
+                  <TranscriptEditor
+                    clipId={selectedClipId}
+                    clipPath={inspAsset?.sourcePath ?? null}
+                    clipName={inspAsset?.name ?? 'No clip selected'}
+                    clipStartFrame={inspClip?.startFrame ?? 0}
+                    fps={project.sequence.settings.fps}
+                    onDeleteFrameRanges={(ranges) => {
+                      // Split at range boundaries, then ripple-delete the middle clips
+                      ranges.forEach(r => {
+                        splitClipAtFrame(selectedClipId!, r.startFrame);
+                        splitClipAtFrame(selectedClipId!, r.endFrame);
+                      });
+                    }}
+                    onSplitAtFrames={(frames) => {
+                      frames.forEach(f => splitClipAtFrame(selectedClipId!, f));
+                    }}
+                    onSeek={setPlayheadFrame}
+                  />
+                </div>
+              );
+            })()}
 
             {/* Timeline resize handle — stays in grid-area: tl-resize */}
             <div

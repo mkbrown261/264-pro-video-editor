@@ -43,6 +43,7 @@ export function AIToolsWave2Panel() {
   const project = useEditorStore(s => s.project);
   const selectedClipId = useEditorStore(s => s.selectedClipId);
   const setColorGrade = useEditorStore(s => s.setColorGrade);
+  const setAutomationKeyframe = useEditorStore(s => s.setAutomationKeyframe);
 
   const selectedClip = project.sequence.clips.find(c => c.id === selectedClipId);
   const selectedAsset = selectedClip ? project.assets.find(a => a.id === selectedClip.assetId) : null;
@@ -98,7 +99,13 @@ export function AIToolsWave2Panel() {
   const [deintError, setDeintError] = useState<string | null>(null);
 
   // ── Multicam Sync ─────────────────────────────────────────────────────────
-  const [mcBusy, setMcBusy] = useState(false);
+  // ── Audio Ducking ──────────────────────────────────────────────────────────
+  const [duckBusy, setDuckBusy] = useState(false);
+  const [duckResult, setDuckResult] = useState<string | null>(null);
+  const [duckError, setDuckError] = useState<string | null>(null);
+  const [duckLevel, setDuckLevel] = useState(0.25);
+
+    const [mcBusy, setMcBusy] = useState(false);
   const [mcResult, setMcResult] = useState<Array<{ id: string; offsetSeconds: number }> | null>(null);
   const [mcError, setMcError] = useState<string | null>(null);
 
@@ -189,7 +196,29 @@ export function AIToolsWave2Panel() {
     else setDeintError(res?.error ?? 'Failed');
   }, [clipPath]);
 
-  const handleMulticamSync = useCallback(async () => {
+  const handleAudioDuck = useCallback(async () => {
+    if (!clipPath) { setDuckError('Select a voice/dialogue clip first'); return; }
+    setDuckBusy(true); setDuckError(null); setDuckResult(null);
+    const res = await API?.audioDuck?.({ voiceTrackPath: clipPath, duckLevel });
+    setDuckBusy(false);
+    if (res?.success && res.keyframes) {
+      // Find a music track to apply ducking to
+      const musicTrack = project.sequence.tracks.find(t => t.kind === 'audio' && t.id !== (
+        project.sequence.clips.find(cl => project.assets.find(a => a.id === cl.assetId && (a.sourcePath ?? '').toLowerCase().includes(clipPath.split('/').pop()!.split('.')[0].toLowerCase())))?.trackId
+      ));
+      if (musicTrack) {
+        const fps = project.sequence.settings.fps;
+        res.keyframes.forEach((kf: { timeSeconds: number; value: number }) => {
+          setAutomationKeyframe(musicTrack.id, 'volume', Math.round(kf.timeSeconds * fps), kf.value);
+        });
+        setDuckResult(`Applied ${res.keyframes.length} automation keyframes to ${musicTrack.name}`);
+      } else {
+        setDuckResult(`Generated ${res.keyframes.length} keyframes — no separate music track found to apply to. Add a music track first.`);
+      }
+    } else setDuckError(res?.error ?? 'Failed');
+  }, [clipPath, duckLevel, project, setAutomationKeyframe]);
+
+    const handleMulticamSync = useCallback(async () => {
     const videoClips = project.sequence.clips.filter(c => {
       const track = project.sequence.tracks.find(t => t.id === c.trackId);
       return track?.kind === 'video';
@@ -363,7 +392,23 @@ export function AIToolsWave2Panel() {
         <StatusLine busy={deintBusy} result={deintResult} error={deintError} busyLabel="Deinterlacing..." />
       </Card>
 
-      {/* ── Multicam Sync ────────────────────────────────────────────────────── */}
+      {/* ── Audio Ducking ────────────────────────────────────────────────────── */}
+      <Card title="🦆 Smart Audio Ducking" color="#f59e0b">
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>
+          Select your voice/dialogue clip, then duck a music track automatically. Detects speech segments and lowers background music underneath them.
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>DUCK LEVEL</span>
+            <span style={{ fontSize: 10, color: '#f59e0b' }}>{Math.round(duckLevel * 100)}%</span>
+          </div>
+          <input type="range" min={0.05} max={0.7} step={0.05} value={duckLevel} onChange={e => setDuckLevel(Number(e.target.value))} style={{ width: '100%' }} />
+        </div>
+        <ActionBtn label={duckBusy ? '⏳ Analyzing speech...' : '🦆 Apply Smart Ducking'} color="#f59e0b" onClick={handleAudioDuck} disabled={duckBusy} />
+        <StatusLine busy={duckBusy} result={duckResult} error={duckError} busyLabel="Detecting speech segments..." />
+      </Card>
+
+            {/* ── Multicam Sync ────────────────────────────────────────────────────── */}
       <Card title="🎬 Multicam Auto-Sync" color="#06b6d4">
         <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>
           Syncs all video clips on the timeline by audio onset. Works like a DaVinci sync bin — detects the first loud transient in each clip and aligns them.

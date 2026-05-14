@@ -120,9 +120,6 @@ const electronAPI = {
   // ── Voice Isolation — FFmpeg anlmdn denoiser, no model file required ─────
   voiceIsolate: (args: { inputPath: string; outputPath?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
     ipcRenderer.invoke('ai:voice-isolate', args),
-  // ── Scene Detection (FFmpeg) ──────────────────────────────────────────────
-  detectScenes: (args: { filePath: string; threshold?: number }): Promise<{ success: boolean; scenes?: number[]; error?: string }> =>
-    ipcRenderer.invoke('ai:detect-scenes', args),
   exportLut: (args: { grade: Record<string, number>; name: string }) => ipcRenderer.invoke('lut:export', args),
   // ── Wave 1 AI Power Features ────────────────────────────────────────────────────
   /** Frame interpolation (smooth slow-mo). Multiplier: 2/4/8. quality: draft/good/best */
@@ -167,6 +164,12 @@ const electronAPI = {
     ipcRenderer.invoke('media:generate-proxy', args),
   deinterlace: (args: { inputPath: string; outputPath?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
     ipcRenderer.invoke('ai:deinterlace', args),
+  detectScenes: (args: { inputPath: string; threshold?: number; fps?: number }): Promise<{ success: boolean; scenes?: Array<{ timeSeconds: number; frame: number; score: number }>; count?: number; error?: string }> =>
+    ipcRenderer.invoke('ai:detect-scenes', args),
+  transcribeClip: (args: { filePath: string; language?: string }): Promise<{ success: boolean; text?: string; words?: Array<{ word: string; start: number; end: number }>; error?: string }> =>
+    ipcRenderer.invoke('ai:transcribe-clip', args),
+  audioDuck: (args: { voiceTrackPath: string; musicTrackPath?: string; duckLevel?: number }): Promise<{ success: boolean; keyframes?: Array<{ timeSeconds: number; value: number }>; speechRanges?: Array<{ start: number; end: number }>; duckLevel?: number; totalSeconds?: number; error?: string }> =>
+    ipcRenderer.invoke('ai:audio-duck', args),
   // ── Render Cache ─────────────────────────────────────────────────────────
   renderCacheSegment: (args: {
     projectId: string;

@@ -3332,6 +3332,186 @@ ipcMain.handle('ai:deinterlace', async (_ev, args: { inputPath: string; outputPa
   } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ── SMART FEATURES: Scene Detection, Transcript, Audio Duck, Waveform ────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Scene Detection ────────────────────────────────────────────────────────────
+// Uses FFmpeg select=gt(scene,threshold) to find scene change timestamps.
+// Returns array of { timeSeconds, frame } objects the renderer uses to
+// auto-split the clip into shots on the timeline.
+ipcMain.handle('ai:detect-scenes', async (_ev, args: { inputPath: string; threshold?: number; fps?: number }) => {
+  try {
+    const { inputPath, threshold = 0.3, fps = 30 } = args;
+    const fsM = await import('fs');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    // Use showinfo + select to detect scene changes
+    const stderr: string[] = [];
+    const proc = spawn(ffmpegBin, [
+      '-i', inputPath,
+      '-vf', `select=gt(scene\\,${threshold}),metadata=print:key=lavfi.scene_score`,
+      '-f', 'null', '-',
+    ]);
+    proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', () => {
+        const full = stderr.join('');
+        // Parse pts_time from metadata output
+        const scenes: Array<{ timeSeconds: number; frame: number; score: number }> = [];
+        const lines = full.split('\n');
+        let lastPts = 0;
+        for (const line of lines) {
+          // FFmpeg metadata print: "pts_time:1.234"
+          const ptsMatch = line.match(/pts_time:([\d.]+)/);
+          if (ptsMatch) { lastPts = parseFloat(ptsMatch[1]); }
+          // scene score line
+          const scoreMatch = line.match(/lavfi\.scene_score=([\d.]+)/);
+          if (scoreMatch) {
+            const score = parseFloat(scoreMatch[1]);
+            const frame = Math.round(lastPts * fps);
+            if (scenes.length === 0 || Math.abs(lastPts - scenes[scenes.length - 1].timeSeconds) > 0.5) {
+              scenes.push({ timeSeconds: lastPts, frame, score });
+            }
+          }
+        }
+        // Also parse using showinfo approach as fallback
+        if (scenes.length === 0) {
+          const showInfoPattern = /n:\s*(\d+).*pts_time:([\d.]+)/g;
+          let m;
+          while ((m = showInfoPattern.exec(full)) !== null) {
+            const frame = parseInt(m[1], 10);
+            const timeSeconds = parseFloat(m[2]);
+            scenes.push({ timeSeconds, frame, score: threshold });
+          }
+        }
+        resolve({ success: true, scenes, count: scenes.length });
+      });
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── Transcript-Based Editing ───────────────────────────────────────────────────
+// Transcribes a clip with Groq Whisper (word-level timestamps) and returns
+// structured words so the editor can render an editable transcript panel.
+// Deleting a word deletes the corresponding frames from the timeline.
+ipcMain.handle('ai:transcribe-clip', async (_ev, args: { filePath: string; language?: string }) => {
+  try {
+    const { filePath, language } = args;
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const os = await import('os');
+    if (!fsM.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
+    const groqKey = process.env.GROQ_API_KEY ||
+      (() => { try { const p = require('path').join(app.getPath('userData'), 'settings.json'); return JSON.parse(require('fs').readFileSync(p, 'utf8')).groqApiKey ?? ''; } catch { return ''; } })();
+    if (!groqKey) return { success: false, error: 'GROQ_API_KEY required for transcript editing' };
+    // Extract audio as mp3 for Whisper upload
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    const audioPath = pathM.join(os.tmpdir(), `transcript_${Date.now()}.mp3`);
+    const ext1 = spawn(ffmpegBin, ['-i', filePath, '-vn', '-ar', '16000', '-ac', '1', '-b:a', '64k', '-y', audioPath]);
+    await new Promise<void>((res) => { ext1.on('close', () => res()); ext1.on('error', () => res()); });
+    if (!fsM.existsSync(audioPath)) return { success: false, error: 'Audio extraction failed' };
+    // Upload to Groq Whisper with word timestamps
+    const FormData = (await import('form-data')).default;
+    const form = new FormData();
+    form.append('file', fsM.createReadStream(audioPath), { filename: 'audio.mp3', contentType: 'audio/mp3' });
+    form.append('model', 'whisper-large-v3');
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'word');
+    if (language) form.append('language', language);
+    const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${groqKey}`, ...form.getHeaders() },
+      body: form as any,
+    });
+    try { fsM.unlinkSync(audioPath); } catch {}
+    const text = await resp.text();
+    if (!resp.ok) return { success: false, error: text.slice(0, 300) };
+    let data: { text?: string; words?: Array<{ word: string; start: number; end: number }> };
+    try { data = JSON.parse(text); } catch { return { success: false, error: 'Parse error' }; }
+    return { success: true, text: data.text ?? '', words: data.words ?? [] };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── Smart Audio Ducking ───────────────────────────────────────────────────────────
+// Detects speech segments in voiceTrackPath, returns timeranges where music
+// should be ducked. The renderer applies AutomationKeyframes to the music track.
+ipcMain.handle('ai:audio-duck', async (_ev, args: { voiceTrackPath: string; musicTrackPath?: string; duckLevel?: number }) => {
+  try {
+    const { voiceTrackPath, duckLevel = 0.25 } = args;
+    const fsM = await import('fs');
+    if (!fsM.existsSync(voiceTrackPath)) return { success: false, error: 'Voice track not found' };
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    // Detect silence (inverse = detect speech) in voice track
+    const silenceOut: string[] = [];
+    const proc = spawn(ffmpegBin, [
+      '-i', voiceTrackPath,
+      '-af', 'silencedetect=noise=-30dB:d=0.3',
+      '-f', 'null', '-',
+    ]);
+    proc.stderr?.on('data', (d: Buffer) => silenceOut.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', () => {
+        const full = silenceOut.join('');
+        // Parse silence_start / silence_end pairs
+        const silenceRanges: Array<{ start: number; end: number }> = [];
+        const startMatches = [...full.matchAll(/silence_start:\s*([\d.]+)/g)];
+        const endMatches   = [...full.matchAll(/silence_end:\s*([\d.]+)/g)];
+        for (let i = 0; i < Math.min(startMatches.length, endMatches.length); i++) {
+          silenceRanges.push({ start: parseFloat(startMatches[i][1]), end: parseFloat(endMatches[i][1]) });
+        }
+        // Invert: speech = gaps between silence ranges
+        // Build duck automation: duck music during speech, restore during silence
+        // Returns keyframe timestamps for the music track automation lane
+        const durationMatch = full.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+        const totalSec = durationMatch
+          ? parseInt(durationMatch[1]) * 3600 + parseInt(durationMatch[2]) * 60 + parseFloat(durationMatch[3])
+          : 60;
+        // Build keyframe pairs: { timeSeconds, value } where value=1 (full) or duckLevel (ducked)
+        const keyframes: Array<{ timeSeconds: number; value: number }> = [{ timeSeconds: 0, value: 1 }];
+        let inSpeech = false;
+        // Merge silence ranges to get speech ranges
+        const sorted = [...silenceRanges].sort((a, b) => a.start - b.start);
+        let cursor = 0;
+        for (const sr of sorted) {
+          if (sr.start > cursor + 0.1) {
+            // Speech from cursor to sr.start
+            const rampIn = Math.max(cursor, cursor + 0.05);
+            const rampOut = Math.max(0, sr.start - 0.1);
+            keyframes.push({ timeSeconds: rampIn, value: duckLevel });
+            keyframes.push({ timeSeconds: rampOut, value: duckLevel });
+            keyframes.push({ timeSeconds: sr.start, value: 1 });
+          }
+          cursor = sr.end;
+        }
+        // Final speech segment if file ends mid-speech
+        if (cursor < totalSec - 0.1) {
+          keyframes.push({ timeSeconds: cursor, value: duckLevel });
+          keyframes.push({ timeSeconds: totalSec, value: duckLevel });
+        }
+        resolve({
+          success: true,
+          keyframes,
+          speechRanges: silenceRanges.length > 0
+            ? sorted.reduce<Array<{start:number;end:number}>>((acc, sr, i, arr) => {
+                const prevEnd = i === 0 ? 0 : arr[i-1].end;
+                if (sr.start > prevEnd + 0.1) acc.push({ start: prevEnd, end: sr.start });
+                return acc;
+              }, [])
+            : [],
+          duckLevel,
+          totalSeconds: totalSec,
+        });
+      });
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();

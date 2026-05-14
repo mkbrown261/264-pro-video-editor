@@ -584,6 +584,7 @@ export interface SequenceSettings {
   fps: number;
   audioSampleRate: number;
   masterVolume?: number;  // 0-2, master output gain (1 = unity)
+  magneticTimeline?: boolean; // auto-close gaps on delete (default: true)
 }
 
 export interface TimelineSequence {

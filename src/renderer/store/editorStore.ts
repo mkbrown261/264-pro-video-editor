@@ -104,6 +104,7 @@ interface EditorStore {
   removeSelectedClip: () => void;
   removeClipById: (clipId: string) => void;
   duplicateClip: (clipId: string) => void;
+  setMagneticTimeline: (enabled: boolean) => void;
   toggleClipEnabled: (clipId: string) => void;
   detachLinkedClips: (clipId: string) => void;
   relinkClips: (clipId: string) => void;
@@ -454,6 +455,57 @@ function clampPlayhead(project: EditorProjectState, frame: number): number {
 }
 
 /**
+/**
+ * magneticDeleteClips — removes clips and, when magnetic mode is on,
+ * closes the gap by rippling all downstream clips left.
+ * When magnetic is off it behaves identically to a plain filter.
+ */
+function magneticDeleteClips(
+  state: { project: EditorProjectState; selectedAssetId: string | null; playback: { isPlaying: boolean; playheadFrame: number } },
+  clipId: string
+) {
+  const magnetic = state.project.sequence.settings.magneticTimeline !== false; // default ON
+  const linked = getLinkedClips(state.project, clipId);
+  if (!linked.length) return state;
+  const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+  const segsById = new Map(segs.map((s) => [s.clip.id, s]));
+  const linkedIds = new Set(linked.map((c) => c.id));
+  const trackIds = linked.map((c) => c.trackId);
+  const removedByTrack = new Map<string, Array<{ dur: number; start: number }>>();
+  for (const clip of linked) {
+    const seg = segsById.get(clip.id);
+    if (!seg) continue;
+    const arr = removedByTrack.get(clip.trackId) ?? [];
+    arr.push({ dur: seg.durationFrames, start: seg.startFrame });
+    removedByTrack.set(clip.trackId, arr);
+  }
+  const filteredClips = state.project.sequence.clips.filter((c) => !linkedIds.has(c.id));
+  const rippleClips = magnetic
+    ? filteredClips.map((c) => {
+        const removed = removedByTrack.get(c.trackId);
+        if (!removed?.length) return c;
+        const ripple = removed.reduce((t, r) => r.start < c.startFrame ? t + r.dur : t, 0);
+        return ripple > 0 ? { ...c, startFrame: Math.max(0, c.startFrame - ripple) } : c;
+      })
+    : filteredClips;
+  const next = resolveTracks(
+    { ...state.project, sequence: { ...state.project.sequence, clips: rippleClips } },
+    trackIds
+  );
+  const nextSegs = buildTimelineSegments(next.sequence, next.assets);
+  const fallback = findPlayableSegmentAtFrame(nextSegs, state.playback.playheadFrame, "video") ?? nextSegs[0] ?? null;
+  return {
+    project: next,
+    selectedClipId: fallback?.clip.id ?? null,
+    selectedAssetId: fallback?.asset.id ?? state.selectedAssetId,
+    playback: {
+      isPlaying: nextSegs.length ? state.playback.isPlaying : false,
+      playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
+    }
+  };
+}
+
+ /**
  * resolveTrackLayout — NON-magnetic layout resolver.
  *
  * Clips keep their requested startFrame positions. We only nudge a clip
@@ -1208,48 +1260,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   removeSelectedClip: () => {
     set(withUndo("Delete Clip", (state) => {
       if (!state.selectedClipId) return state;
-      const linked = getLinkedClips(state.project, state.selectedClipId);
-      if (!linked.length) return state;
-      const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
-      const segsById = new Map(segs.map((s) => [s.clip.id, s]));
-      const linkedIds = new Set(linked.map((c) => c.id));
-      const trackIds = linked.map((c) => c.trackId);
-      const removedByTrack = new Map<string, Array<{ dur: number; start: number }>>();
-      for (const clip of linked) {
-        const seg = segsById.get(clip.id);
-        if (!seg) continue;
-        const arr = removedByTrack.get(clip.trackId) ?? [];
-        arr.push({ dur: seg.durationFrames, start: seg.startFrame });
-        removedByTrack.set(clip.trackId, arr);
-      }
-      const next = resolveTracks(
-        {
-          ...state.project,
-          sequence: {
-            ...state.project.sequence,
-            clips: state.project.sequence.clips
-              .filter((c) => !linkedIds.has(c.id))
-              .map((c) => {
-                const removed = removedByTrack.get(c.trackId);
-                if (!removed?.length) return c;
-                const ripple = removed.reduce((t, r) => r.start < c.startFrame ? t + r.dur : t, 0);
-                return ripple > 0 ? { ...c, startFrame: Math.max(0, c.startFrame - ripple) } : c;
-              })
-          }
-        },
-        trackIds
-      );
-      const nextSegs = buildTimelineSegments(next.sequence, next.assets);
-      const fallback = findPlayableSegmentAtFrame(nextSegs, state.playback.playheadFrame, "video") ?? nextSegs[0] ?? null;
-      return {
-        project: next,
-        selectedClipId: fallback?.clip.id ?? null,
-        selectedAssetId: fallback?.asset.id ?? state.selectedAssetId,
-        playback: {
-          isPlaying: nextSegs.length ? state.playback.isPlaying : false,
-          playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
-        }
-      };
+      return magneticDeleteClips(state, state.selectedClipId);
     }));
   },
 
@@ -1313,48 +1324,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   removeClipById: (clipId) => {
     set(withUndo("Delete Clip", (state) => {
-      const linked = getLinkedClips(state.project, clipId);
-      if (!linked.length) return state;
-      const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
-      const segsById = new Map(segs.map((s) => [s.clip.id, s]));
-      const linkedIds = new Set(linked.map((c) => c.id));
-      const trackIds = linked.map((c) => c.trackId);
-      const removedByTrack = new Map<string, Array<{ dur: number; start: number }>>();
-      for (const clip of linked) {
-        const seg = segsById.get(clip.id);
-        if (!seg) continue;
-        const arr = removedByTrack.get(clip.trackId) ?? [];
-        arr.push({ dur: seg.durationFrames, start: seg.startFrame });
-        removedByTrack.set(clip.trackId, arr);
-      }
-      const next = resolveTracks(
-        {
-          ...state.project,
-          sequence: {
-            ...state.project.sequence,
-            clips: state.project.sequence.clips
-              .filter((c) => !linkedIds.has(c.id))
-              .map((c) => {
-                const removed = removedByTrack.get(c.trackId);
-                if (!removed?.length) return c;
-                const ripple = removed.reduce((t, r) => r.start < c.startFrame ? t + r.dur : t, 0);
-                return ripple > 0 ? { ...c, startFrame: Math.max(0, c.startFrame - ripple) } : c;
-              })
-          }
+      return magneticDeleteClips(state, clipId);
+    }));
+  },
+  setMagneticTimeline: (enabled) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          settings: { ...state.project.sequence.settings, magneticTimeline: enabled },
         },
-        trackIds
-      );
-      const nextSegs = buildTimelineSegments(next.sequence, next.assets);
-      const fallback = findPlayableSegmentAtFrame(nextSegs, state.playback.playheadFrame, "video") ?? nextSegs[0] ?? null;
-      return {
-        project: next,
-        selectedClipId: fallback?.clip.id ?? null,
-        selectedAssetId: fallback?.asset.id ?? state.selectedAssetId,
-        playback: {
-          isPlaying: nextSegs.length ? state.playback.isPlaying : false,
-          playheadFrame: clampPlayhead(next, state.playback.playheadFrame)
-        }
-      };
+      },
     }));
   },
 
