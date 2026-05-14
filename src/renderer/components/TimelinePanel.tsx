@@ -222,6 +222,8 @@ export function TimelinePanel({
   onMoveClipTo,
   onTrimClipStart,
   onTrimClipEnd,
+  onRippleTrim,
+  onRollTrim,
   onBladeCut,
   onDropAsset,
   onUpdateTrack,
