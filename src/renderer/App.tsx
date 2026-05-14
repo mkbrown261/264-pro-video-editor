@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { FlowStatePanel } from "./components/FlowStatePanel";
 import { AIToolsPanel } from "./components/AIToolsPanel";
 import { InspectorPanel } from "./components/InspectorPanel";
@@ -72,6 +72,7 @@ import { StyleProfilePanel } from "./components/StyleProfilePanel";
 import { ClawFlowPublishPanel } from "./components/ClawFlowPublishPanel";
 import { ProjectIntelligencePanel } from "./components/ProjectIntelligencePanel";
 import { TimelineIndexPanel } from "./components/TimelineIndexPanel";
+import { ClawGuide, useClawGuide } from "./components/ClawGuide";
 
 // Pages: edit | color | fusion | audio | publish
 type AppPage = "edit" | "color" | "fusion" | "audio" | "publish";
@@ -679,6 +680,9 @@ export default function App() {
     try { return localStorage.getItem("264pro_mixer_open") === "true"; } catch { return false; }
   });
   const [timelineIndexOpen, setTimelineIndexOpen] = useState(false);
+  const [clawGuideEnabled, setClawGuideEnabled] = useState(() => {
+    try { return localStorage.getItem("264pro_claw_guide") !== "false"; } catch { return true; }
+  });
 
   // Audio engine ref (populated by ViewerPanel's onAudioEngineRef callback)
   const audioEngineRef = useRef<import("./lib/AudioScheduler").AudioEngine | null>(null);
@@ -1102,6 +1106,23 @@ export default function App() {
   const segments = buildTimelineSegments(project.sequence, project.assets);
   const trackLayouts = buildTrackLayouts(project.sequence, project.assets, segments);
   const totalFrames = getTotalDurationFrames(segments);
+
+  // ── Claw Guide ──────────────────────────────────────────────────────────
+  const timelineClipAssetIds = useMemo(
+    () => new Set(project.sequence.clips.map(c => c.assetId)),
+    [project.sequence.clips]
+  );
+  const { tips: clawTips, dismiss: dismissClawTip } = useClawGuide({
+    enabled: clawGuideEnabled,
+    clips: project.sequence.clips.map(c => ({ id: c.id, speed: c.speed, volume: c.volume, colorGrade: c.colorGrade })),
+    mediaPoolAssets: project.assets,
+    timelineClipIds: timelineClipAssetIds,
+    playheadStallMs: 0,
+    onInterpolateClip: () => setAiToolsPanelOpen(true),
+    onOpenColorGrading: () => setActivePage('color'),
+    onOpenMixer: () => setMixerOpen(true),
+  });
+
 
   // ── Hierarchical rendering: topmost visible video clip only ───────────────
   // findAllActiveVideoSegments returns ALL overlapping video clips sorted
@@ -2564,6 +2585,9 @@ export default function App() {
 
       {/* ── Toast notification system ── */}
       <ToastContainer />
+
+      {/* ── Claw Guide (contextual AI assistance) ── */}
+      <ClawGuide enabled={clawGuideEnabled} tips={clawTips} onDismiss={dismissClawTip} />
 
       {/* ── Render Queue Panel (floating) ── */}
       {renderQueueOpen && (

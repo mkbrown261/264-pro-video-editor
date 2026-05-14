@@ -124,6 +124,28 @@ const electronAPI = {
   detectScenes: (args: { filePath: string; threshold?: number }): Promise<{ success: boolean; scenes?: number[]; error?: string }> =>
     ipcRenderer.invoke('ai:detect-scenes', args),
   exportLut: (args: { grade: Record<string, number>; name: string }) => ipcRenderer.invoke('lut:export', args),
+  // ── Wave 1 AI Power Features ────────────────────────────────────────────────────
+  /** Frame interpolation (smooth slow-mo). Multiplier: 2/4/8. quality: draft/good/best */
+  frameInterpolate: (args: { inputPath: string; outputPath?: string; multiplier?: 2|4|8; quality?: 'draft'|'good'|'best' }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:frame-interpolate', args),
+  /** Audio sync: find delta seconds to shift pathB to align with pathA */
+  audioSync: (args: { pathA: string; pathB: string }): Promise<{ success: boolean; deltaSeconds?: number; error?: string }> =>
+    ipcRenderer.invoke('ai:audio-sync', args),
+  /** Beat detection: returns BPM + beat timestamps in seconds */
+  detectBeats: (args: { filePath: string }): Promise<{ success: boolean; bpm?: number; beats?: number[]; confidence?: number; error?: string }> =>
+    ipcRenderer.invoke('ai:detect-beats', args),
+  /** Smart Reframe: center-crop to 9:16 / 1:1 / 4:5 */
+  smartReframe: (args: { inputPath: string; outputPath?: string; targetAspect: '9:16'|'1:1'|'4:5'; sourceWidth: number; sourceHeight: number }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:smart-reframe', args),
+  /** Clip Quality Score: returns 0-100 score + sharpness/exposure/audio breakdown */
+  scoreClip: (args: { filePath: string }): Promise<{ success: boolean; score?: number; breakdown?: Record<string, number>; error?: string }> =>
+    ipcRenderer.invoke('ai:score-clip', args),
+  /** Generate captions: returns timed segments + SRT string */
+  generateCaptions: (args: { filePath: string; language?: string; style?: string }): Promise<{ success: boolean; segments?: Array<{text:string;startSeconds:number;endSeconds:number}>; srt?: string; transcript?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:generate-captions', args),
+  /** Project health check: returns issues array + score 0-100 */
+  projectHealthCheck: (args: { project: unknown }): Promise<{ success: boolean; issues?: Array<{severity:string;message:string;clipId?:string}>; score?: number; summary?: string; error?: string }> =>
+    ipcRenderer.invoke('project:health-check', args),
   // ── Render Cache ─────────────────────────────────────────────────────────
   renderCacheSegment: (args: {
     projectId: string;

@@ -406,6 +406,47 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
   const [voiceIsolateError, setVoiceIsolateError] = useState<string | null>(null);
   const splitClipsAtBeats = useEditorStore((s) => s.splitClipsAtBeats);
 
+  // ── Frame Interpolation state ─────────────────────────────────────────────────
+  const [interpBusy, setInterpBusy] = useState(false);
+  const [interpResult, setInterpResult] = useState<string | null>(null);
+  const [interpError, setInterpError] = useState<string | null>(null);
+  const [interpMultiplier, setInterpMultiplier] = useState<2|4|8>(2);
+  const [interpQuality, setInterpQuality] = useState<'draft'|'good'|'best'>('good');
+
+  // ── Audio Sync state ──────────────────────────────────────────────────────
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncPathA, setSyncPathA] = useState('');
+  const [syncPathB, setSyncPathB] = useState('');
+
+  // ── Beat Detection state ────────────────────────────────────────────────────
+  const [beatBusy, setBeatBusy] = useState(false);
+  const [beatResult, setBeatResult] = useState<{ bpm: number; beats: number[]; confidence: number } | null>(null);
+  const [beatError, setBeatError] = useState<string | null>(null);
+
+  // ── Smart Reframe state ───────────────────────────────────────────────────
+  const [reframeBusy, setReframeBusy] = useState(false);
+  const [reframeResult, setReframeResult] = useState<string | null>(null);
+  const [reframeError, setReframeError] = useState<string | null>(null);
+  const [reframeAspect, setReframeAspect] = useState<'9:16'|'1:1'|'4:5'>('9:16');
+
+  // ── Clip Scoring / Best Take Picker state ─────────────────────────────────
+  const [scoreBusy, setScoreBusy] = useState(false);
+  const [clipScores, setClipScores] = useState<Record<string, { score: number; breakdown: Record<string, number> }>>({});
+  const [scoreError, setScoreError] = useState<string | null>(null);
+
+  // ── Captions state ──────────────────────────────────────────────────────────
+  const [captionBusy, setCaptionBusy] = useState(false);
+  const [captionSegments, setCaptionSegments] = useState<Array<{text:string;startSeconds:number;endSeconds:number}> | null>(null);
+  const [captionSrt, setCaptionSrt] = useState<string | null>(null);
+  const [captionError, setCaptionError] = useState<string | null>(null);
+
+  // ── Project Health state ───────────────────────────────────────────────────
+  const [healthBusy, setHealthBusy] = useState(false);
+  const [healthResult, setHealthResult] = useState<{ score: number; issues: Array<{severity:string;message:string;clipId?:string}>; summary: string } | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
   // ── Video Generation Studio state ───────────────────────────────────────────
   const [vgModel, setVgModel] = useState<VideoGenModel>("seedance_t2v");
   const [vgPrompt, setVgPrompt] = useState("");
@@ -1546,6 +1587,269 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   ⚠ {voiceIsolateError}
                 </div>
               )}
+            </div>
+
+            {/* ── Frame Interpolation (Smooth Slow-Mo) ────────────────────────── */}
+            <div style={{ background: 'rgba(59,138,247,0.07)', border: '1px solid rgba(59,138,247,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#3b8af7', marginBottom: 6 }}>🎞 Smooth Slow-Mo (Frame Interpolation)</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Generates in-between frames so slow-motion clips look silky smooth. Works on any clip — no GPU required.</div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 3 }}>MULTIPLIER</div>
+                  <select value={interpMultiplier} onChange={e => setInterpMultiplier(Number(e.target.value) as 2|4|8)}
+                    style={{ width: '100%', fontSize: 11, padding: '4px 6px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, color: '#e0e0e0' }}>
+                    <option value={2}>2× smoother</option>
+                    <option value={4}>4× very smooth</option>
+                    <option value={8}>8× ultra slow</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 3 }}>QUALITY</div>
+                  <select value={interpQuality} onChange={e => setInterpQuality(e.target.value as 'draft'|'good'|'best')}
+                    style={{ width: '100%', fontSize: 11, padding: '4px 6px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, color: '#e0e0e0' }}>
+                    <option value="draft">Draft (fast)</option>
+                    <option value="good">Good (balanced)</option>
+                    <option value="best">Best (slow render)</option>
+                  </select>
+                </div>
+              </div>
+              <button type="button" disabled={interpBusy}
+                onClick={async () => {
+                  const clip = project.sequence.clips.find(c => c.id === selectedClipId);
+                  const asset = clip ? project.assets.find(a => a.id === clip.assetId) : null;
+                  if (!asset?.sourcePath) { setInterpError('Select a clip on the timeline first'); return; }
+                  setInterpBusy(true); setInterpError(null); setInterpResult(null);
+                  const res = await (window as any).electronAPI?.frameInterpolate?.({ inputPath: asset.sourcePath, multiplier: interpMultiplier, quality: interpQuality });
+                  setInterpBusy(false);
+                  if (res?.success) setInterpResult(res.outputPath ?? 'Done');
+                  else setInterpError(res?.error ?? 'Failed');
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: interpBusy ? 'wait' : 'pointer', background: interpBusy ? 'rgba(59,138,247,0.1)' : 'rgba(59,138,247,0.2)', border: '1px solid rgba(59,138,247,0.4)', color: '#3b8af7' }}>
+                {interpBusy ? `⏳ Generating frames...` : `🎞 Generate ${interpMultiplier}× Frames`}
+              </button>
+              {interpResult && <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e' }}>✓ Saved: {interpResult}</div>}
+              {interpError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {interpError}</div>}
+            </div>
+
+            {/* ── Beat Detection + Music Sync ─────────────────────────────────── */}
+            <div style={{ background: 'rgba(168,85,247,0.07)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#c084fc', marginBottom: 6 }}>🥁 Beat Detection &amp; Music Sync</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Analyzes your audio track for BPM and beat timestamps. Then snap your cuts to the beat — automatic rhythm editing.</div>
+              <button type="button" disabled={beatBusy}
+                onClick={async () => {
+                  const audioTrack = project.sequence.tracks.find(t => t.kind === 'audio');
+                  const audioClip = audioTrack ? project.sequence.clips.find(c => c.trackId === audioTrack.id) : null;
+                  const audioAsset = audioClip ? project.assets.find(a => a.id === audioClip.assetId) : null;
+                  const clip = project.sequence.clips.find(c => c.id === selectedClipId);
+                  const asset = clip ? project.assets.find(a => a.id === clip.assetId) : audioAsset;
+                  if (!asset?.sourcePath) { setBeatError('No audio clip found. Select an audio clip or add one to the timeline.'); return; }
+                  setBeatBusy(true); setBeatError(null); setBeatResult(null);
+                  const res = await (window as any).electronAPI?.detectBeats?.({ filePath: asset.sourcePath });
+                  setBeatBusy(false);
+                  if (res?.success) setBeatResult({ bpm: res.bpm, beats: res.beats, confidence: res.confidence });
+                  else setBeatError(res?.error ?? 'Failed');
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: beatBusy ? 'wait' : 'pointer', background: beatBusy ? 'rgba(168,85,247,0.1)' : 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.4)', color: '#c084fc' }}>
+                {beatBusy ? '⏳ Analyzing...' : '🥁 Detect BPM &amp; Beats'}
+              </button>
+              {beatResult && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#c084fc' }}>{beatResult.bpm} BPM <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: 400 }}>({beatResult.confidence}% confidence)</span></div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>{beatResult.beats.length} beat markers detected</div>
+                  <button type="button"
+                    onClick={() => {
+                      const fps = project.sequence.settings.fps;
+                      const beatFrames = beatResult.beats.map(b => Math.round(b * fps));
+                      splitClipsAtBeats?.(beatFrames, undefined);
+                    }}
+                    style={{ marginTop: 6, width: '100%', padding: '5px 0', fontSize: 11, borderRadius: 5, background: 'rgba(168,85,247,0.15)', border: '1px solid rgba(168,85,247,0.3)', color: '#c084fc', cursor: 'pointer' }}>
+                    ✂︎ Snap Cuts to All {beatResult.beats.length} Beats
+                  </button>
+                </div>
+              )}
+              {beatError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {beatError}</div>}
+            </div>
+
+            {/* ── Audio Sync ──────────────────────────────────────────────────── */}
+            <div style={{ background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#22c55e', marginBottom: 6 }}>🔗 Audio Sync (Dual Camera)</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Match a phone recording to a camera clip by audio waveform. Finds the exact offset in milliseconds.</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 8 }}>
+                <input type="text" placeholder="Path A (camera / reference clip)" value={syncPathA} onChange={e => setSyncPathA(e.target.value)}
+                  style={{ fontSize: 11, padding: '5px 8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, color: '#e0e0e0' }} />
+                <input type="text" placeholder="Path B (phone / secondary clip to shift)" value={syncPathB} onChange={e => setSyncPathB(e.target.value)}
+                  style={{ fontSize: 11, padding: '5px 8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, color: '#e0e0e0' }} />
+              </div>
+              <button type="button" disabled={syncBusy || !syncPathA || !syncPathB}
+                onClick={async () => {
+                  setSyncBusy(true); setSyncError(null); setSyncResult(null);
+                  const res = await (window as any).electronAPI?.audioSync?.({ pathA: syncPathA, pathB: syncPathB });
+                  setSyncBusy(false);
+                  if (res?.success) setSyncResult(`Shift clip B by ${res.deltaSeconds > 0 ? '+' : ''}${res.deltaSeconds.toFixed(3)}s to align`);
+                  else setSyncError(res?.error ?? 'Failed');
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: syncBusy ? 'wait' : 'pointer', background: syncBusy ? 'rgba(34,197,94,0.08)' : 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e' }}>
+                {syncBusy ? '⏳ Analyzing waveforms...' : '🔗 Find Sync Offset'}
+              </button>
+              {syncResult && <div style={{ marginTop: 6, fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ {syncResult}</div>}
+              {syncError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {syncError}</div>}
+            </div>
+
+            {/* ── Smart Reframe ──────────────────────────────────────────────── */}
+            <div style={{ background: 'rgba(249,115,22,0.07)', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#fb923c', marginBottom: 6 }}>📱 Smart Reframe</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Crop your 16:9 footage to 9:16 (TikTok/Reels), 1:1 (Instagram), or 4:5 — center-framed, export-ready.</div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                {(['9:16','1:1','4:5'] as const).map(a => (
+                  <button key={a} type="button" onClick={() => setReframeAspect(a)}
+                    style={{ flex: 1, padding: '5px 0', fontSize: 11, borderRadius: 5, background: reframeAspect === a ? 'rgba(249,115,22,0.25)' : 'rgba(255,255,255,0.05)', border: `1px solid ${reframeAspect === a ? 'rgba(249,115,22,0.6)' : 'rgba(255,255,255,0.1)'}`, color: reframeAspect === a ? '#fb923c' : 'rgba(255,255,255,0.5)', cursor: 'pointer' }}>
+                    {a}
+                  </button>
+                ))}
+              </div>
+              <button type="button" disabled={reframeBusy}
+                onClick={async () => {
+                  const clip = project.sequence.clips.find(c => c.id === selectedClipId);
+                  const asset = clip ? project.assets.find(a => a.id === clip.assetId) : null;
+                  if (!asset?.sourcePath) { setReframeError('Select a video clip first'); return; }
+                  setReframeBusy(true); setReframeError(null); setReframeResult(null);
+                  const res = await (window as any).electronAPI?.smartReframe?.({
+                    inputPath: asset.sourcePath, targetAspect: reframeAspect,
+                    sourceWidth: asset.videoWidth ?? 1920, sourceHeight: asset.videoHeight ?? 1080,
+                  });
+                  setReframeBusy(false);
+                  if (res?.success) setReframeResult(res.outputPath);
+                  else setReframeError(res?.error ?? 'Failed');
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: reframeBusy ? 'wait' : 'pointer', background: reframeBusy ? 'rgba(249,115,22,0.08)' : 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.4)', color: '#fb923c' }}>
+                {reframeBusy ? '⏳ Reframing...' : `📱 Export ${reframeAspect}`}
+              </button>
+              {reframeResult && <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e' }}>✓ Saved: {reframeResult}</div>}
+              {reframeError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {reframeError}</div>}
+            </div>
+
+            {/* ── Best Take Picker (Clip Quality Scorer) ────────────────────────── */}
+            <div style={{ background: 'rgba(247,201,72,0.07)', border: '1px solid rgba(247,201,72,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#f7c948', marginBottom: 6 }}>⭐ Best Take Picker</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Scores every clip in your media pool on sharpness, exposure, and audio quality. Instantly see which takes are keepers.</div>
+              <button type="button" disabled={scoreBusy}
+                onClick={async () => {
+                  setScoreBusy(true); setScoreError(null);
+                  const results: Record<string, { score: number; breakdown: Record<string, number> }> = {};
+                  for (const asset of project.assets) {
+                    if (!asset.sourcePath) continue;
+                    const res = await (window as any).electronAPI?.scoreClip?.({ filePath: asset.sourcePath });
+                    if (res?.success) results[asset.id] = { score: res.score, breakdown: res.breakdown };
+                  }
+                  setClipScores(results);
+                  setScoreBusy(false);
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: scoreBusy ? 'wait' : 'pointer', background: scoreBusy ? 'rgba(247,201,72,0.08)' : 'rgba(247,201,72,0.15)', border: '1px solid rgba(247,201,72,0.4)', color: '#f7c948' }}>
+                {scoreBusy ? `⏳ Scoring ${project.assets.length} clips...` : `⭐ Score All ${project.assets.length} Clips`}
+              </button>
+              {Object.keys(clipScores).length > 0 && (
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {project.assets
+                    .filter(a => clipScores[a.id])
+                    .sort((a, b) => (clipScores[b.id]?.score ?? 0) - (clipScores[a.id]?.score ?? 0))
+                    .map((asset, i) => {
+                      const s = clipScores[asset.id];
+                      const bar = Math.round(s.score / 10);
+                      return (
+                        <div key={asset.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', background: i === 0 ? 'rgba(247,201,72,0.1)' : 'rgba(255,255,255,0.02)', borderRadius: 5 }}>
+                          <span style={{ fontSize: 10, width: 16 }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`}</span>
+                          <span style={{ flex: 1, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.name}</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: s.score >= 70 ? '#22c55e' : s.score >= 40 ? '#f7c948' : '#ef4444' }}>{s.score}</span>
+                          <span title={`Sharpness: ${s.breakdown.sharpness} | Exposure: ${s.breakdown.exposure} | Audio: ${s.breakdown.audio}`} style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', cursor: 'help' }}>ℹ</span>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+              {scoreError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {scoreError}</div>}
+            </div>
+
+            {/* ── Auto Captions ────────────────────────────────────────────────── */}
+            <div style={{ background: 'rgba(6,182,212,0.07)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#22d3ee', marginBottom: 6 }}>💬 Auto Captions (Whisper)</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Transcribes your video with word-level timing. Exports SRT or burns captions directly into your export. Requires Groq API key.</div>
+              <button type="button" disabled={captionBusy}
+                onClick={async () => {
+                  const clip = project.sequence.clips.find(c => c.id === selectedClipId);
+                  const asset = clip ? project.assets.find(a => a.id === clip.assetId) : project.assets[0];
+                  if (!asset?.sourcePath) { setCaptionError('Select a clip or add media to timeline first'); return; }
+                  setCaptionBusy(true); setCaptionError(null); setCaptionSegments(null); setCaptionSrt(null);
+                  const res = await (window as any).electronAPI?.generateCaptions?.({ filePath: asset.sourcePath });
+                  setCaptionBusy(false);
+                  if (res?.success) { setCaptionSegments(res.segments); setCaptionSrt(res.srt); }
+                  else setCaptionError(res?.error ?? 'Failed');
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: captionBusy ? 'wait' : 'pointer', background: captionBusy ? 'rgba(6,182,212,0.08)' : 'rgba(6,182,212,0.15)', border: '1px solid rgba(6,182,212,0.4)', color: '#22d3ee' }}>
+                {captionBusy ? '⏳ Transcribing...' : '💬 Generate Captions'}
+              </button>
+              {captionSegments && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 11, color: '#22d3ee', marginBottom: 6 }}>✓ {captionSegments.length} caption segments generated</div>
+                  <div style={{ maxHeight: 100, overflowY: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.5)', lineHeight: 1.6 }}>
+                    {captionSegments.slice(0, 5).map((s, i) => <div key={i}>[{s.startSeconds.toFixed(1)}s] {s.text}</div>)}
+                    {captionSegments.length > 5 && <div>...+{captionSegments.length - 5} more</div>}
+                  </div>
+                  {captionSrt && (
+                    <button type="button"
+                      onClick={() => {
+                        const blob = new Blob([captionSrt!], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a'); a.href = url; a.download = 'captions.srt'; a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      style={{ marginTop: 6, width: '100%', padding: '4px 0', fontSize: 11, borderRadius: 5, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.3)', color: '#22d3ee', cursor: 'pointer' }}>
+                      ⬇ Download .SRT
+                    </button>
+                  )}
+                </div>
+              )}
+              {captionError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {captionError}</div>}
+            </div>
+
+            {/* ── Project Health Score ────────────────────────────────────────────── */}
+            <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: '#e0e0e0', marginBottom: 6 }}>🩺 Project Health Check</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>Scans for audio peaking, gaps, missing grades, bad export settings, and resolution issues before you render.</div>
+              <button type="button" disabled={healthBusy}
+                onClick={async () => {
+                  setHealthBusy(true); setHealthError(null); setHealthResult(null);
+                  const res = await (window as any).electronAPI?.projectHealthCheck?.({ project });
+                  setHealthBusy(false);
+                  if (res?.success) setHealthResult({ score: res.score, issues: res.issues, summary: res.summary });
+                  else setHealthError(res?.error ?? 'Failed');
+                }}
+                style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: healthBusy ? 'wait' : 'pointer', background: healthBusy ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', color: '#e0e0e0' }}>
+                {healthBusy ? '⏳ Scanning...' : '🩺 Run Health Check'}
+              </button>
+              {healthResult && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: healthResult.score >= 80 ? '#22c55e' : healthResult.score >= 50 ? '#f7c948' : '#ef4444' }}>{healthResult.score}</div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>Project Score</div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{healthResult.summary}</div>
+                    </div>
+                  </div>
+                  {healthResult.issues.length === 0 ? (
+                    <div style={{ fontSize: 11, color: '#22c55e' }}>✓ No issues found — project looks great!</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {healthResult.issues.map((issue, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 6, fontSize: 11, padding: '4px 6px', borderRadius: 4, background: issue.severity === 'error' ? 'rgba(239,68,68,0.1)' : issue.severity === 'warning' ? 'rgba(247,201,72,0.08)' : 'rgba(255,255,255,0.04)' }}>
+                          <span>{issue.severity === 'error' ? '🔴' : issue.severity === 'warning' ? '🟡' : '🔵'}</span>
+                          <span style={{ color: 'rgba(255,255,255,0.7)' }}>{issue.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {healthError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {healthError}</div>}
             </div>
 
             {/* Media Input — auto-fill from timeline selection or browse local files */}

@@ -8771,3 +8771,8 @@ kbd {
   text-align: center;
 }
 .rq-clear-btn:hover { background: rgba(255,255,255,0.09); color: rgba(255,255,255,0.7); }
+
+@keyframes clawPulse {
+  0%, 100% { box-shadow: 0 0 8px var(--pulse-color, rgba(168,85,247,0.4)); transform: scale(1); }
+  50% { box-shadow: 0 0 18px var(--pulse-color, rgba(168,85,247,0.7)); transform: scale(1.06); }
+}
