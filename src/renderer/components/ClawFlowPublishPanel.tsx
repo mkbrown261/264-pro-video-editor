@@ -38,10 +38,10 @@ const SECTION_LABEL: React.CSSProperties = {
 const META_INPUT: React.CSSProperties = {
   background: 'rgba(255,255,255,0.04)',
   border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: 8,
-  padding: '10px 14px',
+  borderRadius: 6,
+  padding: '7px 10px',
   color: '#e2e8f0',
-  fontSize: 13,
+  fontSize: 12,
   width: '100%',
   boxSizing: 'border-box',
   outline: 'none',
@@ -320,9 +320,9 @@ export function ClawFlowPublishPanel({
     return (
       <div
         style={{
-          padding: '12px 16px',
-          borderRadius: 10,
-          marginBottom: 10,
+          padding: '8px 10px',
+          borderRadius: 8,
+          marginBottom: 8,
           border: `1px solid ${selected ? '#7c3aed' : 'rgba(255,255,255,0.08)'}`,
           background: selected ? 'rgba(124,58,237,0.1)' : 'rgba(255,255,255,0.03)',
           display: 'flex',
@@ -331,7 +331,7 @@ export function ClawFlowPublishPanel({
         }}
       >
         {/* Left: checkbox + icon + name + badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1, overflow: 'hidden' }}>
           <input
             type="checkbox"
             checked={selected}
@@ -339,7 +339,7 @@ export function ClawFlowPublishPanel({
             style={{ accentColor: '#7c3aed', width: 14, height: 14, cursor: 'pointer' }}
           />
           <span style={{ fontSize: 16 }}>{icon}</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: selected ? '#c4b5fd' : '#94a3b8' }}>{label}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: selected ? '#c4b5fd' : '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{label}</span>
           {isConnected && (
             <span style={{
               fontSize: 10,
@@ -397,7 +397,7 @@ export function ClawFlowPublishPanel({
     }}>
       {/* ── HEADER BAR ──────────────────────────────────────────────────────── */}
       <div style={{
-        padding: '16px 24px',
+        padding: '10px 14px',
         borderBottom: '1px solid #1e293b',
         display: 'flex',
         alignItems: 'center',
@@ -405,7 +405,7 @@ export function ClawFlowPublishPanel({
         flexShrink: 0,
       }}>
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 800, color: '#fff', margin: 0, lineHeight: 1.2 }}>
+          <h1 style={{ fontSize: 14, fontWeight: 800, color: '#fff', margin: 0, lineHeight: 1.2 }}>
             🚀 ClawFlow Publish
           </h1>
           <p style={{ fontSize: 12, color: '#64748b', margin: '3px 0 0' }}>
@@ -431,27 +431,26 @@ export function ClawFlowPublishPanel({
         </div>
       </div>
 
-      {/* ── 2-COLUMN CONTENT AREA ───────────────────────────────────────────── */}
+      {/* ── SINGLE SCROLLABLE COLUMN ───────────────────────────────────────── */}
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        gap: 0,
+        display: 'flex',
+        flexDirection: 'column',
         flex: 1,
-        overflow: 'hidden',
+        overflowY: 'auto',
+        overflowX: 'hidden',
       }}>
 
-        {/* ════════════════ LEFT COLUMN ════════════════ */}
+        {/* ════════════ CONTENT ════════════ */}
         <div style={{
-          padding: 24,
-          overflowY: 'auto',
-          borderRight: '1px solid #1e293b',
+          padding: '16px 16px',
           display: 'flex',
           flexDirection: 'column',
+          minWidth: 0,
         }}>
 
           {/* ── Platforms ─────────────────────────────── */}
           <section style={{ marginBottom: 24 }}>
-            <div style={SECTION_LABEL}>Platforms</div>
+            <div style={{ ...SECTION_LABEL, marginBottom: 6 }}>Platforms</div>
             <PlatformCard
               id="youtube"
               label="YouTube"
@@ -564,10 +563,9 @@ export function ClawFlowPublishPanel({
                 : `🚀 Publish to ${activePlatformCount} Platform${activePlatformCount !== 1 ? 's' : ''}`}
             </button>
           </div>
-        </div>
 
-        {/* ════════════════ RIGHT COLUMN ════════════════ */}
-        <div style={{ padding: 24, overflowY: 'auto' }}>
+          {/* ── DIVIDER ── */}
+          <div style={{ borderTop: '1px solid #1e293b', margin: '8px 0 16px' }} />
 
           {/* ── Metadata ──────────────────────────────── */}
           <section style={{ marginBottom: 24 }}>

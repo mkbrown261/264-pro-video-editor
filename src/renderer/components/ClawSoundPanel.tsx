@@ -486,7 +486,7 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
 
       {/* Channel strips */}
       <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "8px 12px", display: "flex", gap: 8, overflowX: "auto" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", letterSpacing: "0.08em", alignSelf: "center", minWidth: 80 }}>CHANNEL STRIP</div>
+        <div style={{ fontSize: 9, fontWeight: 700, color: "#475569", letterSpacing: "0.06em", alignSelf: "center", flexShrink: 0 }}>CHANNELS</div>
         {audioTracks.map(t => {
           const ts = trackStates[t.id];
           if (!ts) return null;
@@ -728,23 +728,23 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
 
       {/* Normalize buttons */}
       {onNormalizeAudio && (
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "8px 12px", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
           <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, minWidth: 64 }}>Normalize:</span>
           <button
             type="button"
             onClick={() => onNormalizeAudio(-14)}
-            style={{ padding: "5px 10px", borderRadius: 6, background: "#7c3aed", border: "none", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+            style={{ padding: "5px 8px", borderRadius: 6, background: "#7c3aed", border: "none", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}
             title="Normalize all audio clips to -14 LUFS (streaming standard)"
           >
-            -14 LUFS Streaming
+            -14 LUFS
           </button>
           <button
             type="button"
             onClick={() => onNormalizeAudio(-23)}
-            style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#94a3b8", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+            style={{ padding: "5px 8px", borderRadius: 6, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#94a3b8", fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}
             title="Normalize all audio clips to -23 LUFS (broadcast standard)"
           >
-            -23 LUFS Broadcast
+            -23 LUFS
           </button>
         </div>
       )}
