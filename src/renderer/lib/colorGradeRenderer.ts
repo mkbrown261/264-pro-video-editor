@@ -76,6 +76,7 @@ uniform float u_contrast;        // -1..1, 0 = neutral
 uniform float u_saturation;      // 0..3, 1 = neutral
 uniform float u_temperature;     // -100..100, 0 = neutral
 uniform float u_tint;            // -100..100, 0 = neutral
+uniform int   u_logTransform;    // 0=none,1=slog2,2=slog3,3=clog,4=clog2,5=clog3,6=logc,7=log3g10,8=vlog
 
 varying vec2 v_uv;
 
@@ -154,9 +155,70 @@ float sampleLUT(sampler2D lut, float v) {
   return texture2D(lut, vec2(u, 0.5)).r;
 }
 
+// ── Log Input Transforms ────────────────────────────────────────
+// Each function converts camera log encoding to scene-linear Rec.709
+float slog2_to_linear(float x) {
+  x = max(x, 0.0);
+  return x >= 0.030001222851889303 ?
+    pow(10.0, (x - 0.616596 - 0.03) / 0.432699) - 0.037584 :
+    (x - 0.030001222851889303) / 5.0;
+}
+vec3 apply_slog2(vec3 c) { return clamp(vec3(slog2_to_linear(c.r), slog2_to_linear(c.g), slog2_to_linear(c.b)), 0.0, 1.0); }
+
+float slog3_to_linear(float x) {
+  return x >= 0.171672532 ?
+    pow(10.0, (x - 0.598206) / 0.326006) * 0.18 - 0.01 :
+    (x - 0.092864) / 5.5;
+}
+vec3 apply_slog3(vec3 c) { return clamp(vec3(slog3_to_linear(c.r), slog3_to_linear(c.g), slog3_to_linear(c.b)), 0.0, 1.0); }
+
+float clog_to_linear(float x) {
+  // Canon C-Log (original)
+  return x >= 0.0730597 ?
+    pow(10.0, (x - 0.0730597) / 0.529136) / 10.1596 :
+    -(pow(10.0, -(x - 0.0730597) / 0.529136) - 1.0) / 10.1596;
+}
+vec3 apply_clog(vec3 c) { return clamp(vec3(clog_to_linear(c.r), clog_to_linear(c.g), clog_to_linear(c.b)) * 0.9 + 0.05, 0.0, 1.0); }
+
+float logc_to_linear(float x) {
+  // ARRI LogC (EI 800, for visual approx)
+  const float a = 5.555556; const float b = 0.052272; const float c_co = 0.247190;
+  const float d = 0.385537; const float e = 5.367655; const float f = 0.092809;
+  const float cut = 0.010591; // linear cut
+  return x >= e * cut + f ?
+    (pow(10.0, (x - d) / c_co) - b) / a :
+    (x - f) / e;
+}
+vec3 apply_logc(vec3 c) { return clamp(vec3(logc_to_linear(c.r), logc_to_linear(c.g), logc_to_linear(c.b)) * 1.1, 0.0, 1.0); }
+
+float vlog_to_linear(float x) {
+  // Panasonic V-Log (approximate)
+  const float cut1 = 0.181; const float b = 0.00873;
+  const float c_co = 0.241514; const float d = 0.598206;
+  return x >= cut1 ?
+    pow(10.0, (x - d) / c_co) - b :
+    (x - 0.125) / 5.6;
+}
+vec3 apply_vlog(vec3 c) { return clamp(vec3(vlog_to_linear(c.r), vlog_to_linear(c.g), vlog_to_linear(c.b)) * 0.85 + 0.07, 0.0, 1.0); }
+
+vec3 apply_log_input_transform(vec3 col, int mode) {
+  if (mode == 1) return apply_slog2(col);
+  if (mode == 2) return apply_slog3(col);
+  if (mode == 3) return apply_clog(col);
+  if (mode == 4) return apply_clog(col); // C-Log2 approx
+  if (mode == 5) return apply_clog(col); // C-Log3 approx
+  if (mode == 6) return apply_logc(col);
+  if (mode == 7) return apply_logc(col); // Log3G10 approx
+  if (mode == 8) return apply_vlog(col);
+  return col; // none / rec709
+}
+
 void main() {
   vec4 px  = texture2D(u_video, v_uv);
   vec3 col = clamp(px.rgb, 0.0, 1.0);
+
+  // 0. Log Input Transform (S-Log2/3, C-Log, LogC, V-Log, etc.)
+  col = apply_log_input_transform(col, u_logTransform);
 
   // 1. Exposure (multiply by 2^stops)
   //    exposure=0 → ×1 = pass-through
@@ -359,6 +421,7 @@ export class ColorGradeRenderer {
         "u_video", "u_curve_r", "u_curve_g", "u_curve_b", "u_curve_m",
         "u_lift", "u_gamma", "u_gain", "u_offset",
         "u_exposure", "u_contrast", "u_saturation", "u_temperature", "u_tint",
+        "u_logTransform",
       ]) {
         this.uniforms[name] = gl.getUniformLocation(this.program, name);
       }
@@ -524,6 +587,13 @@ export class ColorGradeRenderer {
     gl.uniform1f(this.uniforms["u_saturation"],  safeF(grade?.saturation  ?? 1, 1));
     gl.uniform1f(this.uniforms["u_temperature"], safeF(grade?.temperature ?? 0));
     gl.uniform1f(this.uniforms["u_tint"],        safeF(grade?.tint        ?? 0));
+
+    // Log input transform index
+    const LOG_MODE_MAP: Record<string, number> = {
+      none: 0, rec709: 0, slog2: 1, slog3: 2, clog: 3, clog2: 4, clog3: 5, logc: 6, log3g10: 7, vlog: 8
+    };
+    const logMode = LOG_MODE_MAP[(grade?.logInputTransform ?? 'none')] ?? 0;
+    gl.uniform1i(this.uniforms["u_logTransform"], logMode);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

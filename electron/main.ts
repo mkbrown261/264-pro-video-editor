@@ -1536,6 +1536,95 @@ ipcMain.handle('publish:check-connection', async (_ev, platform: string) => {
   return { connected: expiresAt > Date.now(), demo: token.accessToken?.startsWith('demo_token_') ?? false };
 });
 
+// ── Vimeo OAuth + Upload ────────────────────────────────────────────────────────────────
+ipcMain.handle('publish:connect-vimeo', async () => {
+  try {
+    const clientId     = process.env.VIMEO_CLIENT_ID;
+    const clientSecret = process.env.VIMEO_CLIENT_SECRET;
+    const redirectUri  = 'http://localhost:8644/oauth/vimeo';
+    if (!clientId || !clientSecret) {
+      // Demo mode: store a demo token
+      oauthTokens['vimeo'] = { accessToken: 'demo_token_vimeo', refreshToken: '', expiresAt: Date.now() + 3600_000 };
+      return { success: true, demo: true, message: 'Vimeo connected (demo mode — add VIMEO_CLIENT_ID + VIMEO_CLIENT_SECRET for real uploads)' };
+    }
+    const scope = 'upload private public';
+    const authUrl = `https://api.vimeo.com/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=264pro`;
+    shell.openExternal(authUrl);
+
+    const code = await new Promise<string | null>((resolve) => {
+      const { createServer } = require('http');
+      const server = createServer((req: any, res: any) => {
+        try {
+          const u = new URL(`http://localhost:8644${req.url}`);
+          const code = u.searchParams.get('code');
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body><script>window.close();</script><p>Vimeo connected. You can close this tab.</p></body></html>');
+          server.close();
+          resolve(code);
+        } catch { res.writeHead(400); res.end(); }
+      });
+      server.listen(8644, 'localhost');
+      setTimeout(() => { server.close(); resolve(null); }, 120_000);
+    });
+
+    if (!code) return { success: false, error: 'OAuth cancelled or timed out' };
+    const tokenRes = await fetch('https://api.vimeo.com/oauth/access_token', {
+      method: 'POST',
+      headers: { Authorization: `basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
+    });
+    const tokenData = await tokenRes.json() as any;
+    if (!tokenData.access_token) return { success: false, error: tokenData.error_description ?? 'Token exchange failed' };
+    oauthTokens['vimeo'] = { accessToken: tokenData.access_token, refreshToken: '', expiresAt: Date.now() + 3600_000 * 24 * 60 };
+    return { success: true, message: 'Vimeo connected' };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+ipcMain.handle('publish:upload-vimeo', async (_ev, args: { videoPath: string; title: string; description: string; privacy?: string }) => {
+  try {
+    const token = oauthTokens['vimeo'];
+    if (!token) return { success: false, error: 'Not connected to Vimeo. Click "Connect Vimeo" first.' };
+    if (token.accessToken.startsWith('demo_token_')) {
+      return { success: false, error: 'Demo mode: add VIMEO_CLIENT_ID + VIMEO_CLIENT_SECRET for real uploads.' };
+    }
+    const fsM = await import('fs');
+    if (!fsM.existsSync(args.videoPath)) return { success: false, error: `File not found: ${args.videoPath}` };
+    const fileSize = fsM.statSync(args.videoPath).size;
+    // Step 1: Create upload ticket
+    const createRes = await fetch('https://api.vimeo.com/me/videos', {
+      method: 'POST',
+      headers: { Authorization: `bearer ${token.accessToken}`, 'Content-Type': 'application/json', Accept: 'application/vnd.vimeo.*+json;version=3.4' },
+      body: JSON.stringify({
+        upload: { approach: 'tus', size: fileSize },
+        name: args.title,
+        description: args.description,
+        privacy: { view: args.privacy ?? 'anybody' },
+      }),
+    });
+    const createData = await createRes.json() as any;
+    if (!createData.upload?.upload_link) return { success: false, error: `Vimeo create failed: ${JSON.stringify(createData).slice(0,200)}` };
+    const uploadLink = createData.upload.upload_link;
+    const videoUri   = createData.uri as string; // e.g. /videos/123456
+    // Step 2: TUS upload (single PATCH)
+    const { createReadStream: crs } = await import('fs');
+    const patchRes = await fetch(uploadLink, {
+      method: 'PATCH',
+      headers: {
+        'Tus-Resumable': '1.0.0',
+        'Upload-Offset': '0',
+        'Content-Type': 'application/offset+octet-stream',
+        'Content-Length': String(fileSize),
+      },
+      // @ts-ignore
+      body: Readable.toWeb(crs(args.videoPath)),
+      duplex: 'half',
+    } as RequestInit);
+    if (!patchRes.ok) return { success: false, error: `Vimeo upload failed: ${patchRes.status}` };
+    const videoId = videoUri.replace('/videos/', '');
+    return { success: true, videoId, url: `https://vimeo.com/${videoId}` };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
 ipcMain.handle('publish:disconnect', async (_ev, platform: string) => {
   delete oauthTokens[platform];
   return { success: true };

@@ -44,6 +44,11 @@ export interface ColorGradingPanelProps {
   onRenameColorStill?: (stillId: string, label: string) => void;
   // ClawFlow: Auto Color Match
   onAutoColorMatch?: () => void;
+  /** Grade version slot A/B/C (DaVinci-style) */
+  activeGradeSlot?: 'A' | 'B' | 'C';
+  gradeVersions?: Partial<Record<'A' | 'B' | 'C', ColorGrade>>;
+  onSwitchGradeSlot?: (slot: 'A' | 'B' | 'C') => void;
+  onCopyGradeToSlot?: (from: 'A' | 'B' | 'C', to: 'A' | 'B' | 'C') => void;
 }
 
 type ActiveScope   = "waveform" | "vectorscope" | "histogram" | "parade";
@@ -928,6 +933,10 @@ export function ColorGradingPanel({
   onRemoveColorStill,
   onRenameColorStill,
   onAutoColorMatch,
+  activeGradeSlot = 'A',
+  gradeVersions = {},
+  onSwitchGradeSlot,
+  onCopyGradeToSlot,
 }: ColorGradingPanelProps) {
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("primary");
@@ -1063,6 +1072,26 @@ export function ColorGradingPanel({
           />
           {clipName}
         </span>
+        {/* A/B/C grade version slots */}
+        {onSwitchGradeSlot && (
+          <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+            {(['A', 'B', 'C'] as const).map(slot => (
+              <button
+                key={slot}
+                type="button"
+                title={`Grade version ${slot}${gradeVersions[slot] ? ' (has grade)' : ' (empty)'}\nRight-click to copy current grade here`}
+                onContextMenu={(e) => { e.preventDefault(); onCopyGradeToSlot?.(activeGradeSlot, slot); }}
+                onClick={() => onSwitchGradeSlot(slot)}
+                style={{
+                  fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
+                  background: activeGradeSlot === slot ? 'rgba(168,85,247,0.3)' : gradeVersions[slot] ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${activeGradeSlot === slot ? 'rgba(168,85,247,0.6)' : 'rgba(255,255,255,0.1)'}`,
+                  color: activeGradeSlot === slot ? '#c084fc' : gradeVersions[slot] ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)',
+                }}
+              >{slot}{gradeVersions[slot] ? ' ●' : ''}</button>
+            ))}
+          </div>
+        )}
         <div className="cgp-topbar-actions">
           {onAutoColorMatch && (
             <button
@@ -1153,6 +1182,27 @@ export function ColorGradingPanel({
         {/* ─── PRIMARY ─── */}
         {activePanel === "primary" && (
           <div className="cgp-primary">
+
+            {/* ── Log Input Transform ───────────────────────────────────── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '4px 6px', background: grade.logInputTransform && grade.logInputTransform !== 'none' ? 'rgba(168,85,247,0.1)' : 'rgba(255,255,255,0.03)', borderRadius: 6, border: grade.logInputTransform && grade.logInputTransform !== 'none' ? '1px solid rgba(168,85,247,0.3)' : '1px solid rgba(255,255,255,0.06)' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-s)', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>🎥 Log</span>
+              <select
+                value={grade.logInputTransform ?? 'none'}
+                onChange={e => handleUpdate({ logInputTransform: e.target.value as import('../../shared/models').LogInputTransform })}
+                style={{ flex: 1, fontSize: 11, background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4, color: 'var(--text-p)', padding: '2px 4px', cursor: 'pointer' }}
+                title="Camera log input transform — converts log footage to Rec.709 before grading"
+              >
+                <option value="none">None (Rec.709 / SDR)</option>
+                <option value="slog2">Sony S-Log2</option>
+                <option value="slog3">Sony S-Log3</option>
+                <option value="clog">Canon C-Log</option>
+                <option value="clog2">Canon C-Log2</option>
+                <option value="clog3">Canon C-Log3</option>
+                <option value="logc">ARRI Log-C</option>
+                <option value="log3g10">Nikon N-Log / Log3G10</option>
+                <option value="vlog">Panasonic V-Log</option>
+              </select>
+            </div>
 
             <div className="cgp-section-label">COLOR WHEELS</div>
             <div className="cgp-wheels-row">

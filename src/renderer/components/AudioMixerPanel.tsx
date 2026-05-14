@@ -11,7 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { TimelineTrack, EQBand, CompressorSettings } from "../../shared/models";
+import type { TimelineTrack, EQBand, AutomationLane } from "../../shared/models";
 import type { AudioEngine } from "../lib/AudioScheduler";
 
 // ── Default EQ bands (3-band: low shelf / peak mid / high shelf) ───────────────
@@ -72,12 +72,17 @@ interface ChannelStripProps {
   onSolo: () => void;
   onVolumeChange: (v: number) => void;
   onUpdateEQ?: (bands: EQBand[]) => void;
-  onUpdateCompressor?: (settings: CompressorSettings) => void;
+  onUpdateCompressor?: (settings: import('../../shared/models').CompressorSettings) => void;
   /** Live RMS level 0–1 from AnalyserNode, or null when not playing */
   liveLevel: number | null;
+  /** Total sequence frames (for automation lane width) */
+  totalFrames?: number;
+  /** Playhead frame for automation read-position indicator */
+  playheadFrame?: number;
+  onToggleAutomation?: (param: 'volume' | 'pan') => void;
 }
 
-function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveLevel }: ChannelStripProps) {
+function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveLevel, totalFrames = 1000, playheadFrame = 0, onToggleAutomation }: ChannelStripProps) {
   const isAudio = track.kind === "audio";
   const vol = track.volume ?? 1;
   // Show live level when playing, fall back to gain-based display otherwise

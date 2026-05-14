@@ -165,12 +165,15 @@ const electronAPI = {
   // ── Publish OAuth ─────────────────────────────────────────────────────────
   connectYouTube: () => ipcRenderer.invoke('publish:connect-youtube'),
   connectTikTok: () => ipcRenderer.invoke('publish:connect-tiktok'),
+  connectVimeo: () => ipcRenderer.invoke('publish:connect-vimeo'),
   checkPublishConnection: (platform: string) => ipcRenderer.invoke('publish:check-connection', platform),
   disconnectPublish: (platform: string) => ipcRenderer.invoke('publish:disconnect', platform),
   uploadYouTube: (args: { videoPath: string; title: string; description: string; tags: string[]; privacyStatus?: string }) =>
     ipcRenderer.invoke('publish:upload-youtube', args),
   uploadTikTok: (args: { videoPath: string; title: string; privacyLevel?: string }) =>
     ipcRenderer.invoke('publish:upload-tiktok', args),
+  uploadVimeo: (args: { videoPath: string; title: string; description: string; privacy?: string }) =>
+    ipcRenderer.invoke('publish:upload-vimeo', args),
   // ── Proxy workflow ────────────────────────────────────────────────────────
   generateProxy: (args: { assetId: string; sourcePath: string; proxyDir: string }) =>
     ipcRenderer.invoke('proxy:generate', args),

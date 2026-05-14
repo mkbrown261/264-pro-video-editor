@@ -10,6 +10,7 @@ interface PublishElectronAPI {
   disconnectPublish?: (platform: string) => Promise<{ success: boolean }>;
   uploadYouTube?: (args: { videoPath: string; title: string; description: string; tags: string[]; privacyStatus?: string }) => Promise<{ success: boolean; videoId?: string; url?: string; error?: string }>;
   uploadTikTok?: (args: { videoPath: string; title: string; privacyLevel?: string }) => Promise<{ success: boolean; publishId?: string; error?: string }>;
+  uploadVimeo?: (args: { videoPath: string; title: string; description: string; privacy?: string }) => Promise<{ success: boolean; videoId?: string; url?: string; error?: string }>;
   generatePublishMetadata?: (params: { name: string; duration: number }) => Promise<{ success: boolean; title?: string; description?: string; tags?: string[] }>;
 }
 
@@ -54,7 +55,7 @@ export function ClawFlowPublishPanel({
   sequenceFps,
 }: ClawFlowPublishPanelProps) {
   // Platforms
-  const [platforms, setPlatforms] = useState({ youtube: false, tiktok: false, instagram: false, twitter: false });
+  const [platforms, setPlatforms] = useState({ youtube: false, tiktok: false, vimeo: false, instagram: false, twitter: false });
 
   // Title / Description
   const [title, setTitle] = useState('');
@@ -81,6 +82,7 @@ export function ClawFlowPublishPanel({
   // Connection state
   const [ytConnected, setYtConnected] = useState(false);
   const [ttConnected, setTtConnected] = useState(false);
+  const [vimeoConnected, setVimeoConnected] = useState(false);
   const [ytDemo, setYtDemo] = useState(false);
   const [ttDemo, setTtDemo] = useState(false);
 
@@ -95,6 +97,9 @@ export function ClawFlowPublishPanel({
       .catch(() => { /* ignore — not connected */ });
     void api().checkPublishConnection?.('tiktok')
       .then(r => { if (r) { setTtConnected(r.connected); setTtDemo(r.demo ?? false); } })
+      .catch(() => { /* ignore — not connected */ });
+    void api().checkPublishConnection?.('vimeo')
+      .then(r => { if (r) { setVimeoConnected(r.connected); } })
       .catch(() => { /* ignore — not connected */ });
   }, []);
 
@@ -159,11 +164,23 @@ export function ClawFlowPublishPanel({
     }
   };
 
-  const handleDisconnect = async (platform: 'youtube' | 'tiktok') => {
+  const handleConnectVimeo = async () => {
+    toast.info('Opening Vimeo login…');
+    const r = await (api() as any).connectVimeo?.();
+    if (r?.success) {
+      setVimeoConnected(true);
+      toast.success(r.message ?? '✅ Vimeo connected');
+    } else {
+      toast.error(r?.error ?? 'Connection failed');
+    }
+  };
+
+  const handleDisconnect = async (platform: 'youtube' | 'tiktok' | 'vimeo') => {
     await api().disconnectPublish?.(platform);
     if (platform === 'youtube') { setYtConnected(false); setYtDemo(false); }
     if (platform === 'tiktok') { setTtConnected(false); setTtDemo(false); }
-    toast.info(`Disconnected from ${platform === 'youtube' ? 'YouTube' : 'TikTok'}`);
+    if (platform === 'vimeo') { setVimeoConnected(false); }
+    toast.info(`Disconnected from ${platform.charAt(0).toUpperCase() + platform.slice(1)}`);
   };
 
   async function handlePublish() {
@@ -231,6 +248,24 @@ export function ClawFlowPublishPanel({
             toast.success('✅ TikTok upload complete');
           } else {
             toast.error(`TikTok: ${r?.error ?? 'Upload failed'}`);
+          }
+        } else if (platform === 'vimeo') {
+          if (!vimeoConnected) {
+            toast.error('Connect your Vimeo account first');
+            continue;
+          }
+          toast.info('Uploading to Vimeo…');
+          const r = await api().uploadVimeo?.({
+            videoPath: lastExportedPath,
+            title: videoTitle,
+            description: videoDescription,
+            privacy: 'anybody',
+          });
+          if (r?.success) {
+            setPublishResult({ platform: 'Vimeo', url: r.url });
+            toast.success(`✅ Vimeo upload complete${r.url ? ` — ${r.url}` : ''}`);
+          } else {
+            toast.error(`Vimeo: ${r?.error ?? 'Upload failed'}`);
           }
         } else {
           toast.info(`${platform} publishing coming soon`);
@@ -434,6 +469,15 @@ export function ClawFlowPublishPanel({
               isDemo={ttDemo}
               onConnect={handleConnectTikTok}
               onDisconnectPlatform={() => handleDisconnect('tiktok')}
+            />
+            <PlatformCard
+              id="vimeo"
+              label="Vimeo"
+              icon="▶"
+              isConnected={vimeoConnected}
+              isDemo={false}
+              onConnect={handleConnectVimeo}
+              onDisconnectPlatform={() => handleDisconnect('vimeo')}
             />
             <PlatformCard id="instagram" label="Instagram" icon="◎" />
             <PlatformCard id="twitter" label="Twitter / X" icon="✦" />

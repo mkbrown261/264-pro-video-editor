@@ -597,9 +597,11 @@ export default function App() {
   const fixedPlayheadMode = useEditorStore((s) => s.fixedPlayheadMode);
 
   // Precision Trim
-  const rippleTrim    = useEditorStore((s) => s.rippleTrim);
-  const rollTrim      = useEditorStore((s) => s.rollTrim);
-  const createBin     = useEditorStore((s) => s.createBin);
+  const rippleTrim      = useEditorStore((s) => s.rippleTrim);
+  const rollTrim        = useEditorStore((s) => s.rollTrim);
+  const createBin       = useEditorStore((s) => s.createBin);
+  const switchGradeSlot = useEditorStore((s) => s.switchGradeSlot);
+  const copyGradeToSlot = useEditorStore((s) => s.copyGradeToSlot);
   const renameBin     = useEditorStore((s) => s.renameBin);
   const deleteBin     = useEditorStore((s) => s.deleteBin);
   const moveAssetToBin = useEditorStore((s) => s.moveAssetToBin);
@@ -3689,6 +3691,10 @@ export default function App() {
                 onAddColorStill={addColorStill}
                 onRemoveColorStill={removeColorStill}
                 onRenameColorStill={renameColorStill}
+                activeGradeSlot={inspectorSegment?.clip.activeGradeSlot ?? 'A'}
+                gradeVersions={inspectorSegment?.clip.gradeVersions ?? {}}
+                onSwitchGradeSlot={(slot) => { if (selectedClipId) switchGradeSlot(selectedClipId, slot); }}
+                onCopyGradeToSlot={(from, to) => { if (selectedClipId) copyGradeToSlot(selectedClipId, from, to); }}
               />
               {/* Open in Fusion button */}
               {selectedClipId && (

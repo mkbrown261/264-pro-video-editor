@@ -289,7 +289,12 @@ export interface ColorStill {
   clipId: string;
 }
 
+/** Log-to-linear input transform — applied BEFORE all other grade operations */
+export type LogInputTransform = 'none' | 'slog2' | 'slog3' | 'clog' | 'clog2' | 'clog3' | 'logc' | 'log3g10' | 'vlog' | 'rec709';
+
 export interface ColorGrade {
+  /** Camera log input transform. Converts log footage to Rec.709 before grading. */
+  logInputTransform?: LogInputTransform;
   // Primary wheels
   lift: RGBValue;
   gamma: RGBValue;
@@ -472,6 +477,10 @@ export interface TimelineClip {
   masks: ClipMask[];
   effects: ClipEffect[];
   colorGrade: ColorGrade | null;
+  /** Grade versions: A/B/C alternates per clip (DaVinci-style). Key = 'A'|'B'|'C' */
+  gradeVersions?: Partial<Record<'A' | 'B' | 'C', ColorGrade>>;
+  /** Active grade slot: 'A' (default), 'B', or 'C' */
+  activeGradeSlot?: 'A' | 'B' | 'C';
   volume: number;  // 0-2
   speed: number;   // 0.1-4.0 (1=normal)
   transform: ClipTransform | null;  // null = use default (identity)
@@ -535,6 +544,19 @@ export interface CompressorSettings {
   knee: number;        // 0 to 10 dB soft knee
 }
 
+/** Single automation keyframe: {frame, value} */
+export interface AutomationKeyframe {
+  frame: number;
+  value: number; // volume: 0-2, pan: -1 to +1
+}
+
+/** Automation lane for a single track parameter */
+export interface AutomationLane {
+  param: 'volume' | 'pan';
+  keyframes: AutomationKeyframe[];
+  enabled: boolean;
+}
+
 export interface TimelineTrack {
   id: string;
   name: string;
@@ -545,8 +567,11 @@ export interface TimelineTrack {
   height: number;  // px, user-resizable
   color: string;
   volume?: number;  // 0-2, track-level gain (1 = unity)
+  pan?: number;     // -1 (full left) to +1 (full right), 0 = center
   eq?: EQBand[];
   compressor?: CompressorSettings;
+  /** Volume + pan automation lanes */
+  automation?: AutomationLane[];
 }
 
 export type TimelineTrackKind = "video" | "audio";

@@ -146,8 +146,12 @@ interface EditorStore {
   setColorGrade: (clipId: string, grade: Partial<ColorGrade>) => void;
   resetColorGrade: (clipId: string) => void;
   enableColorGrade: (clipId: string) => void;
+  /** Switch active grade slot (A/B/C). Stores current grade into current slot first. */
+  switchGradeSlot: (clipId: string, slot: 'A' | 'B' | 'C') => void;
+  /** Copy the grade from slot A to slot B for quick comparison */
+  copyGradeToSlot: (clipId: string, fromSlot: 'A' | 'B' | 'C', toSlot: 'A' | 'B' | 'C') => void;
 
-  // ── Background Removal ──
+// ── Background Removal ──
   setBackgroundRemoval: (clipId: string, config: Partial<BackgroundRemovalConfig>) => void;
   toggleBackgroundRemoval: (clipId: string) => void;
 
@@ -160,6 +164,12 @@ interface EditorStore {
   removeTrack: (trackId: string) => void;
   updateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
   duplicateTrack: (trackId: string) => void;
+  /** Set or update an automation keyframe on a track */
+  setAutomationKeyframe: (trackId: string, param: 'volume' | 'pan', frame: number, value: number) => void;
+  /** Remove an automation keyframe */
+  removeAutomationKeyframe: (trackId: string, param: 'volume' | 'pan', frame: number) => void;
+  /** Toggle automation lane enabled */
+  toggleAutomationLane: (trackId: string, param: 'volume' | 'pan') => void;
   /** Phase 8: Toggle track locked state */
   toggleTrackLock: (trackId: string) => void;
   /** Phase 8: Toggle track solo state */
@@ -1718,6 +1728,28 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }))));
   },
 
+  // ── Grade Versioning (A/B/C) ────────────────────────────────────────
+
+  switchGradeSlot: (clipId, slot) => {
+    set((state) => updateClipInState(state, clipId, (c) => {
+      const currentSlot = c.activeGradeSlot ?? 'A';
+      const versions = { ...(c.gradeVersions ?? {}) };
+      if (c.colorGrade) versions[currentSlot] = { ...c.colorGrade };
+      const targetGrade = versions[slot] ?? createDefaultColorGrade();
+      return { ...c, gradeVersions: versions, activeGradeSlot: slot, colorGrade: targetGrade };
+    }));
+  },
+
+  copyGradeToSlot: (clipId, fromSlot, toSlot) => {
+    set((state) => updateClipInState(state, clipId, (c) => {
+      const versions = { ...(c.gradeVersions ?? {}) };
+      const currentSlot = c.activeGradeSlot ?? 'A';
+      const src = fromSlot === currentSlot ? (c.colorGrade ?? createDefaultColorGrade()) : (versions[fromSlot] ?? createDefaultColorGrade());
+      versions[toSlot] = { ...src };
+      return { ...c, gradeVersions: versions };
+    }));
+  },
+
   // ── Background Removal ────────────────────────────────────────────────────
 
   setBackgroundRemoval: (clipId, config) => {
@@ -1916,6 +1948,73 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         }
       }
     })));
+  },
+
+  setAutomationKeyframe: (trackId, param, frame, value) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.map((t) => {
+            if (t.id !== trackId) return t;
+            const lanes = [...(t.automation ?? [])];
+            const laneIdx = lanes.findIndex(l => l.param === param);
+            const newKf = { frame, value };
+            if (laneIdx === -1) {
+              lanes.push({ param, enabled: true, keyframes: [newKf] });
+            } else {
+              const kfs = [...lanes[laneIdx].keyframes];
+              const existing = kfs.findIndex(k => k.frame === frame);
+              if (existing >= 0) kfs[existing] = newKf; else kfs.push(newKf);
+              kfs.sort((a, b) => a.frame - b.frame);
+              lanes[laneIdx] = { ...lanes[laneIdx], keyframes: kfs };
+            }
+            return { ...t, automation: lanes };
+          }),
+        },
+      },
+    }));
+  },
+
+  removeAutomationKeyframe: (trackId, param, frame) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.map((t) => {
+            if (t.id !== trackId) return t;
+            const lanes = (t.automation ?? []).map(l =>
+              l.param !== param ? l : { ...l, keyframes: l.keyframes.filter(k => k.frame !== frame) }
+            );
+            return { ...t, automation: lanes };
+          }),
+        },
+      },
+    }));
+  },
+
+  toggleAutomationLane: (trackId, param) => {
+    set((state) => ({
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          tracks: state.project.sequence.tracks.map((t) => {
+            if (t.id !== trackId) return t;
+            const lanes = [...(t.automation ?? [])];
+            const laneIdx = lanes.findIndex(l => l.param === param);
+            if (laneIdx === -1) {
+              lanes.push({ param, enabled: true, keyframes: [] });
+            } else {
+              lanes[laneIdx] = { ...lanes[laneIdx], enabled: !lanes[laneIdx].enabled };
+            }
+            return { ...t, automation: lanes };
+          }),
+        },
+      },
+    }));
   },
 
   toggleTrackLock: (trackId) => {
