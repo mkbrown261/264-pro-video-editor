@@ -128,8 +128,8 @@ interface TimelinePanelProps {
   onMoveClipTo: (clipId: string, trackId: string, startFrame: number) => void;
   onTrimClipStart: (clipId: string, trimStartFrames: number) => void;
   onTrimClipEnd: (clipId: string, trimEndFrames: number) => void;
-  onRippleTrim: (clipId: string, side: 'start' | 'end', deltaFrames: number) => void;
-  onRollTrim: (clipId: string, deltaFrames: number) => void;
+  onRippleTrim?: (clipId: string, side: 'start' | 'end', deltaFrames: number) => void;
+  onRollTrim?: (clipId: string, deltaFrames: number) => void;
   onBladeCut: (clipId: string, frame: number) => void;
   onDropAsset: (assetId: string, trackId: string, startFrame: number) => void;
   onUpdateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
@@ -525,14 +525,14 @@ export function TimelinePanel({
         // Ripple: delta from last position so we don't double-apply
         const delta = rawDelta - trimState.lastDeltaFrames;
         if (delta !== 0) {
-          propsRef.current.onRippleTrim(trimState.clipId, trimState.edge === 'start' ? 'start' : 'end', delta);
+          propsRef.current.onRippleTrim?.(trimState.clipId, trimState.edge === 'start' ? 'start' : 'end', delta);
           setTrimState(prev => prev ? { ...prev, lastDeltaFrames: rawDelta } : null);
         }
       } else if (trimState.mode === 'roll') {
         // Roll: move edit point — delta from last position
         const delta = rawDelta - trimState.lastDeltaFrames;
         if (delta !== 0) {
-          propsRef.current.onRollTrim(trimState.clipId, delta);
+          propsRef.current.onRollTrim?.(trimState.clipId, delta);
           setTrimState(prev => prev ? { ...prev, lastDeltaFrames: rawDelta } : null);
         }
       } else {
