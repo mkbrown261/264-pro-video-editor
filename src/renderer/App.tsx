@@ -2885,27 +2885,6 @@ export default function App() {
             )}
           </button>
 
-          {/* 🎬 Render Cache button */}
-          <button
-            className="panel-toggle-btn"
-            onClick={renderCache.progress > 0 ? renderCache.abort : () => void renderCache.renderAll()}
-            title="Pre-render timeline segments to disk for smooth playback"
-            type="button"
-            style={{
-              padding: '5px 12px', borderRadius: 6, border: '1px solid #334155',
-              background: renderCache.progress > 0 ? '#1a2744' : '#0f172a',
-              color: renderCache.progress > 0 ? '#60a5fa' : '#94a3b8',
-              cursor: 'pointer', fontSize: 11, fontWeight: 600,
-              display: 'flex', alignItems: 'center', gap: 6,
-            }}
-          >
-            {renderCache.progress > 0 ? (
-              <>🎬 Rendering… {renderCache.progress}%</>
-            ) : (
-              <>🎬 Render Cache</>
-            )}
-          </button>
-
           {/* FlowState Panel toggle */}
           <button
             className={`panel-toggle-btn${flowstatePanelOpen ? " on" : ""}`}
@@ -2950,6 +2929,27 @@ export default function App() {
             }}
           >
             ⚡ AI Tools
+          </button>
+
+          {/* 🎬 Render Cache button */}
+          <button
+            className="panel-toggle-btn"
+            onClick={renderCache.progress > 0 ? renderCache.abort : () => void renderCache.renderAll()}
+            title="Pre-render timeline segments to disk for smooth playback"
+            type="button"
+            style={{
+              padding: '5px 12px', borderRadius: 6, border: '1px solid #334155',
+              background: renderCache.progress > 0 ? '#1a2744' : '#0f172a',
+              color: renderCache.progress > 0 ? '#60a5fa' : '#94a3b8',
+              cursor: 'pointer', fontSize: 11, fontWeight: 600,
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {renderCache.progress > 0 ? (
+              <>🎬 Rendering… {renderCache.progress}%</>
+            ) : (
+              <>🎬 Render Cache</>
+            )}
           </button>
 
           {/* Free Credits button */}
