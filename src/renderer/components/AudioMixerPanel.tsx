@@ -11,7 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { TimelineTrack, EQBand, AutomationLane } from "../../shared/models";
+import type { TimelineTrack, EQBand, AutomationLane, CompressorSettings } from "../../shared/models";
 import type { AudioEngine } from "../lib/AudioScheduler";
 
 // ── Default EQ bands (3-band: low shelf / peak mid / high shelf) ───────────────
@@ -82,7 +82,7 @@ interface ChannelStripProps {
   onToggleAutomation?: (param: 'volume' | 'pan') => void;
 }
 
-function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveLevel, totalFrames = 1000, playheadFrame = 0, onToggleAutomation }: ChannelStripProps) {
+function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, onUpdateCompressor, liveLevel, totalFrames = 1000, playheadFrame = 0, onToggleAutomation }: ChannelStripProps) {
   const isAudio = track.kind === "audio";
   const vol = track.volume ?? 1;
   // Show live level when playing, fall back to gain-based display otherwise
@@ -90,6 +90,14 @@ function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveL
 
   // Collapsible EQ section ───────────────────────────────────────────────────
   const [eqOpen, setEqOpen] = useState(false);
+
+  // Collapsible Compressor section
+  const [compOpen, setCompOpen] = useState(false);
+  const defaultComp: CompressorSettings = { enabled: true, threshold: -24, ratio: 4, attack: 10, release: 100, makeupGain: 0, knee: 6 };
+  const comp = track.compressor ?? defaultComp;
+  const setComp = (patch: Partial<CompressorSettings>) => {
+    onUpdateCompressor?.({ ...comp, ...patch });
+  };
 
   return (
     <div className={`mixer-channel${track.muted ? " mixer-channel--muted" : ""}${track.solo ? " mixer-channel--solo" : ""}`}>
@@ -150,6 +158,17 @@ function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveL
             EQ
           </button>
         )}
+        {isAudio && (
+          <button
+            className={`mixer-btn${compOpen ? " active" : ""}`}
+            onClick={() => setCompOpen((v) => !v)}
+            title="Compressor"
+            type="button"
+            style={{ fontSize: 9, padding: '2px 4px', background: comp.enabled && compOpen ? 'rgba(251,146,60,0.25)' : undefined, borderColor: comp.enabled ? 'rgba(251,146,60,0.5)' : undefined, color: comp.enabled ? '#fb923c' : undefined }}
+          >
+            CMP
+          </button>
+        )}
       </div>
 
       {/* Collapsible 3-band EQ strip ─────────────────────────────────────── */}
@@ -184,6 +203,56 @@ function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveL
           })}
         </div>
       )}
+
+      {/* Compressor strip */}
+      {compOpen && isAudio && (
+        <div style={{ padding: '8px 6px', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {/* Enable toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#fb923c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Compressor</span>
+            <button type="button" onClick={() => setComp({ enabled: !comp.enabled })}
+              style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, background: comp.enabled ? 'rgba(251,146,60,0.25)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(251,146,60,0.4)', color: comp.enabled ? '#fb923c' : 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>
+              {comp.enabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+          {/* Threshold */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 40 }}>THR</span>
+            <input type="range" min={-60} max={0} step={1} value={comp.threshold} onChange={e => setComp({ threshold: Number(e.target.value) })} style={{ flex: 1 }} disabled={!comp.enabled} />
+            <span style={{ fontSize: 9, color: '#fb923c', width: 28, textAlign: 'right' }}>{comp.threshold}dB</span>
+          </div>
+          {/* Ratio */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 40 }}>RATIO</span>
+            <input type="range" min={1} max={20} step={0.5} value={comp.ratio} onChange={e => setComp({ ratio: Number(e.target.value) })} style={{ flex: 1 }} disabled={!comp.enabled} />
+            <span style={{ fontSize: 9, color: '#fb923c', width: 28, textAlign: 'right' }}>{comp.ratio}:1</span>
+          </div>
+          {/* Attack */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 40 }}>ATK</span>
+            <input type="range" min={1} max={200} step={1} value={comp.attack} onChange={e => setComp({ attack: Number(e.target.value) })} style={{ flex: 1 }} disabled={!comp.enabled} />
+            <span style={{ fontSize: 9, color: '#fb923c', width: 28, textAlign: 'right' }}>{comp.attack}ms</span>
+          </div>
+          {/* Release */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 40 }}>REL</span>
+            <input type="range" min={10} max={1000} step={10} value={comp.release} onChange={e => setComp({ release: Number(e.target.value) })} style={{ flex: 1 }} disabled={!comp.enabled} />
+            <span style={{ fontSize: 9, color: '#fb923c', width: 28, textAlign: 'right' }}>{comp.release}ms</span>
+          </div>
+          {/* Makeup Gain */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 40 }}>MKUP</span>
+            <input type="range" min={0} max={24} step={0.5} value={comp.makeupGain} onChange={e => setComp({ makeupGain: Number(e.target.value) })} style={{ flex: 1 }} disabled={!comp.enabled} />
+            <span style={{ fontSize: 9, color: '#fb923c', width: 28, textAlign: 'right' }}>+{comp.makeupGain}dB</span>
+          </div>
+          {/* Knee */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 40 }}>KNEE</span>
+            <input type="range" min={0} max={10} step={0.5} value={comp.knee} onChange={e => setComp({ knee: Number(e.target.value) })} style={{ flex: 1 }} disabled={!comp.enabled} />
+            <span style={{ fontSize: 9, color: '#fb923c', width: 28, textAlign: 'right' }}>{comp.knee}dB</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -202,6 +271,7 @@ export function AudioMixerPanel({
   // ── Real-time VU levels — updated every animation frame ─────────────────
   const [trackLevels, setTrackLevels] = useState<Record<string, number>>({});
   const [masterLevel, setMasterLevel] = useState<number | null>(null);
+  const [lufs, setLufs] = useState<number>(-70);
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -214,6 +284,7 @@ export function AudioMixerPanel({
         }
         setTrackLevels(levels);
         setMasterLevel(engine.getMasterLevel());
+        setLufs(engine.getLUFS?.() ?? -70);
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -235,8 +306,8 @@ export function AudioMixerPanel({
 
   const handleTrackCompressor = useCallback((trackId: string, settings: CompressorSettings) => {
     onUpdateTrack(trackId, { compressor: settings });
-    // TODO: audioEngineRef.current?.setTrackCompressor?.(trackId, settings) — implement in AudioScheduler
-  }, [onUpdateTrack]);
+    audioEngineRef.current?.setTrackCompressor?.(trackId, settings);
+  }, [onUpdateTrack, audioEngineRef]);
 
   const handleMasterVolume = useCallback((vol: number) => {
     onUpdateMasterVolume(vol);
@@ -315,6 +386,32 @@ export function AudioMixerPanel({
             />
 
             <div className="mixer-vol-readout">{masterPct}%</div>
+
+            {/* LUFS integrated loudness meter */}
+            <div style={{ padding: '4px 4px 2px', borderTop: '1px solid rgba(255,255,255,0.07)', textAlign: 'center' }}>
+              <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 2 }}>LUFS</div>
+              <div style={{
+                fontSize: 11, fontWeight: 700, fontFamily: 'monospace',
+                color: lufs > -6 ? '#ef4444' : lufs > -14 ? '#f7c948' : lufs > -23 ? '#22c55e' : 'rgba(255,255,255,0.4)',
+              }}>
+                {lufs <= -60 ? '–∞' : lufs.toFixed(1)}
+              </div>
+              {/* LUFS bar */}
+              <div style={{ height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2, marginTop: 2, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.max(0, Math.min(100, (lufs + 60) / 54 * 100))}%`,
+                  background: lufs > -6 ? '#ef4444' : lufs > -14 ? '#f7c948' : '#22c55e',
+                  transition: 'width 0.1s',
+                }} />
+              </div>
+              {/* Target zones */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 1 }}>
+                <span style={{ fontSize: 7, color: 'rgba(255,255,255,0.2)' }}>-23</span>
+                <span style={{ fontSize: 7, color: 'rgba(255,255,255,0.2)' }}>-16</span>
+                <span style={{ fontSize: 7, color: 'rgba(255,255,255,0.2)' }}>-6</span>
+              </div>
+            </div>
 
             <div className="mixer-channel-btns">
               <button

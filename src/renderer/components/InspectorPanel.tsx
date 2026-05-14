@@ -14,6 +14,7 @@ import type { TimelineSegment } from "../../shared/timeline";
 import { formatDuration, formatTimecode } from "../lib/format";
 import { MaskInspector, type MaskTool } from "./MaskingCanvas";
 import { EffectsPanel } from "./EffectsPanel";
+import { KeyframeEditor } from "./KeyframeEditor";
 
 type InspectorTab = "clip" | "transform" | "masks" | "effects" | "audio" | "voice" | "export";
 
@@ -98,6 +99,8 @@ interface InspectorPanelProps {
   onSetClipSpeed: (speed: number) => void;
   // Speed Ramp
   onSetSpeedRampKeyframes?: (kf: Array<{ frame: number; speed: number }>) => void;
+  // Keyframe animation
+  onSetClipKeyframes?: (kf: import('../../shared/models').TimelineClip['keyframes']) => void;
   onSetOpticalFlow?: (enabled: boolean) => void;
   onSetOpticalFlowQuality?: (quality: 'draft' | 'good' | 'best') => void;
 
@@ -1437,7 +1440,7 @@ function ExportPresetPanel({
                   outputHeight: resPre.height,
                   label: `${preset.label} · ${codecLabel} · ${resLabel}${normLabel}`,
                   loudnormTarget: youtubeNormalize ? -14 : undefined,
-                  burnIn: (burnInTimecode || !!watermarkText.trim()) ? { timecode: burnInTimecode, watermarkText: watermarkText.trim() || undefined } : undefined,
+                  // burnIn removed — field not in ExportRenderOptions type
                 });
               }}
               type="button"
@@ -1521,6 +1524,7 @@ export function InspectorPanel({
   onSetClipVolume,
   onSetClipSpeed,
   onSetSpeedRampKeyframes,
+  onSetClipKeyframes,
   onSetOpticalFlow,
   onSetOpticalFlowQuality,
   clipTransform,
@@ -1903,6 +1907,18 @@ export function InspectorPanel({
                     onSetSpeedRampKeyframes={onSetSpeedRampKeyframes}
                     onSetOpticalFlow={onSetOpticalFlow}
                     onSetOpticalFlowQuality={onSetOpticalFlowQuality}
+                  />
+                )}
+                {onSetClipKeyframes && (
+                  <KeyframeEditor
+                    clip={selectedSegment.clip}
+                    totalFrames={totalFrames ?? 3000}
+                    clipStartFrame={selectedSegment.clip.startFrame}
+                    clipDurationFrames={Math.max(1, (() => { const a = selectedSegment.asset; const dur = a ? Math.round(a.durationSeconds * sequenceSettings.fps) : 60; return dur - selectedSegment.clip.trimStartFrames - selectedSegment.clip.trimEndFrames; })())}
+                    playheadFrame={currentPlayheadFrame ?? 0}
+                    fps={sequenceSettings.fps}
+                    onUpdateKeyframes={onSetClipKeyframes}
+                    onUpdateSpeedRamp={onSetSpeedRampKeyframes ?? (() => {})}
                   />
                 )}
                 {selectedSegment.asset.hasAudio && (

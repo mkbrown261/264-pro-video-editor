@@ -1716,7 +1716,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   setReframeBusy(true); setReframeError(null); setReframeResult(null);
                   const res = await (window as any).electronAPI?.smartReframe?.({
                     inputPath: asset.sourcePath, targetAspect: reframeAspect,
-                    sourceWidth: asset.videoWidth ?? 1920, sourceHeight: asset.videoHeight ?? 1080,
+                    sourceWidth: asset.width ?? 1920, sourceHeight: asset.height ?? 1080,
                   });
                   setReframeBusy(false);
                   if (res?.success) setReframeResult(res.outputPath);

@@ -1386,7 +1386,7 @@ export function ColorGradingPanel({
                 { name: "Rec.709",       path: "luts/log_to_rec709.cube" },
                 { name: "Cinematic",     path: "luts/cinematic.cube"     },
                 { name: "Warm Vintage",  path: "luts/warm_vintage.cube"  },
-                { name: "Cool Teal",     path: "luts/cool_teal.cube"     },
+                { name: "Teal & Orange", path: "luts/cool_teal.cube"     },
                 { name: "High Contrast", path: "luts/high_contrast.cube" },
                 { name: "Faded Film",    path: "luts/faded_film.cube"    },
                 { name: "Kodachrome",    path: "luts/kodachrome.cube"    },

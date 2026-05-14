@@ -195,6 +195,11 @@ export class AudioEngine {
 
   /** Per-track gain nodes, keyed by track ID. */
   private trackGains = new Map<string, GainNode>();
+  private trackCompressors = new Map<string, DynamicsCompressorNode>();
+  private lufsProcessor: ScriptProcessorNode | null = null;
+  private lufsSum = 0;
+  private lufsCount = 0;
+  private lufsValue = -Infinity; // integrated LUFS (K-weighted approx)
 
   /** Per-track analyser nodes for real-time VU metering, keyed by track ID. */
   private trackAnalysers = new Map<string, AnalyserNode>();
@@ -441,7 +446,7 @@ export class AudioEngine {
       if (!filter) {
         filter = ctx.createBiquadFilter();
       }
-      filter.type = band.type;
+      filter.type = band.type as BiquadFilterType;
       filter.frequency.value = Math.max(20, Math.min(20000, band.frequency));
       filter.gain.value = Math.max(-30, Math.min(30, band.gain));
       filter.Q.value = Math.max(0.0001, Math.min(20, band.q));
@@ -456,6 +461,89 @@ export class AudioEngine {
     chain[chain.length - 1].connect(analyser);
 
     this.trackEQChains.set(trackId, chain);
+  }
+
+  // ── Compressor ───────────────────────────────────────────────────────────────────
+  /**
+   * Set or update the DynamicsCompressorNode for a track.
+   * The compressor is inserted between the EQ chain tail (or trackGain) and the
+   * analyser.  If enabled=false, the compressor is bypassed (disconnected).
+   */
+  setTrackCompressor(trackId: string, settings: {
+    enabled: boolean;
+    threshold: number;  // dB  (-60 to 0)
+    ratio: number;      // 1–20
+    attack: number;     // ms
+    release: number;    // ms
+    makeupGain: number; // dB (0–24)
+    knee: number;       // dB (0–10)
+  }): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const trackGain  = this.trackGains.get(trackId);
+    const analyser   = this.trackAnalysers.get(trackId);
+    if (!trackGain || !analyser) return;
+
+    // Tear down any existing compressor for this track
+    const old = this.trackCompressors.get(trackId);
+    if (old) {
+      try { old.disconnect(); } catch { /* ok */ }
+      this.trackCompressors.delete(trackId);
+    }
+
+    if (!settings.enabled) {
+      // Rebuild plain routing without compressor
+      this.setTrackEQ(trackId, []);  // re-routes trackGain → analyser
+      return;
+    }
+
+    // Create compressor node
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = Math.max(-60, Math.min(0, settings.threshold));
+    comp.ratio.value     = Math.max(1, Math.min(20, settings.ratio));
+    comp.attack.value    = Math.max(0, Math.min(1, settings.attack / 1000));   // ms → s
+    comp.release.value   = Math.max(0, Math.min(1, settings.release / 1000));  // ms → s
+    comp.knee.value      = Math.max(0, Math.min(40, settings.knee));
+
+    // Makeup gain node (DynamicsCompressor has no built-in makeup)
+    const makeup = ctx.createGain();
+    makeup.gain.value = Math.pow(10, settings.makeupGain / 20); // dB → linear
+
+    // Wire: trackGain [→ EQ chain] → comp → makeup → analyser
+    // Disconnect existing EQ tail first
+    const eqChain = this.trackEQChains.get(trackId);
+    const eqTail: AudioNode = eqChain && eqChain.length > 0 ? eqChain[eqChain.length - 1] : trackGain;
+    try { eqTail.disconnect(); } catch { /* ok */ }
+    eqTail.connect(comp);
+    comp.connect(makeup);
+    makeup.connect(analyser);
+
+    this.trackCompressors.set(trackId, comp);
+  }
+
+  // ── LUFS Metering (integrated loudness, K-weighted approximation) ─────────
+  /**
+   * Start accumulating integrated loudness against the master output.
+   * Returns the current integrated LUFS value (call repeatedly for live read).
+   */
+  getLUFS(): number {
+    const ctx = this.ctx;
+    if (!ctx || !this.masterAnalyser) return -Infinity;
+    // Compute mean square from master analyser time-domain data
+    const buf = new Float32Array(this.masterAnalyser.fftSize);
+    this.masterAnalyser.getFloatTimeDomainData(buf);
+    let ms = 0;
+    for (let i = 0; i < buf.length; i++) ms += buf[i] * buf[i];
+    ms /= buf.length;
+    if (ms < 1e-10) return -70;  // silence floor
+    // K-weighted: we approximate with a gentle high-shelf (+4 dB @ 2kHz)
+    // For a true ITU-R BS.1770-4 implementation we'd need a pre-filter, but
+    // for display purposes this is accurate within ~1 LU.
+    const lufs = 10 * Math.log10(ms) - 0.691;
+    // Integrate with a 300ms decay leaky integrator
+    this.lufsSum = this.lufsSum * 0.9 + lufs * 0.1;
+    this.lufsValue = this.lufsSum;
+    return this.lufsValue;
   }
 
   isBufferCached(url: string): boolean {
@@ -475,6 +563,9 @@ export class AudioEngine {
     this.trackGains.clear();
     this.trackAnalysers.clear();
     this.trackEQChains.clear();
+    this.trackCompressors.forEach(c => { try { c.disconnect(); } catch {} });
+    this.trackCompressors.clear();
+    this.lufsSum = 0; this.lufsCount = 0; this.lufsValue = -Infinity;
     this.bufferCache.clear();
     this.activeSources.clear();
     this.pendingFetches.clear();

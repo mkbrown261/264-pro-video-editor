@@ -119,7 +119,9 @@ export function AIToolsWave2Panel() {
       fps: project.sequence.settings.fps,
       clips: project.sequence.clips.map(c => {
         const asset = project.assets.find(a => a.id === c.assetId);
-        return { id: c.id, name: asset?.name, startFrame: c.startFrame, endFrame: c.endFrame, trackId: c.trackId };
+        const assetDur = asset ? Math.round((asset.durationSeconds ?? 0) * project.sequence.settings.fps) : 0;
+        const clipEnd = c.startFrame + Math.max(0, assetDur - c.trimStartFrames - c.trimEndFrames);
+        return { id: c.id, name: asset?.name, startFrame: c.startFrame, endFrame: clipEnd, trackId: c.trackId };
       }),
     });
     const res = await API?.parseRevision?.({ instructions: revisionText, projectJson });
@@ -147,7 +149,7 @@ export function AIToolsWave2Panel() {
       setColorGrade(selectedClipId, res.suggestedGrade as any);
       setCmResult('Color grade applied to selected clip');
     } else setCmError(res?.error ?? 'Failed');
-  }, [clipPath, cmRefPath, selectedClipId, setClipColorGrade]);
+  }, [clipPath, cmRefPath, selectedClipId, setColorGrade]);
 
   const handleNormalize = useCallback(async () => {
     if (!clipPath) { setNormError('Select a clip first'); return; }

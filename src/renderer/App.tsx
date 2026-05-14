@@ -882,6 +882,10 @@ export default function App() {
     if (!selectedClipId) return;
     patchClip(selectedClipId, { speedRampKeyframes: kf });
   }, [selectedClipId, patchClip]);
+  const handleSetClipKeyframes = useCallback((kf: import('../shared/models').TimelineClip['keyframes']) => {
+    if (!selectedClipId) return;
+    patchClip(selectedClipId, { keyframes: kf });
+  }, [selectedClipId, patchClip]);
   const handleSetOpticalFlow = useCallback((enabled: boolean) => {
     if (!selectedClipId) return;
     patchClip(selectedClipId, { opticalFlow: enabled });
@@ -3366,6 +3370,7 @@ export default function App() {
               onSetClipVolume={(vol) => { if (selectedClipId) setClipVolume(selectedClipId, vol); }}
               onSetClipSpeed={(spd) => { if (selectedClipId) setClipSpeed(selectedClipId, spd); }}
               onSetSpeedRampKeyframes={handleSetSpeedRampKeyframes}
+              onSetClipKeyframes={handleSetClipKeyframes}
               onSetOpticalFlow={handleSetOpticalFlow}
               onSetOpticalFlowQuality={(quality) => {
                 if (!selectedClipId) return;
@@ -3411,7 +3416,7 @@ export default function App() {
                   assets={project.assets}
                   fps={project.sequence.settings.fps}
                   playheadFrame={playback.playheadFrame}
-                  onSeek={(frame) => { seekToFrame(frame); }}
+                  onSeek={(frame) => { setPlayheadFrame(frame); }}
                   onSelectClip={(clipId) => { selectClip(clipId); }}
                 />
               </div>

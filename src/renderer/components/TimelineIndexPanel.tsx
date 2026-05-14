@@ -79,7 +79,7 @@ export function TimelineIndexPanel({
   const markerRows = useMemo(() => {
     const q = query.toLowerCase();
     return [...markers]
-      .filter(m => !q || (m.label ?? "").toLowerCase().includes(q) || (m.note ?? "").toLowerCase().includes(q))
+      .filter(m => !q || (m.label ?? "").toLowerCase().includes(q) || false /* note field not on TimelineMarker */)
       .sort((a, b) => a.frame - b.frame);
   }, [markers, query]);
 
@@ -139,8 +139,10 @@ export function TimelineIndexPanel({
               </div>
             )}
             {clipRows.map(({ clip, asset, track }) => {
-              const durationFrames = clip.endFrame - clip.startFrame;
-              const active = isAtPlayhead(clip.startFrame, clip.endFrame);
+              const clipAsset = assets.find(a => a.id === clip.assetId);
+              const clipDur = clipAsset ? Math.round(clipAsset.durationSeconds * fps) : 0;
+              const durationFrames = Math.max(0, clipDur - clip.trimStartFrames - clip.trimEndFrames);
+              const active = isAtPlayhead(clip.startFrame, clip.startFrame + durationFrames);
               return (
                 <div
                   key={clip.id}
@@ -192,12 +194,12 @@ export function TimelineIndexPanel({
                   cursor: "pointer",
                   background: Math.abs(playheadFrame - marker.frame) < 2 ? "rgba(247,201,72,0.08)" : "none",
                 }}
-                title={marker.note ?? marker.label ?? "Marker"}
+                title={marker.label ?? "Marker"}
               >
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: MARKER_COLORS[marker.color ?? "yellow"] ?? "#f7c948", flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 11, fontWeight: 600 }}>{marker.label ?? "Marker"}</div>
-                  {marker.note && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 1 }}>{marker.note}</div>}
+                  {/* note field not available on TimelineMarker */}
                 </div>
                 <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontFamily: "monospace", flexShrink: 0 }}>
                   {frameToTC(marker.frame, fps)}
@@ -211,7 +213,7 @@ export function TimelineIndexPanel({
           <div style={{ padding: "12px" }}>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 8 }}>Clips by tag / color label</div>
             {["red", "orange", "yellow", "green", "blue", "purple"].map(color => {
-              const tagged = clips.filter(c => c.color === color);
+              const tagged = clips.filter(c => (c as any).color === color);
               if (tagged.length === 0) return null;
               return (
                 <div key={color} style={{ marginBottom: 8 }}>
@@ -234,7 +236,7 @@ export function TimelineIndexPanel({
                 </div>
               );
             })}
-            {clips.filter(c => c.color).length === 0 && (
+            {clips.filter(c => (c as any).color).length === 0 && (
               <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>No color-labeled clips yet. Right-click a clip to assign a color.</div>
             )}
           </div>
