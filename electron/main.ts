@@ -2454,31 +2454,6 @@ ipcMain.handle("project:autosave-list", async () => {
   }
 });
 
-// ── AI: Voice Isolation ─────────────────────────────────────────────────────────
-ipcMain.handle('ai:voice-isolate', async (_ev, args: { inputPath: string; outputPath: string }) => {
-  try {
-    const { inputPath, outputPath } = args || {} as { inputPath: string; outputPath: string };
-    if (!inputPath || !outputPath) return { success: false, error: 'Missing paths' };
-    if (!inputPath.startsWith('/') && !(/^[A-Za-z]:[/\\]/).test(inputPath)) {
-      return { success: false, error: 'Invalid input path' };
-    }
-    const { spawn } = await import('child_process');
-    const ffmpeg = getEnvironmentStatus().ffmpegPath;
-    if (!ffmpeg) return { success: false, error: 'FFmpeg not available' };
-    return await new Promise((resolve) => {
-      const proc = spawn(ffmpeg, [
-        '-i', inputPath,
-        '-af', 'anlmdn=s=7:p=0.002:r=0.002:m=15',
-        '-y', outputPath,
-      ]);
-      proc.on('close', (code) => resolve({ success: code === 0, outputPath }));
-      proc.on('error', (e) => resolve({ success: false, error: e.message }));
-    });
-  } catch (e) {
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
-  }
-});
-
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();
