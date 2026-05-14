@@ -28,10 +28,12 @@ interface Props {
   onDeleteFrameRanges: (ranges: Array<{ startFrame: number; endFrame: number }>) => void;
   /** Split clip at these absolute timeline frames */
   onSplitAtFrames: (frames: number[]) => void;
+  /** Add word-level caption clips to timeline as a Captions track */
+  onAddCaptionTrack?: (words: Array<{ word: string; start: number; end: number }>, style: 'minimal' | 'bold' | 'outline') => void;
   onSeek: (frame: number) => void;
 }
 
-export function TranscriptEditor({ clipId, clipPath, clipName, clipStartFrame, fps, onDeleteFrameRanges, onSplitAtFrames, onSeek }: Props) {
+export function TranscriptEditor({ clipId, clipPath, clipName, clipStartFrame, fps, onDeleteFrameRanges, onSplitAtFrames, onAddCaptionTrack, onSeek }: Props) {
   const [mode, setMode] = useState<'transcript' | 'scenes'>('transcript');
 
   // ── Transcript state ───────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ export function TranscriptEditor({ clipId, clipPath, clipName, clipStartFrame, f
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [transcriptDone, setTranscriptDone] = useState(false);
   const [language, setLanguage] = useState('en');
+  const [captionStyle, setCaptionStyle] = useState<'minimal' | 'bold' | 'outline'>('bold');
 
   // ── Scene detection state ─────────────────────────────────────────────────
   const [scenes, setScenes] = useState<Array<{ timeSeconds: number; frame: number; score: number }>>([]);
@@ -196,6 +199,27 @@ export function TranscriptEditor({ clipId, clipPath, clipName, clipStartFrame, f
                     style={{ padding: '6px 10px', fontSize: 11, borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>
                     Reset
                   </button>
+                </div>
+
+                {/* Add to timeline as captions track */}
+                {onAddCaptionTrack && (
+                  <div style={{ marginTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 6 }}>ADD TO TIMELINE AS CAPTIONS TRACK</div>
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+                      {(['minimal', 'bold', 'outline'] as const).map(s => (
+                        <button key={s} type="button" onClick={() => setCaptionStyle(s)}
+                          style={{ flex: 1, padding: '4px 0', fontSize: 10, borderRadius: 4, background: captionStyle === s ? 'rgba(167,139,250,0.2)' : 'rgba(255,255,255,0.05)', border: `1px solid ${captionStyle === s ? 'rgba(167,139,250,0.5)' : 'rgba(255,255,255,0.1)'}`, color: captionStyle === s ? '#a78bfa' : 'rgba(255,255,255,0.4)', cursor: 'pointer', textTransform: 'capitalize' }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                    <button type="button" onClick={() => onAddCaptionTrack(words.filter(w => !w.deleted), captionStyle)}
+                      style={{ width: '100%', padding: '6px 0', fontSize: 11, fontWeight: 700, borderRadius: 6, background: 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.4)', color: '#a78bfa', cursor: 'pointer' }}>
+                      ＋ Add Captions Track to Timeline
+                    </button>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 6 }}>
                 </div>
               </>
             )}

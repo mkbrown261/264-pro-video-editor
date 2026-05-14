@@ -35,6 +35,17 @@ const editorApi = {
     ipcRenderer.invoke("export:choose-file", suggestedName),
   exportSequence: (request: ExportRequest): Promise<ExportResponse> =>
     ipcRenderer.invoke("export:render", request),
+  /** Non-blocking background export — editor stays live, progress via onBgExportProgress */
+  exportSequenceBg: (request: ExportRequest & { jobId: string }): Promise<{ success: boolean; jobId?: string; mode?: string; error?: string }> =>
+    ipcRenderer.invoke('export:render-bg', request),
+  cancelBgExport: (jobId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('export:cancel-bg', jobId),
+  onBgExportProgress: (cb: (jobId: string, pct: number) => void) => {
+    ipcRenderer.on('export:bg-progress', (_ev, data) => cb(data.jobId, data.pct ?? 0));
+  },
+  onBgExportComplete: (cb: (jobId: string, success: boolean, outputPath?: string, error?: string) => void) => {
+    ipcRenderer.on('export:bg-complete', (_ev, data) => cb(data.jobId, data.success, data.outputPath, data.error));
+  },
   getEnvironmentStatus: (): Promise<EnvironmentStatus> =>
     ipcRenderer.invoke("system:environment"),
   onUpdaterStatus: (callback: (status: UpdaterStatus) => void): (() => void) => {

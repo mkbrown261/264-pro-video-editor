@@ -3,7 +3,7 @@
  * Shows sync groups (overlapping clips on different tracks) in a 2/4-up grid.
  * Click an angle to cut to that camera at the current playhead position.
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import type { TimelineSegment } from "../../shared/timeline";
 
 interface Props {
@@ -30,6 +30,25 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
   const [gridSize, setGridSize] = useState<2 | 4 | 9>(4);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
+  // ── Live Record Mode ─────────────────────────────────────────────────────────────────
+  // While recording, every angle click is recorded as a cut point
+  const [recordMode, setRecordMode] = useState(false);
+  const [cutLog, setCutLog] = useState<Array<{ frame: number; clipId: string; trackId: string; trackName: string }>>([]);
+  const recordingRef = useRef(false);
+
+  function toggleRecordMode() {
+    const next = !recordMode;
+    setRecordMode(next);
+    recordingRef.current = next;
+    if (!next) {
+      // Done recording — summary
+      setSyncStatus(cutLog.length > 0 ? `✓ Recorded ${cutLog.length} cut${cutLog.length !== 1 ? 's' : ''}` : 'No cuts recorded');
+      setTimeout(() => setSyncStatus(''), 3000);
+    } else {
+      setCutLog([]);
+      setSyncStatus('● Recording… click angles to cut');
+    }
+  }
 
   // Find clips that overlap at the current playhead
   const activeAngles = useMemo<SyncAngle[]>(() => {
@@ -74,6 +93,9 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
   function handleAngleClick(angle: SyncAngle) {
     setActiveClipId(angle.clipId);
     onCutToAngle(angle.clipId, angle.trackId, playheadFrame);
+    if (recordingRef.current) {
+      setCutLog(prev => [...prev, { frame: playheadFrame, clipId: angle.clipId, trackId: angle.trackId, trackName: angle.trackName }]);
+    }
   }
 
   async function handleSyncByAudio() {
@@ -166,6 +188,21 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
               {syncing ? "⏳ Syncing…" : "🎵 Auto-Sync Audio"}
             </button>
 
+            {/* Live Record Mode toggle */}
+            <button
+              onClick={toggleRecordMode}
+              type="button"
+              style={{
+                padding: "3px 10px", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                background: recordMode ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${recordMode ? "rgba(239,68,68,0.6)" : "rgba(255,255,255,0.15)"}`,
+                color: recordMode ? "#ef4444" : "rgba(255,255,255,0.5)",
+                display: "flex", alignItems: "center", gap: 4,
+              }}
+              title={recordMode ? "Stop recording — finalize cut log" : "Start recording — every angle click is logged as a cut point"}
+            >
+              {recordMode ? "■ Stop" : "● Record"}
+            </button>
             {([2, 4, 9] as const).map(n => (
               <button
                 key={n}
@@ -262,9 +299,25 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
           </div>
         )}
 
+        {/* Cut Log (shown when recording or after stop) */}
+        {cutLog.length > 0 && (
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", maxHeight: 120, overflowY: "auto" }}>
+            <div style={{ padding: "6px 16px 3px", fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Cut Log</div>
+            {cutLog.map((cut, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 16px", fontSize: 11 }}>
+                <span style={{ fontFamily: "monospace", color: "#4f8ef7", width: 60, flexShrink: 0 }}>{tc(cut.frame)}</span>
+                <span style={{ color: "rgba(255,255,255,0.65)" }}>{cut.trackName}</span>
+                {recordMode && <span style={{ color: "#ef4444", fontSize: 9, marginLeft: "auto" }}>● LIVE</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Footer instructions */}
         <div style={{ padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)", fontSize: 10, color: "rgba(255,255,255,0.3)" }}>
-          Click an angle to cut to that camera at the current playhead position. Use 🎵 Auto-Sync Audio to align clips by audio waveform correlation.
+          {recordMode
+            ? "🔴 Recording — click angles to cut. Hit Stop when done."
+            : "Click an angle to cut to that camera at the playhead. ● Record to log cuts for review."}
         </div>
       </div>
     </div>

@@ -272,6 +272,16 @@ interface EditorStore {
 
   // ── Timeline Nesting / Compound Clips (GAP E) ──
   nestSelectedClips: (clipIds: string[], label: string) => void;
+  /**
+   * Add a captions track to the timeline from Whisper word timestamps.
+   * Creates a new 'caption' track and inserts one clip per word-group.
+   */
+  addCaptionsFromTranscript: (
+    words: Array<{ word: string; start: number; end: number }>,
+    fps: number,
+    clipStartFrame: number,
+    style?: 'minimal' | 'bold' | 'outline'
+  ) => void;
   openNestedSequence: (nestedSequenceId: string) => void;
   exitNestedSequence: () => void;
   activeNestedSequenceId: string | null;
@@ -2947,7 +2957,82 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   // ── Clip History (UX 3) ──────────────────────────────────────────────────
-  saveClipHistorySnapshot: (clipId, label) => {
+  addCaptionsFromTranscript: (words, fps, clipStartFrame, style = 'bold') => {
+    set(withUndo('Add Captions Track', (state) => {
+      if (!words.length) return state;
+      // Group into lines: max 6 words or 3.5s
+      const lines: Array<{ text: string; startSec: number; endSec: number }> = [];
+      let lineWords: string[] = [];
+      let lineStart = words[0].start;
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        lineWords.push(w.word.trim());
+        const lineDur = w.end - lineStart;
+        const isLast = i === words.length - 1;
+        if (lineWords.length >= 6 || lineDur >= 3.5 || isLast) {
+          lines.push({ text: lineWords.join(' '), startSec: lineStart, endSec: w.end });
+          lineWords = [];
+          lineStart = words[i + 1]?.start ?? w.end;
+        }
+      }
+      if (!lines.length) return state;
+
+      const captionTrackName = 'Captions';
+      let captionTrack = state.project.sequence.tracks.find(t => t.name === captionTrackName);
+      const newTracks = [...state.project.sequence.tracks];
+      if (!captionTrack) {
+        captionTrack = {
+          id: createId(), name: captionTrackName, kind: 'video' as const,
+          muted: false, locked: false, solo: false, height: 40, color: '#a78bfa',
+        };
+        newTracks.push(captionTrack);
+      }
+
+      const captionAssetId = createId();
+      const captionAsset: MediaAsset = {
+        id: captionAssetId, name: 'Captions', sourcePath: '', previewUrl: '',
+        thumbnailUrl: null, durationSeconds: 9999, nativeFps: fps,
+        width: state.project.sequence.settings.width,
+        height: state.project.sequence.settings.height, hasAudio: false,
+      };
+
+      const captionClips: TimelineClip[] = lines.map(line => ({
+        id: createId(),
+        assetId: captionAssetId,
+        trackId: captionTrack!.id,
+        clipType: 'caption' as const,
+        startFrame: clipStartFrame + Math.round(line.startSec * fps),
+        trimStartFrames: 0,
+        trimEndFrames: 0,
+        linkedGroupId: null,
+        isEnabled: true,
+        transitionIn: null, transitionOut: null,
+        masks: [], effects: [],
+        colorGrade: null, volume: 1, speed: 1,
+        transform: null, compGraph: null,
+        aiBackgroundRemoval: null, beatSync: null,
+        captionText: line.text,
+        captionStyle: style,
+      }));
+
+      const filteredClips = state.project.sequence.clips.filter(c => c.trackId !== captionTrack!.id);
+
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          assets: [...state.project.assets, captionAsset],
+          sequence: {
+            ...state.project.sequence,
+            tracks: newTracks,
+            clips: [...filteredClips, ...captionClips],
+          },
+        },
+      };
+    }));
+  },
+
+    saveClipHistorySnapshot: (clipId, label) => {
     set((state) => {
       const clip = state.project.sequence.clips.find(c => c.id === clipId);
       if (!clip) return state;

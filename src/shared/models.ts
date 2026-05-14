@@ -444,7 +444,7 @@ export const DEFAULT_CLIP_TRANSFORM: ClipTransform = {
 
 // ── Adjustment Layer / Clip Type ─────────────────────────────────────────────
 
-export type ClipType = 'media' | 'adjustment' | 'title' | 'nested';
+export type ClipType = 'media' | 'adjustment' | 'title' | 'nested' | 'caption';
 
 // ── Audio Ducking ─────────────────────────────────────────────────────────────
 
@@ -503,6 +503,9 @@ export interface TimelineClip {
   opticalFlowQuality?: 'draft' | 'good' | 'best'; // draft=fast, good=balanced, best=cinematic
   // Title generator
   titleConfig?: TitleClipConfig;
+  // Caption / subtitle text (for clipType === 'caption')
+  captionText?: string;
+  captionStyle?: 'minimal' | 'bold' | 'outline';
   // Clip History (UX 3) — up to 5 snapshots
   clipHistory?: ClipHistorySnapshot[];
   // Nested sequence reference (GAP E)

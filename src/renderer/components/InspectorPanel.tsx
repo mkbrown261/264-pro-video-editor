@@ -1389,6 +1389,17 @@ function ExportPresetPanel({
         >
           {exportBusy ? "⏳ Rendering…" : `▶ Export ${containerLabel}`}
         </button>
+        {/* Background export button */}
+        <button
+          className="panel-action"
+          disabled={exportBusy}
+          onClick={() => void onExport({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height, background: true } as any)}
+          type="button"
+          title="Export in background — editor stays fully usable while rendering"
+          style={{ marginTop: 6, background: 'rgba(52,211,153,0.1)', borderColor: 'rgba(52,211,153,0.35)', color: exportBusy ? 'rgba(52,211,153,0.3)' : '#34d399' }}
+        >
+          {exportBusy ? '⏳ Exporting…' : '⏳ Export in Background'}
+        </button>
         {onAddToQueue && (
           <>
             {/* YouTube loudness normalize toggle (-14 LUFS) */}

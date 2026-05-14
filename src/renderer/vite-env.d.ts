@@ -125,6 +125,11 @@ declare global {
       onProxyReady: (callback: (assetId: string, previewUrl: string) => void) => () => void;
       /** Export render progress 0-100 */
       onExportProgress: (callback: (pct: number) => void) => () => void;
+      /** Background export (non-blocking) */
+      exportSequenceBg?: (request: import('../shared/models').ExportRequest & { jobId: string }) => Promise<{ success: boolean; jobId?: string; mode?: string; error?: string }>;
+      cancelBgExport?: (jobId: string) => Promise<{ success: boolean; error?: string }>;
+      onBgExportProgress?: (cb: (jobId: string, pct: number) => void) => void;
+      onBgExportComplete?: (cb: (jobId: string, success: boolean, outputPath?: string, error?: string) => void) => void;
       // Project persistence
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;

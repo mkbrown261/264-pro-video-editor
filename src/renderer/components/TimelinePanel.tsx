@@ -2064,6 +2064,7 @@ export function TimelinePanel({
                       isDraggingToNewTrack ? "dragging-to-new-track" : "",
                       isLocked    ? "clip-locked" : "",
                       isAdjustmentLayer ? "adjustment-layer" : "",
+                      segment.clip.clipType === 'caption' ? 'caption-clip' : '',
                     ].filter(Boolean).join(" ");
 
                     return (
@@ -2313,7 +2314,13 @@ export function TimelinePanel({
                           {isAdjustmentLayer && (
                             <strong className="clip-name" style={{ color: "#c4b5fd", letterSpacing: "0.08em" }}>ADJ</strong>
                           )}
-                          {!isAdjustmentLayer && showClipNames && <strong className="clip-name">{segment.asset.name}</strong>}
+                          {segment.clip.clipType === 'caption' && (
+                            <strong className="clip-name" style={{ color: '#a78bfa', fontSize: 10, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', maxWidth: '100%' }}
+                              title={segment.clip.captionText}>
+                              💬 {segment.clip.captionText ?? ''}
+                            </strong>
+                          )}
+                          {segment.clip.clipType !== 'caption' && !isAdjustmentLayer && showClipNames && <strong className="clip-name">{segment.asset.name}</strong>}
                           {clipWidth > 60 && <span className="clip-dur">{formatDuration(segment.durationSeconds)}</span>}
                           {/* Status badges */}
                           {!segment.clip.isEnabled && (

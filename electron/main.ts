@@ -714,6 +714,88 @@ ipcMain.handle("export:render", async (event, request: ExportRequest) => {
   }
 });
 
+// ── Background Export (non-blocking, editor stays live) ─────────────────────
+// The request is written to a temp JSON file, then a detached Node worker
+// process runs exportSequence and sends IPC progress events back.
+// The renderer can start a new export while a previous one is still running.
+const bgExportJobs = new Map<string, { pid: number; cancel: () => void }>();
+
+ipcMain.handle('export:render-bg', async (event, request: ExportRequest & { jobId: string }) => {
+  try {
+    const { jobId } = request;
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const os = await import('os');
+    const { fork } = await import('child_process');
+
+    // Write request to temp file (avoids arg length limits)
+    const reqPath = pathM.join(os.tmpdir(), `264pro_bg_export_${jobId}.json`);
+    fsM.writeFileSync(reqPath, JSON.stringify(request), 'utf8');
+
+    // Worker script path — lives next to main.js in the build
+    const workerScript = pathM.join(__dirname, 'bg-export-worker.js');
+
+    // If worker doesn't exist (dev mode), fall back to inline execution
+    if (!fsM.existsSync(workerScript)) {
+      // Inline fallback: run in same process but don't await (detach via setImmediate)
+      setImmediate(async () => {
+        try {
+          await exportSequence(request, (pct) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send('export:bg-progress', { jobId, pct });
+            }
+          });
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('export:bg-complete', { jobId, success: true, outputPath: request.outputPath });
+          }
+        } catch (err) {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('export:bg-complete', { jobId, success: false, error: String(err) });
+          }
+        } finally {
+          try { fsM.unlinkSync(reqPath); } catch {}
+          bgExportJobs.delete(jobId);
+        }
+      });
+      return { success: true, jobId, mode: 'inline' };
+    }
+
+    // Fork a real worker process
+    const child = fork(workerScript, [reqPath, jobId], {
+      detached: false,
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    const cancel = () => {
+      try { child.kill('SIGTERM'); } catch {}
+      bgExportJobs.delete(jobId);
+      try { fsM.unlinkSync(reqPath); } catch {}
+    };
+    bgExportJobs.set(jobId, { pid: child.pid ?? 0, cancel });
+
+    child.on('message', (msg: { type: string; pct?: number; error?: string }) => {
+      if (!event.sender.isDestroyed()) {
+        if (msg.type === 'progress') event.sender.send('export:bg-progress', { jobId, pct: msg.pct });
+        if (msg.type === 'complete') event.sender.send('export:bg-complete', { jobId, success: true, outputPath: request.outputPath });
+        if (msg.type === 'error') event.sender.send('export:bg-complete', { jobId, success: false, error: msg.error });
+      }
+    });
+    child.on('exit', () => {
+      bgExportJobs.delete(jobId);
+      try { fsM.unlinkSync(reqPath); } catch {}
+    });
+
+    return { success: true, jobId, mode: 'worker', pid: child.pid };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('export:cancel-bg', async (_ev, jobId: string) => {
+  const job = bgExportJobs.get(jobId);
+  if (job) { job.cancel(); return { success: true }; }
+  return { success: false, error: 'Job not found' };
+});
+
 // ── Project persistence (.264proj) ───────────────────────────────────────────
 
 ipcMain.handle("project:save", async (event, json: string, suggestedName: string) => {

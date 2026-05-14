@@ -554,6 +554,7 @@ export default function App() {
   const updateTrack = useEditorStore((s) => s.updateTrack);
   const patchClip = useEditorStore((s) => s.patchClip);
   const setMagneticTimeline = useEditorStore((s) => s.setMagneticTimeline);
+  const addCaptionsFromTranscript = useEditorStore((s) => s.addCaptionsFromTranscript);
   const magneticTimeline = useEditorStore((s) => s.project.sequence.settings.magneticTimeline !== false);
   const addAssetToPool = useEditorStore((s) => s.addAsset);
   const insertClip = useEditorStore((s) => s.insertClip);
@@ -1937,7 +1938,7 @@ export default function App() {
     await triggerImport();
   }
 
-  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number }) {
+  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean }) {
     if (!window.editorApi) { setBridgeReady(false); setExportMessage("Export unavailable."); return; }
     setExportMessage(null);
     if (!segments.length) { setExportMessage("Add clips before exporting."); return; }
@@ -1951,6 +1952,35 @@ export default function App() {
     try {
       const outputPath = await window.editorApi.chooseExportFile(suggestedName);
       if (!outputPath) return;
+
+      // ── Background export mode ───────────────────────────────────────
+      if (opts?.background) {
+        const jobId = `bgexport_${Date.now()}`;
+        window.editorApi.onBgExportProgress?.((jid, pct) => {
+          if (jid === jobId) setExportProgress(pct);
+        });
+        window.editorApi.onBgExportComplete?.((jid, success, outPath, error) => {
+          if (jid !== jobId) return;
+          setExportBusy(false);
+          setExportProgress(0);
+          if (success) setExportMessage(`✔ Background export complete: ${outPath}`);
+          else setExportMessage(`✗ Background export failed: ${error}`);
+        });
+        setExportBusy(true);
+        setExportProgress(0);
+        const bgResult = await window.editorApi.exportSequenceBg?.({
+          jobId, outputPath, project, codec,
+          outputWidth: opts.outputWidth, outputHeight: opts.outputHeight,
+        });
+        if (!bgResult?.success) {
+          setExportBusy(false);
+          setExportMessage(`✗ Could not start background export: ${bgResult?.error}`);
+        } else {
+          setExportMessage(`⏳ Exporting in background (${bgResult.mode}) — editor stays live`);
+        }
+        return;
+      }
+      // ── Blocking export (original behaviour) ───────────────────────────
       setExportBusy(true);
       setExportProgress(0);
       // Safety timeout: reset busy flag if export hangs for >10 minutes
@@ -3497,6 +3527,10 @@ export default function App() {
                     }}
                     onSplitAtFrames={(frames) => {
                       frames.forEach(f => splitClipAtFrame(selectedClipId!, f));
+                    }}
+                    onAddCaptionTrack={(words, style) => {
+                      const clip = project.sequence.clips.find(c => c.id === selectedClipId);
+                      addCaptionsFromTranscript(words, project.sequence.settings.fps, clip?.startFrame ?? 0, style);
                     }}
                     onSeek={setPlayheadFrame}
                   />
