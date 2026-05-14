@@ -24,8 +24,8 @@ import {
 const oauthTokens: Record<string, { accessToken: string; refreshToken?: string; expiresAt: number }> = {};
 
 // ── FlowState Integration Constants ──────────────────────────────────────────
-const DEV_BYPASS_KEY  = 'DEV-FS264-MKBROWN-2026-BYPASS';
-const FS_BASE_URL     = 'https://flowstate-67g.pages.dev';
+const DEV_BYPASS_KEY  = process.env.FS264_DEV_KEY ?? '';
+const FS_BASE_URL     = process.env.FS_BASE_URL ?? 'https://flowst8.cc';
 const FS_VERIFY_URL   = `${FS_BASE_URL}/api/264pro/verify-token`;
 const LS_TOKEN_KEY    = 'fs_link_token';
 const LS_USER_KEY     = 'fs_user';
@@ -764,8 +764,14 @@ ipcMain.handle("project:open", async (event) => {
 
 ipcMain.handle("project:save-as", async (_event, json: string, filePath: string) => {
   try {
-    await writeFile(filePath, json, "utf-8");
-    return filePath;
+    const { canceled, filePath: chosen } = await dialog.showSaveDialog({
+      title: 'Save Project As',
+      defaultPath: filePath,
+      filters: [{ name: '264 Pro Project', extensions: ['264pro'] }],
+    });
+    if (canceled || !chosen) return null;
+    await writeFile(chosen, json, "utf-8");
+    return chosen;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     return { success: false, error: message };
@@ -790,7 +796,11 @@ ipcMain.handle("updater:install-now", () => {
 });
 
 ipcMain.handle("app:open-external", (_event, url: string) => {
-  void shell.openExternal(url);
+  try {
+    const parsed = new URL(url);
+    if (!["https:", "http:"].includes(parsed.protocol)) return;
+    void shell.openExternal(url);
+  } catch { }
 });
 
 // ── Gate / Auth IPC ───────────────────────────────────────────────────────────
@@ -798,7 +808,11 @@ ipcMain.handle("app:open-external", (_event, url: string) => {
 ipcMain.handle("gate:get-version", () => app.getVersion());
 
 ipcMain.handle("gate:open-external", (_event, url: string) => {
-  void shell.openExternal(url);
+  try {
+    const parsed = new URL(url);
+    if (!["https:", "http:"].includes(parsed.protocol)) return;
+    void shell.openExternal(url);
+  } catch { }
 });
 
 // Kick off OAuth in system browser, register deep-link handler
@@ -849,7 +863,25 @@ ipcMain.handle("flowstate:get-user", async () => {
   } catch { return null; }
 });
 
+const ALLOWED_API_PATHS = new Set([
+  '/api/264pro/verify-token',
+  '/api/264pro/ai-tool',
+  '/api/264pro/ai-tool-status',
+  '/api/264pro/video-gen',
+  '/api/264pro/video-gen-status',
+  '/api/264pro/auth',
+  '/api/264pro/user',
+  '/api/264pro/credits',
+  '/api/264pro/generate-text',
+  '/api/r2/upload',
+  '/api/r2/list',
+]);
+
 ipcMain.handle("flowstate:api-call", async (_event, path: string, method: string, body: unknown) => {
+  const normalizedPath = String(path || '').split('?')[0];
+  if (!ALLOWED_API_PATHS.has(normalizedPath)) {
+    return { error: `API path not allowed: ${normalizedPath}` };
+  }
   const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
   try {
     const token = (await readFile(tokenPath, 'utf8')).trim();
@@ -1246,7 +1278,27 @@ ipcMain.handle('cloud:delete', async (_event, key: string) => {
 // ── Publish IPC handlers ───────────────────────────────────────────────────────
 ipcMain.handle('publish:generate-metadata', async (_ev, info: { name: string; duration: number }) => {
   try {
-    return { success: true, title: `${info.name} — You Won't Believe This 🎬`, description: `An amazing video: ${info.name}. Watch till the end!`, tags: ['vlog', 'video', 'content', 'creator'] };
+    const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+    const token = (await readFile(tokenPath, 'utf8').catch(() => '')).trim();
+    if (!token) return { success: true, title: info.name, description: '', tags: [] };
+    const mins = Math.round(info.duration / 60);
+    const prompt = `Generate a YouTube title, description, and 5 tags for a video called "${info.name}" that is ${mins} minute(s) long. Return JSON only with keys: title (string, max 100 chars, no clickbait), description (string, 2-3 sentences), tags (array of 5 strings).`;
+    try {
+      const res = await fetch(`${FS_BASE_URL}/api/264pro/generate-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ prompt, maxTokens: 300 }),
+      });
+      if (!res.ok) return { success: true, title: info.name, description: '', tags: [] };
+      const data = await res.json() as any;
+      const text = data.text || data.content || '';
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return { success: true, title: parsed.title || info.name, description: parsed.description || '', tags: Array.isArray(parsed.tags) ? parsed.tags : [] };
+      }
+    } catch { /* fall through */ }
+    return { success: true, title: info.name, description: '', tags: [] };
   } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
 
@@ -1365,16 +1417,20 @@ ipcMain.handle('publish:upload-youtube', async (_ev, args: {
     const uploadUrl = initResp.headers.get('location');
     if (!uploadUrl) return { success: false, error: 'No upload URL returned' };
 
-    const videoData = fsM.readFileSync(args.videoPath);
+    const { createReadStream } = await import('fs');
+    const { stat: statAsync } = await import('fs/promises');
+    const fileStats = await statAsync(args.videoPath);
     const uploadResp = await fetch(uploadUrl, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token.accessToken}`,
         'Content-Type': 'video/mp4',
-        'Content-Length': String(videoData.length),
+        'Content-Length': String(fileStats.size),
       },
-      body: videoData,
-    });
+      // @ts-ignore
+      body: Readable.toWeb(createReadStream(args.videoPath)),
+      duplex: 'half',
+    } as RequestInit);
     if (!uploadResp.ok) {
       const err = await uploadResp.text();
       return { success: false, error: `Upload failed ${uploadResp.status}: ${err.slice(0, 200)}` };
@@ -1456,8 +1512,18 @@ ipcMain.handle('publish:upload-tiktok', async (_ev, args: { videoPath: string; t
     });
     const initData = await initResp.json() as any;
     if (!initData.data?.upload_url) return { success: false, error: JSON.stringify(initData).slice(0, 200) };
-    const videoBuffer = fsM.readFileSync(args.videoPath);
-    const uploadResp = await fetch(initData.data.upload_url, { method: 'PUT', headers: { 'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`, 'Content-Type': 'video/mp4' }, body: videoBuffer });
+    const { createReadStream: createRS } = await import('fs');
+    const uploadResp = await fetch(initData.data.upload_url, {
+      method: 'PUT',
+      headers: {
+        'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`,
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(fileSize),
+      },
+      // @ts-ignore
+      body: Readable.toWeb(createRS(args.videoPath)),
+      duplex: 'half',
+    } as RequestInit);
     if (!uploadResp.ok) return { success: false, error: `TikTok upload failed: ${uploadResp.status}` };
     return { success: true, publishId: initData.data.publish_id };
   } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
@@ -1655,6 +1721,15 @@ ipcMain.handle('render-cache:render-segment', async (_ev, args: {
   grade: Record<string, number>;
   speed: number;
 }) => {
+  // Security: validate inputPath is a local file, not an http/rtsp/smb URL
+  try {
+    const { resolve: rp } = await import('path');
+    const { statSync } = await import('fs');
+    const resolvedInput = rp(args.inputPath);
+    if (!statSync(resolvedInput).isFile()) throw new Error('not a file');
+  } catch {
+    return { success: false, error: 'Invalid inputPath — must be a local file' };
+  }
   try {
     const fsM = await import('fs');
     const pathM = await import('path');
@@ -1975,6 +2050,13 @@ ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
   trackingMode: 'center' | 'face' | 'motion';
 }) => {
   try {
+    const { resolve: rp } = await import('path');
+    const { statSync } = await import('fs');
+    if (!statSync(rp(args.sourcePath)).isFile()) throw new Error();
+  } catch {
+    return { success: false, error: 'Invalid sourcePath — must be a local file' };
+  }
+  try {
     const { spawn } = await import('child_process');
 
     // Resolve ffmpeg/ffprobe paths using the same approach as other handlers
@@ -2129,7 +2211,13 @@ ipcMain.handle('proxy:get-dir', async () => {
 ipcMain.handle('proxy:delete', async (_ev, proxyPath: string) => {
   try {
     const fs = await import('fs');
-    if (fs.existsSync(proxyPath)) fs.unlinkSync(proxyPath);
+    const path = await import('path');
+    const proxyBaseDir = join(app.getPath('userData'), 'proxies');
+    const resolved = path.resolve(proxyPath);
+    if (!resolved.startsWith(proxyBaseDir + path.sep)) {
+      return { success: false, error: 'Invalid proxy path' };
+    }
+    if (fs.existsSync(resolved)) fs.unlinkSync(resolved);
     return { success: true };
   } catch (e) {
     return { success: false };

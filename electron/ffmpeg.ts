@@ -829,10 +829,8 @@ export async function exportSequence(
             break;
           }
           case "defocus_background": {
-            // Center-sharp, edges blurred — simulates shallow DoF
             const strength = Math.min(10, Math.max(1, Math.round(Number(effect.params?.intensity ?? 50) / 10)));
-            videoFilters.push(`boxblur=${strength}:1`);
-            videoFilters.push(`overlay=0:0`); // placeholder — full ML version requires segmentation
+            videoFilters.push(`boxblur=${strength}:${Math.ceil(strength / 2)}`);
             break;
           }
           default:

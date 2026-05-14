@@ -1,0 +1,197 @@
+You are fixing a production Electron video editor. Make ALL fixes below in electron/main.ts, electron/ffmpeg.ts, and src/renderer/hooks/usePlaybackController.ts. Surgical edits only — do NOT touch anything else.
+
+## FIX 1 — shell.openExternal URL allowlist
+In electron/main.ts, find the two handlers "app:open-external" and "gate:open-external". Both currently call `void shell.openExternal(url)` with no validation. Wrap each with a URL protocol check:
+```
+try {
+  const parsed = new URL(url);
+  if (!["https:", "http:"].includes(parsed.protocol)) return;
+  void shell.openExternal(url);
+} catch { }
+```
+
+## FIX 2 — Strip DEV_BYPASS_KEY from production binary
+In electron/main.ts line ~27, change:
+  const DEV_BYPASS_KEY  = 'DEV-FS264-MKBROWN-2026-BYPASS';
+To:
+  const DEV_BYPASS_KEY  = process.env.FS264_DEV_KEY ?? '';
+
+## FIX 3 — Fix FS_BASE_URL to use canonical domain
+In electron/main.ts line ~28, change:
+  const FS_BASE_URL = 'https://flowstate-67g.pages.dev';
+To:
+  const FS_BASE_URL = process.env.FS_BASE_URL ?? 'https://flowst8.cc';
+
+## FIX 4 — flowstate:api-call path allowlist
+In electron/main.ts, before the flowstate:api-call handler definition, add:
+```
+const ALLOWED_API_PATHS = new Set([
+  '/api/264pro/verify-token',
+  '/api/264pro/ai-tool',
+  '/api/264pro/ai-tool-status',
+  '/api/264pro/video-gen',
+  '/api/264pro/video-gen-status',
+  '/api/264pro/auth',
+  '/api/264pro/user',
+  '/api/264pro/credits',
+  '/api/264pro/generate-text',
+  '/api/r2/upload',
+  '/api/r2/list',
+]);
+```
+Then inside the handler, as the FIRST statement before reading the token, add:
+```
+const normalizedPath = String(path || '').split('?')[0];
+if (!ALLOWED_API_PATHS.has(normalizedPath)) {
+  return { error: `API path not allowed: ${normalizedPath}` };
+}
+```
+
+## FIX 5 — project:save-as path validation
+In electron/main.ts, find "project:save-as" handler. It currently does `await writeFile(filePath, json, "utf-8")` with renderer-supplied filePath. Replace the handler body so it calls dialog.showSaveDialog first and uses the user-chosen path:
+```
+const { canceled, filePath: chosen } = await dialog.showSaveDialog({
+  title: 'Save Project As',
+  defaultPath: filePath,
+  filters: [{ name: '264 Pro Project', extensions: ['264pro'] }],
+});
+if (canceled || !chosen) return null;
+await writeFile(chosen, json, "utf-8");
+return chosen;
+```
+
+## FIX 6 — proxy:delete path validation
+In electron/main.ts, find "proxy:delete" handler. It currently calls fs.unlinkSync(proxyPath) with no validation. Add path safety check — only allow deleting files inside the proxies userData directory:
+```
+const path = await import('path');
+const proxyBaseDir = join(app.getPath('userData'), 'proxies');
+const resolved = path.resolve(proxyPath);
+if (!resolved.startsWith(proxyBaseDir + path.sep)) {
+  return { success: false, error: 'Invalid proxy path' };
+}
+```
+Then only call unlinkSync on `resolved` if validation passes.
+
+## FIX 7 — render-cache:render-segment inputPath validation
+In electron/main.ts, find the render-cache:render-segment handler. At the very start of the handler body (after args is defined), add:
+```
+// Security: validate inputPath is a local file, not an http/rtsp/smb URL
+try {
+  const { resolve: rp } = await import('path');
+  const { statSync } = await import('fs');
+  const resolvedInput = rp(args.inputPath);
+  if (!statSync(resolvedInput).isFile()) throw new Error('not a file');
+} catch {
+  return { success: false, error: 'Invalid inputPath — must be a local file' };
+}
+```
+
+## FIX 8 — reframe:analyze-and-export sourcePath validation
+In electron/main.ts, find the reframe:analyze-and-export handler. At the very start, add:
+```
+try {
+  const { resolve: rp } = await import('path');
+  const { statSync } = await import('fs');
+  if (!statSync(rp(args.sourcePath)).isFile()) throw new Error();
+} catch {
+  return { success: false, error: 'Invalid sourcePath — must be a local file' };
+}
+```
+
+## FIX 9 — defocus_background broken overlay (ffmpeg.ts)
+In electron/ffmpeg.ts, find case "defocus_background". It currently pushes `overlay=0:0` which crashes FFmpeg with no second input stream. Remove that line. Keep only the boxblur filter:
+```
+case "defocus_background": {
+  const strength = Math.min(10, Math.max(1, Math.round(Number(effect.params?.intensity ?? 50) / 10)));
+  videoFilters.push(`boxblur=${strength}:${Math.ceil(strength / 2)}`);
+  break;
+}
+```
+
+## FIX 10 — publish:generate-metadata wire to real AI
+In electron/main.ts, find the publish:generate-metadata handler. It currently returns hardcoded "You Won't Believe This" strings. Replace with a real AI call:
+```
+const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
+const token = (await readFile(tokenPath, 'utf8').catch(() => '')).trim();
+if (!token) return { success: true, title: info.name, description: '', tags: [] };
+const mins = Math.round(info.duration / 60);
+const prompt = `Generate a YouTube title, description, and 5 tags for a video called "${info.name}" that is ${mins} minute(s) long. Return JSON only with keys: title (string, max 100 chars, no clickbait), description (string, 2-3 sentences), tags (array of 5 strings).`;
+try {
+  const res = await fetch(`${FS_BASE_URL}/api/264pro/generate-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ prompt, maxTokens: 300 }),
+  });
+  if (!res.ok) return { success: true, title: info.name, description: '', tags: [] };
+  const data = await res.json() as any;
+  const text = data.text || data.content || '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return { success: true, title: parsed.title || info.name, description: parsed.description || '', tags: Array.isArray(parsed.tags) ? parsed.tags : [] };
+  }
+} catch { /* fall through */ }
+return { success: true, title: info.name, description: '', tags: [] };
+```
+
+## FIX 11 — YouTube upload: replace readFileSync with streaming
+In electron/main.ts, in the publish:upload-youtube handler, find `const videoData = fsM.readFileSync(args.videoPath)` and the fetch call that uses `body: videoData`. Replace with:
+```
+const { createReadStream } = await import('fs');
+const { stat: statAsync } = await import('fs/promises');
+const fileStats = await statAsync(args.videoPath);
+const uploadResp = await fetch(uploadUrl, {
+  method: 'PUT',
+  headers: {
+    Authorization: `Bearer ${token.accessToken}`,
+    'Content-Type': 'video/mp4',
+    'Content-Length': String(fileStats.size),
+  },
+  // @ts-ignore
+  body: Readable.toWeb(createReadStream(args.videoPath)),
+  duplex: 'half',
+} as RequestInit);
+```
+Note: Readable is already imported at the top of main.ts.
+
+## FIX 12 — TikTok upload: replace readFileSync with streaming
+In electron/main.ts, in the publish:upload-tiktok handler, find `const videoBuffer = fsM.readFileSync(args.videoPath)` and its fetch call. Replace with:
+```
+const { createReadStream: createRS } = await import('fs');
+const uploadResp = await fetch(initData.data.upload_url, {
+  method: 'PUT',
+  headers: {
+    'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`,
+    'Content-Type': 'video/mp4',
+    'Content-Length': String(fileSize),
+  },
+  // @ts-ignore
+  body: Readable.toWeb(createRS(args.videoPath)),
+  duplex: 'half',
+} as RequestInit);
+```
+
+## FIX 13 — AudioContext leak on unmount
+In src/renderer/hooks/usePlaybackController.ts, find the cleanup useEffect that has `cancelAnimationFrame(rafRef.current)` and `schedulerRef.current?.dispose()`. After the dispose line, add:
+```
+if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
+  void sharedAudioContext.close();
+  sharedAudioContext = null;
+}
+```
+
+---
+
+After ALL 13 fixes, run:
+  npm run build
+
+Fix any TypeScript errors until build passes with zero errors.
+
+Then commit:
+  git add -A && git commit -m "fix: 13 security + production fixes — URL allowlist, path traversal prevention, stream uploads, AudioContext cleanup, defocus_background crash, real AI metadata, canonical domain"
+
+Then run:
+  git push origin main
+
+When completely done, run:
+  openclaw system event --text "Done: all 13 security and production fixes applied, built, and pushed to GitHub" --mode now

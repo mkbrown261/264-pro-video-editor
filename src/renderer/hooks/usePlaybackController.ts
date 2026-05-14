@@ -844,6 +844,10 @@ export function usePlaybackController({
       // Dispose AudioScheduler — releases AudioContext and cached buffers
       schedulerRef.current?.dispose();
       schedulerRef.current = null;
+      if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
+        void sharedAudioContext.close();
+        sharedAudioContext = null;
+      }
       // Clean up hidden preload element
       const preEl = preloadVideoRef.current;
       if (preEl) {
