@@ -1030,7 +1030,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
 
             {/* Main generation area */}
             <div style={{
-              flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14,
+              flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14, minWidth: 0, overflow: "hidden auto",
               // Higgsfield gets a cyan/teal glow background
               background: vgModelDef.proOnly
                 ? "linear-gradient(160deg, rgba(0,212,255,0.03) 0%, rgba(0,255,163,0.02) 100%)"
@@ -1464,7 +1464,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
           </div>
 
           {/* Tool config & output */}
-          <div style={{ flex: 1, padding: "18px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ flex: 1, padding: "18px 20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
             {/* Tool description */}
             <div>
               <div style={{ fontWeight: 800, fontSize: 16, color: "#e8e8e8", marginBottom: 4 }}>
@@ -1580,7 +1580,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
               </button>
               {voiceIsolateResult && (
                 <div style={{ marginTop: 8, fontSize: 11, color: '#34d399', background: 'rgba(52,211,153,0.08)', borderRadius: 6, padding: '5px 8px' }}>
-                  ✓ Saved: {voiceIsolateResult}
+                  ✓ Saved: <span style={{wordBreak:'break-all',overflowWrap:'break-word'}}>{voiceIsolateResult}</span>
                 </div>
               )}
               {voiceIsolateError && (
@@ -1628,8 +1628,8 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                 style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: interpBusy ? 'wait' : 'pointer', background: interpBusy ? 'rgba(59,138,247,0.1)' : 'rgba(59,138,247,0.2)', border: '1px solid rgba(59,138,247,0.4)', color: '#3b8af7' }}>
                 {interpBusy ? `⏳ Generating frames...` : `🎞 Generate ${interpMultiplier}× Frames`}
               </button>
-              {interpResult && <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e' }}>✓ Saved: {interpResult}</div>}
-              {interpError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {interpError}</div>}
+              {interpResult && <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e', wordBreak: 'break-all', overflowWrap: 'break-word' }}>✓ Saved: {interpResult}</div>}
+              {interpError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {interpError}</div>}
             </div>
 
             {/* ── Beat Detection + Music Sync ─────────────────────────────────── */}
@@ -1668,7 +1668,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   </button>
                 </div>
               )}
-              {beatError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {beatError}</div>}
+              {beatError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {beatError}</div>}
             </div>
 
             {/* ── Audio Sync ──────────────────────────────────────────────────── */}
@@ -1692,8 +1692,8 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                 style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: syncBusy ? 'wait' : 'pointer', background: syncBusy ? 'rgba(34,197,94,0.08)' : 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e' }}>
                 {syncBusy ? '⏳ Analyzing waveforms...' : '🔗 Find Sync Offset'}
               </button>
-              {syncResult && <div style={{ marginTop: 6, fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✓ {syncResult}</div>}
-              {syncError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {syncError}</div>}
+              {syncResult && <div style={{ marginTop: 6, fontSize: 12, color: '#22c55e', fontWeight: 600, overflowWrap: 'break-word', wordBreak: 'break-all' }}>✓ {syncResult}</div>}
+              {syncError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {syncError}</div>}
             </div>
 
             {/* ── Smart Reframe ──────────────────────────────────────────────── */}
@@ -1725,8 +1725,8 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                 style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: reframeBusy ? 'wait' : 'pointer', background: reframeBusy ? 'rgba(249,115,22,0.08)' : 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.4)', color: '#fb923c' }}>
                 {reframeBusy ? '⏳ Reframing...' : `📱 Export ${reframeAspect}`}
               </button>
-              {reframeResult && <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e' }}>✓ Saved: {reframeResult}</div>}
-              {reframeError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {reframeError}</div>}
+              {reframeResult && <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e', wordBreak: 'break-all', overflowWrap: 'break-word' }}>✓ Saved: {reframeResult}</div>}
+              {reframeError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {reframeError}</div>}
             </div>
 
             {/* ── Best Take Picker (Clip Quality Scorer) ────────────────────────── */}
@@ -1767,7 +1767,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                     })}
                 </div>
               )}
-              {scoreError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {scoreError}</div>}
+              {scoreError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {scoreError}</div>}
             </div>
 
             {/* ── Auto Captions ────────────────────────────────────────────────── */}
@@ -1809,7 +1809,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   )}
                 </div>
               )}
-              {captionError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {captionError}</div>}
+              {captionError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {captionError}</div>}
             </div>
 
             {/* ── Project Health Score ────────────────────────────────────────────── */}
@@ -1850,7 +1850,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   )}
                 </div>
               )}
-              {healthError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {healthError}</div>}
+              {healthError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {healthError}</div>}
             </div>
 
             {/* Media Input — auto-fill from timeline selection or browse local files */}

@@ -12,7 +12,7 @@ const API = (window as any).electronAPI;
 function Card({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
   return (
-    <div style={{ background: `${color}09`, border: `1px solid ${color}30`, borderRadius: 8, overflow: 'hidden' }}>
+    <div style={{ background: `${color}09`, border: `1px solid ${color}30`, borderRadius: 8, overflow: 'hidden', minWidth: 0 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
         style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'transparent', border: 'none', cursor: 'pointer', color }}>
         <span style={{ fontWeight: 700, fontSize: 12 }}>{title}</span>
@@ -25,8 +25,8 @@ function Card({ title, color, children }: { title: string; color: string; childr
 
 function StatusLine({ busy, result, error, busyLabel = 'Processing...' }: { busy: boolean; result?: string | null; error?: string | null; busyLabel?: string }) {
   if (busy) return <div style={{ marginTop: 6, fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>⏳ {busyLabel}</div>;
-  if (result) return <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e' }}>✓ {result}</div>;
-  if (error) return <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {error}</div>;
+  if (result) return <div style={{ marginTop: 6, fontSize: 11, color: '#22c55e', wordBreak: 'break-all', overflowWrap: 'break-word' }}>✓ {result}</div>;
+  if (error) return <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444', wordBreak: 'break-all', overflowWrap: 'break-word' }}>⚠ {error}</div>;
   return null;
 }
 

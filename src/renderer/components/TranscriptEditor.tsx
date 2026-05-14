@@ -154,7 +154,7 @@ export function TranscriptEditor({ clipId, clipPath, clipName, clipStartFrame, f
             </div>
 
             {transcriptError && (
-              <div style={{ padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 5, fontSize: 11, color: '#ef4444', marginBottom: 8 }}>
+              <div style={{ padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 5, fontSize: 11, color: '#ef4444', marginBottom: 8, overflowWrap: 'break-word', wordBreak: 'break-word' }}>
                 ⚠ {transcriptError}
               </div>
             )}
@@ -253,7 +253,7 @@ export function TranscriptEditor({ clipId, clipPath, clipName, clipStartFrame, f
             </button>
 
             {sceneError && (
-              <div style={{ padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 5, fontSize: 11, color: '#ef4444', marginBottom: 8 }}>
+              <div style={{ padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 5, fontSize: 11, color: '#ef4444', marginBottom: 8, overflowWrap: 'break-word', wordBreak: 'break-word' }}>
                 ⚠ {sceneError}
               </div>
             )}

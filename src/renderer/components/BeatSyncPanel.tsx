@@ -377,7 +377,7 @@ export function BeatSyncPanel({
 
       {/* Status */}
       {status && (
-        <div style={{ padding: "8px 10px", background: "rgba(124,58,237,0.1)", borderRadius: 6, fontSize: 11, color: "#c4b5fd", marginBottom: 12, border: "1px solid rgba(124,58,237,0.2)" }}>
+        <div style={{ padding: "8px 10px", background: "rgba(124,58,237,0.1)", borderRadius: 6, fontSize: 11, color: "#c4b5fd", marginBottom: 12, border: "1px solid rgba(124,58,237,0.2)", overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0 }}>
           {status}
         </div>
       )}

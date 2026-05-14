@@ -546,6 +546,8 @@ button { cursor: pointer; }
   padding: 8px 10px;
   border-bottom: 1px solid var(--separator);
   background: var(--bg-panel);
+  overflow: hidden;
+  min-width: 0;
 }
 .inspector-label {
   font-size: 0.6rem;
@@ -2912,6 +2914,8 @@ kbd {
   border-bottom: 1px solid var(--separator);
   background: var(--bg-panel);
   transition: background 160ms ease, opacity 160ms ease;
+  overflow: hidden;
+  min-width: 0;
 }
 .effect-card.effect-card-disabled { opacity: 0.45; }
 .effect-card.effect-card-dragging { opacity: 0.6; background: var(--bg-panel-hi); box-shadow: 0 2px 12px rgba(0,0,0,0.5); }
@@ -2939,7 +2943,7 @@ kbd {
 }
 .effect-drag-handle:active { cursor: grabbing; }
 .effect-icon { font-size: 0.9rem; line-height: 1; flex-shrink: 0; }
-.effect-label { flex: 1; font-size: 0.7rem; font-weight: 600; color: var(--text); min-width: 0; }
+.effect-label { flex: 1; font-size: 0.7rem; font-weight: 600; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Effect toggle (on/off pip) */
 .effect-controls {
@@ -5439,6 +5443,9 @@ kbd {
   background: transparent;
   color: var(--text-dim);
   font-size: 0.65rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   letter-spacing: 0.06em;
   cursor: pointer;
@@ -8785,4 +8792,33 @@ kbd {
 @keyframes clawPulse {
   0%, 100% { box-shadow: 0 0 8px var(--pulse-color, rgba(168,85,247,0.4)); transform: scale(1); }
   50% { box-shadow: 0 0 18px var(--pulse-color, rgba(168,85,247,0.7)); transform: scale(1.06); }
+}
+
+/* ── Global overflow guard: all panel/card text never bleeds out ──────────── */
+.inspector-panel,
+.inspector-section,
+.ai-tools-panel,
+.clawsound-panel,
+.flowstate-panel,
+.clawflow-panel,
+.color-panel,
+.mixer-channel-strip,
+.beat-sync-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Any flex row inside a panel: children must respect container width */
+.inspector-panel *,
+.ai-tools-panel * {
+  min-width: 0;
+}
+
+/* Status/result/error message text: always wrap, never overflow */
+.panel-status-msg,
+.panel-result-msg,
+.panel-error-msg {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
 }

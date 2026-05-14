@@ -527,13 +527,13 @@ export function ClawFlowPublishPanel({
             <div style={{
               marginBottom: 12, padding: '10px 14px', borderRadius: 8,
               background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
-              fontSize: 13, color: '#86efac',
+              fontSize: 13, color: '#86efac', overflowWrap: 'break-word', wordBreak: 'break-all', minWidth: 0,
             }}>
               ✅ Published to {publishResult.platform}
               {publishResult.url && (
                 <a
                   href={publishResult.url}
-                  style={{ color: '#60a5fa', marginLeft: 8, fontSize: 12 }}
+                  style={{ color: '#60a5fa', marginLeft: 8, fontSize: 12, wordBreak: 'break-all', overflowWrap: 'break-word', display: 'block', marginTop: 4 }}
                   onClick={e => { e.preventDefault(); api().openExternal?.(publishResult.url!); }}
                 >
                   {publishResult.url}
