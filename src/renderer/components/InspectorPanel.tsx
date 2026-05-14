@@ -1153,6 +1153,11 @@ const EXPORT_PRESETS: ExportPreset[] = [
     width: 1920, height: 1080, fps: 24,
     codec: "ProRes 422", bitrate: "~220 Mbps", audioCodec: "PCM 24-bit", audioBitrate: "Lossless", container: "MOV",
   },
+  { id: "4k_youtube", label: "4K YouTube", icon: "📺", description: "4K UHD – H.265 for YouTube", width: 3840, height: 2160, fps: 30, codec: "H.265", bitrate: "20 Mbps", audioCodec: "AAC", audioBitrate: "320 kbps", container: "MP4" },
+  { id: "twitter", label: "X / Twitter", icon: "✦", description: "Twitter/X – 2:20 max", width: 1280, height: 720, fps: 30, codec: "H.264", bitrate: "5 Mbps", audioCodec: "AAC", audioBitrate: "128 kbps", container: "MP4" },
+  { id: "vimeo", label: "Vimeo", icon: "▶", description: "Vimeo Plus – H.264 1080p", width: 1920, height: 1080, fps: 24, codec: "H.264", bitrate: "12 Mbps", audioCodec: "AAC", audioBitrate: "320 kbps", container: "MP4" },
+  { id: "linkedin", label: "LinkedIn", icon: "💼", description: "LinkedIn – Square 1:1", width: 1080, height: 1080, fps: 30, codec: "H.264", bitrate: "6 Mbps", audioCodec: "AAC", audioBitrate: "192 kbps", container: "MP4" },
+  { id: "cinema_dcp", label: "DCP Preview", icon: "🏠", description: "Cinema DCI 2K preview", width: 2048, height: 1080, fps: 24, codec: "H.264", bitrate: "25 Mbps", audioCodec: "PCM 24-bit", audioBitrate: "Lossless", container: "MOV" },
 ];
 
 function ExportPresetPanel({
