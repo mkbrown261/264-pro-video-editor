@@ -266,3 +266,110 @@ The code was clearly written with real engineering intent, not generated blindly
 13. Grade versioning per clip (A/B toggle)
 14. Vimeo upload
 15. Sentry crash reporting
+
+---
+
+## ADDITIONAL CRITICAL FINDINGS (from deep audit pass)
+
+### C4 — `project:save-as` writes to arbitrary renderer-supplied file path
+**File:** `electron/main.ts` lines 765–774
+```typescript
+ipcMain.handle("project:save-as", async (_event, json: string, filePath: string) => {
+  await writeFile(filePath, json, "utf-8");  // NO PATH VALIDATION
+```
+Renderer can write any content to any path the process has write access to — `~/.bashrc`, `/etc/hosts`, startup entries, binary replacements. **Fix:** Always use `dialog.showSaveDialog` in main process instead of accepting paths from renderer.
+
+---
+
+### C5 — `proxy:delete` performs arbitrary file deletion without path validation
+**File:** `electron/main.ts` lines 1937–1943
+```typescript
+ipcMain.handle('proxy:delete', async (_ev, proxyPath: string) => {
+  if (fs.existsSync(proxyPath)) fs.unlinkSync(proxyPath);  // NO VALIDATION
+```
+Renderer can delete any file on the system. **Fix:** Validate `path.resolve(proxyPath).startsWith(proxyBaseDir + path.sep)` before unlink.
+
+---
+
+## ADDITIONAL HIGH FINDINGS
+
+### H-NEW-1 — `render-cache:render-segment` passes `inputPath` from renderer to FFmpeg `spawn`
+**File:** `electron/main.ts` lines 1457–1540
+FFmpeg's `-i` accepts protocol strings (`http://`, `rtsp://`, `smb://`). Renderer can instruct FFmpeg to SSRF or exfiltrate data to a remote server. **Fix:** `fs.statSync(inputPath)` — must be a regular file inside known media dirs.
+
+### H-NEW-2 — `reframe:analyze-and-export` passes renderer-supplied `outputPath` to FFmpeg with `-y` (silent overwrite)
+**File:** `electron/main.ts` lines 1801–1865
+FFmpeg with `-y` overwrites any writable file silently. Both `sourcePath` and `outputPath` unvalidated.
+
+### H-NEW-3 — `defocus_background` effect is broken placeholder that silently fails export
+**File:** `electron/ffmpeg.ts` lines 799–806
+```typescript
+videoFilters.push(`boxblur=${strength}:1`);
+videoFilters.push(`overlay=0:0`); // placeholder — full ML version requires segmentation
+```
+`overlay=0:0` with no second input stream causes FFmpeg to fail at export. Any project with this effect applied will produce a cryptic export failure. The comment admits it's a placeholder — but it's live.
+
+### H-NEW-4 — `publish:generate-metadata` returns hardcoded clickbait, not AI
+**File:** `electron/main.ts` lines 1055–1058
+```typescript
+return {
+  title: `${info.name} — You Won't Believe This 🎬`,
+  description: `An amazing video: ${info.name}. Watch till the end!`,
+  tags: ['vlog', 'video', 'content', 'creator']
+};
+```
+This is labelled as AI metadata generation in the UI. It is completely fake. Users will have "You Won't Believe This 🎬" pushed to their YouTube channel without knowing it's a stub.
+
+### H-NEW-5 — YouTube + TikTok upload reads entire video file into RAM with `readFileSync`
+**File:** `electron/main.ts` lines 1161–1173, 1273
+```typescript
+const videoData = fsM.readFileSync(args.videoPath);  // 500MB file → 500MB RAM spike
+const uploadResp = await fetch(uploadUrl, { body: videoData });
+```
+Blocks main thread on read. Causes OOM crashes on machines under RAM pressure. 500MB hard cap is a workaround. **Fix:** Stream the file body using `fs.createReadStream()`.
+
+### H-NEW-6 — `sharedAudioContext` never closed — AudioContext leak across project loads
+**File:** `src/renderer/hooks/usePlaybackController.ts` lines 99–104
+Module-level singleton `sharedAudioContext` is never `.close()`d on project reload. After 6 project opens, system hits the AudioContext limit and playback silently fails.
+
+### H-NEW-7 — `clawflow_style` FFmpeg effect is a stub applying cheap hue shifts
+**File:** `electron/ffmpeg.ts` lines 766–785
+The AI style transfer feature falls through to basic `hue=` and `edgedetect` filters in the export pipeline. Users selecting "Anime" or "Cinematic" style get a bad edge-detect filter baked into their final export — not AI style transfer. Needs a clear "render via API / not available offline" flag.
+
+---
+
+## UPDATED SUMMARY TABLE (full)
+
+| # | Finding | File | Severity | Fix Effort |
+|---|---|---|---|---|
+| C1 | shell.openExternal — no URL allowlist | main.ts:792,801 | CRITICAL | 1 hour |
+| C2 | DEV_BYPASS_KEY in production binary | main.ts:27 | CRITICAL | 2 hours |
+| C3 | flowstate:api-call open API proxy | main.ts:852 | CRITICAL | 1 day |
+| C4 | project:save-as — arbitrary file write | main.ts:765 | CRITICAL | 2 hours |
+| C5 | proxy:delete — arbitrary file delete | main.ts:1937 | CRITICAL | 1 hour |
+| H1 | Color node graph is cosmetic | ColorGradingPanel | HIGH | 1 week |
+| H2 | No roll/ripple trim | TimelinePanel | HIGH | 3 days |
+| H3 | No per-track EQ / LUFS | AudioMixerPanel | HIGH | 1 week |
+| H4 | No voice isolation | (missing) | HIGH | 2-3 days |
+| H5 | File path validation missing on IPC | main.ts:1287,1457,1884 | HIGH | 1 day |
+| H6 | App.tsx god component (4,348 lines) | App.tsx | HIGH | Ongoing |
+| H7 | render-cache:render-segment SSRF | main.ts:1457 | HIGH | 2 hours |
+| H8 | reframe outputPath arbitrary overwrite | main.ts:1801 | HIGH | 2 hours |
+| H9 | defocus_background broken placeholder | ffmpeg.ts:799 | HIGH | 1 day |
+| H10 | publish:generate-metadata fake AI | main.ts:1055 | HIGH | 1 day |
+| H11 | readFileSync 500MB into RAM on upload | main.ts:1161,1273 | HIGH | 3 hours |
+| H12 | AudioContext never closed on reload | usePlaybackController.ts:99 | HIGH | 1 hour |
+| H13 | clawflow_style is stub in export path | ffmpeg.ts:766 | HIGH | 1 day |
+| M1 | TypeScript `any` in store | editorStore.ts | MEDIUM | 2 days |
+| M2 | No media bin folders | MediaPool | MEDIUM | 2-3 days |
+| M3 | No scene cut detection | (missing) | MEDIUM | 1 day |
+| M4 | CompRenderer not disposed on unmount | CompRenderer.ts | MEDIUM | 2 hours |
+| M5 | FS_BASE_URL hardcoded to pages.dev | main.ts:28 | MEDIUM | 1 hour |
+| M6 | No grade versioning per clip | (missing) | MEDIUM | 2 days |
+| M7 | No burn-in overlays | ffmpeg.ts | MEDIUM | 1 day |
+| M8 | Subtitle burn-in incomplete | ffmpeg.ts | MEDIUM | 1 day |
+| L1 | console.log in production renderer | renderer/ | LOW | 2 hours |
+| L2 | No Vimeo upload | (missing) | LOW | 1-2 days |
+| L3 | No log color controls | ColorGradingPanel | LOW | 3 days |
+| L4 | No Sentry/crash reporting | (missing) | LOW | 2 hours |
+| L5 | No ripple-delete shortcut | TimelinePanel | LOW | 2 hours |
