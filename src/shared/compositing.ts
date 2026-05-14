@@ -98,7 +98,25 @@ export type CompNodeType =
   | "TextPlus"          // alias for Text+ (for code that uses no special chars)
   | "FishEye"           // fisheye / barrel lens distortion
   | "fishEye"           // lowercase alias
-  | "lensDistortion";   // generic lens distortion alias
+  | "lensDistortion"    // generic lens distortion alias
+  // ── Creator Node Pack — 13 new effects ──────────────────────────────────────────────
+  | "Duotone"           // two-tone color remap: shadow → highlight
+  | "RGBShift"          // chromatic aberration / RGB channel split
+  | "ChromaShift"       // alias for RGBShift
+  | "Glitch"            // digital glitch / slice distortion
+  | "Scanlines"         // horizontal CRT scanline overlay
+  | "CRT"               // curved CRT screen simulation with scanlines
+  | "Halftone"          // halftone dot pattern
+  | "Pixelate"          // pixelate / mosaic effect
+  | "HDRToneMap"        // ACES HDR tone mapping
+  | "ToneMap"           // alias for HDRToneMap
+  | "Solarize"          // Solarize (inverts pixels above threshold)
+  | "TealOrange"        // cinematic teal & orange look
+  | "CinematicLook"     // alias for TealOrange
+  | "FadedFilm"         // faded analog film look (lifted blacks)
+  | "FilmFade"          // alias for FadedFilm
+  | "CrossProcess"      // E-6/C-41 cross-processing simulation
+  | "E6";               // alias for CrossProcess
 
 // ── Node category (for header colour + picker grouping) ───────────────────────
 

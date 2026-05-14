@@ -357,6 +357,211 @@ void main(){
   gl_FragColor = mix(a, b, clamp(u_blend, 0.0, 1.0));
 }`;
 
+// ── Creator Node Pack — 30 total effects ───────────────────────────────────
+
+const FRAG_DUOTONE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform vec3 u_shadowColor;
+uniform vec3 u_highlightColor;
+varying vec2 v_uv;
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  float luma = dot(c.rgb, vec3(0.299,0.587,0.114));
+  gl_FragColor = vec4(mix(u_shadowColor, u_highlightColor, luma), c.a);
+}`;
+
+const FRAG_RGB_SHIFT = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_amount;
+uniform vec2 u_resolution;
+varying vec2 v_uv;
+void main(){
+  float shift = u_amount / u_resolution.x;
+  float r = texture2D(u_tex, vec2(v_uv.x + shift, v_uv.y)).r;
+  float g = texture2D(u_tex, v_uv).g;
+  float b = texture2D(u_tex, vec2(v_uv.x - shift, v_uv.y)).b;
+  float a = texture2D(u_tex, v_uv).a;
+  gl_FragColor = vec4(r, g, b, a);
+}`;
+
+const FRAG_GLITCH = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_time;
+uniform float u_intensity;
+varying vec2 v_uv;
+float rand(float n){ return fract(sin(n) * 43758.5453123); }
+void main(){
+  vec2 uv = v_uv;
+  float sliceY = floor(uv.y * 20.0) / 20.0;
+  float noise = rand(sliceY + u_time);
+  if (noise > (1.0 - u_intensity * 0.4)) {
+    uv.x += (noise - 0.5) * u_intensity * 0.3;
+  }
+  gl_FragColor = texture2D(u_tex, uv);
+}`;
+
+const FRAG_SCANLINES = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_resolution_y;
+uniform float u_intensity;
+varying vec2 v_uv;
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  float line = mod(floor(v_uv.y * u_resolution_y), 2.0);
+  float dark = 1.0 - u_intensity * line;
+  gl_FragColor = vec4(c.rgb * dark, c.a);
+}`;
+
+const FRAG_CRT = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform vec2 u_resolution;
+varying vec2 v_uv;
+vec2 curveUV(vec2 uv){
+  uv = uv * 2.0 - 1.0;
+  vec2 offset = abs(uv.yx) / vec2(6.0, 4.0);
+  uv = uv + uv * offset * offset;
+  uv = uv * 0.5 + 0.5;
+  return uv;
+}
+void main(){
+  vec2 uv = curveUV(v_uv);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { gl_FragColor = vec4(0.0,0.0,0.0,1.0); return; }
+  vec4 c = texture2D(u_tex, uv);
+  float line = mod(floor(uv.y * u_resolution.y), 2.0);
+  c.rgb *= (0.85 + 0.15 * line);
+  gl_FragColor = c;
+}`;
+
+const FRAG_HALFTONE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_scale;
+varying vec2 v_uv;
+void main(){
+  vec2 cell = floor(v_uv / u_scale) * u_scale + u_scale * 0.5;
+  vec4 avg = texture2D(u_tex, cell);
+  float luma = dot(avg.rgb, vec3(0.299,0.587,0.114));
+  float dist = length(v_uv - cell);
+  float radius = luma * u_scale * 0.55;
+  float circle = step(dist, radius);
+  gl_FragColor = vec4(vec3(circle), avg.a);
+}`;
+
+const FRAG_PIXELATE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_size;
+uniform vec2 u_resolution;
+varying vec2 v_uv;
+void main(){
+  vec2 pixSize = vec2(u_size) / u_resolution;
+  vec2 uv = floor(v_uv / pixSize) * pixSize + pixSize * 0.5;
+  gl_FragColor = texture2D(u_tex, uv);
+}`;
+
+const FRAG_HDR_TONE_MAP = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_exposure;
+uniform float u_gamma;
+varying vec2 v_uv;
+vec3 aces(vec3 x){
+  float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14;
+  return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0);
+}
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  vec3 hdr = c.rgb * pow(2.0, u_exposure);
+  vec3 tonemapped = aces(hdr);
+  vec3 graded = pow(tonemapped, vec3(1.0 / u_gamma));
+  gl_FragColor = vec4(graded, c.a);
+}`;
+
+const FRAG_NOISE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_amount;
+uniform float u_time;
+varying vec2 v_uv;
+float noise(vec2 uv, float t){ return fract(sin(dot(uv + t, vec2(12.9898,78.233))) * 43758.5453); }
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  float n = noise(v_uv, u_time) * 2.0 - 1.0;
+  gl_FragColor = vec4(clamp(c.rgb + n * u_amount, 0.0, 1.0), c.a);
+}`;
+
+const FRAG_SOLARIZE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_threshold;
+varying vec2 v_uv;
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  vec3 sol = mix(c.rgb, 1.0 - c.rgb, step(u_threshold, c.rgb));
+  gl_FragColor = vec4(sol, c.a);
+}`;
+
+const FRAG_TEAL_ORANGE = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_strength;
+varying vec2 v_uv;
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  float warmth = dot(c.rgb, vec3(1.0, 0.5, 0.0));
+  float coolth = dot(c.rgb, vec3(0.0, 0.5, 1.0));
+  // Lift shadows to teal, push highlights to orange
+  vec3 teal = vec3(0.0, 0.78, 0.72);
+  vec3 orange = vec3(1.0, 0.55, 0.15);
+  float luma = dot(c.rgb, vec3(0.299,0.587,0.114));
+  vec3 grade = mix(mix(c.rgb, teal, 0.2), mix(c.rgb, orange, 0.3), luma);
+  gl_FragColor = vec4(mix(c.rgb, grade, u_strength), c.a);
+}`;
+
+const FRAG_FADED_FILM = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_strength;
+varying vec2 v_uv;
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  // Lift blacks, crush whites, desaturate slightly
+  vec3 faded = mix(c.rgb, c.rgb * 0.85 + 0.08, u_strength);
+  float luma = dot(faded, vec3(0.299,0.587,0.114));
+  faded = mix(faded, vec3(luma), u_strength * 0.25);
+  // Add slight warm cast
+  faded.r *= 1.0 + u_strength * 0.04;
+  faded.b *= 1.0 - u_strength * 0.06;
+  gl_FragColor = vec4(clamp(faded, 0.0, 1.0), c.a);
+}`;
+
+const FRAG_CROSS_PROCESS = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_strength;
+varying vec2 v_uv;
+void main(){
+  vec4 c = texture2D(u_tex, v_uv);
+  // Simulate E-6 film cross-processed in C-41: boosted saturation, shifted colors
+  float r = c.r;
+  float g = c.g;
+  float b = c.b;
+  // Red channel: S-curve boost
+  r = r < 0.5 ? 2.0*r*r : 1.0-2.0*(1.0-r)*(1.0-r);
+  r = r * 1.3 - 0.1;
+  // Green: slight push
+  g = g * 1.1;
+  // Blue: invert lift
+  b = b * 0.8 + 0.1;
+  vec3 graded = clamp(vec3(r, g, b), 0.0, 1.0);
+  gl_FragColor = vec4(mix(c.rgb, graded, u_strength), c.a);
+}`;
+
 // ── Blend mode index map ──────────────────────────────────────────────────────
 const BLEND_MODE_INDEX: Record<string, number> = {
   Normal: 0, Add: 1, Multiply: 2, Screen: 3, Overlay: 4,
@@ -504,6 +709,20 @@ export class CompRenderer {
     this.programs.set("letterbox",      createProgram(gl, FRAG_LETTERBOX));
     this.programs.set("fishEye",        createProgram(gl, FRAG_FISHEYE));
     this.programs.set("xf",             createProgram(gl, FRAG_XF));
+    // ── Creator Node Pack: 13 new effects (total 30) ───────────────────────────
+    this.programs.set("duotone",        createProgram(gl, FRAG_DUOTONE));
+    this.programs.set("rgbShift",       createProgram(gl, FRAG_RGB_SHIFT));
+    this.programs.set("glitch",         createProgram(gl, FRAG_GLITCH));
+    this.programs.set("scanlines",      createProgram(gl, FRAG_SCANLINES));
+    this.programs.set("crt",            createProgram(gl, FRAG_CRT));
+    this.programs.set("halftone",       createProgram(gl, FRAG_HALFTONE));
+    this.programs.set("pixelate",       createProgram(gl, FRAG_PIXELATE));
+    this.programs.set("hdrToneMap",     createProgram(gl, FRAG_HDR_TONE_MAP));
+    this.programs.set("noise",          createProgram(gl, FRAG_NOISE));
+    this.programs.set("solarize",       createProgram(gl, FRAG_SOLARIZE));
+    this.programs.set("tealOrange",     createProgram(gl, FRAG_TEAL_ORANGE));
+    this.programs.set("fadedFilm",      createProgram(gl, FRAG_FADED_FILM));
+    this.programs.set("crossProcess",   createProgram(gl, FRAG_CROSS_PROCESS));
 
     // FBO pool
     this.pool = new FBOPool(gl, this.w, this.h);
@@ -958,6 +1177,133 @@ export class CompRenderer {
       //                     MultiMerge, ChannelMerge, WandMask, PlanarTracker,
       //                     pEmitter, pKill, pBounce, pGravity, pTurbulence, pRender,
       //                     Camera3D, Light, ImagePlane, Shape3D, Renderer3D,
+      // ── Creator Node Pack cases ──────────────────────────────────────────
+      case "Duotone": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("duotone")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        const sc = pColor(node, "shadowColor", [0,0.12,0.2,1]);
+        const hc = pColor(node, "highlightColor", [1,0.85,0.4,1]);
+        gl.uniform3f(gl.getUniformLocation(prog, "u_shadowColor"), sc[0], sc[1], sc[2]);
+        gl.uniform3f(gl.getUniformLocation(prog, "u_highlightColor"), hc[0], hc[1], hc[2]);
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "RGBShift": case "ChromaShift": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("rgbShift")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_amount"), pVal(node, "amount", 8));
+        gl.uniform2f(gl.getUniformLocation(prog, "u_resolution"), this.w, this.h);
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "Glitch": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("glitch")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_time"), performance.now() / 1000);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_intensity"), pVal(node, "intensity", 0.5));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "Scanlines": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("scanlines")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_resolution_y"), this.h);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_intensity"), pVal(node, "intensity", 0.5));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "CRT": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("crt")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform2f(gl.getUniformLocation(prog, "u_resolution"), this.w, this.h);
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "Halftone": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("halftone")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_scale"), pVal(node, "scale", 0.02));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "Pixelate": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("pixelate")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_size"), pVal(node, "size", 16));
+        gl.uniform2f(gl.getUniformLocation(prog, "u_resolution"), this.w, this.h);
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "HDRToneMap": case "ToneMap": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("hdrToneMap")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_exposure"), pVal(node, "exposure", 0));
+        gl.uniform1f(gl.getUniformLocation(prog, "u_gamma"), pVal(node, "gamma", 2.2));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "Noise": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("noise")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_amount"), pVal(node, "amount", 0.1));
+        gl.uniform1f(gl.getUniformLocation(prog, "u_time"), performance.now() / 1000);
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "Solarize": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("solarize")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_threshold"), pVal(node, "threshold", 0.5));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "TealOrange": case "CinematicLook": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("tealOrange")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_strength"), pVal(node, "strength", 0.7));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "FadedFilm": case "FilmFade": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("fadedFilm")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_strength"), pVal(node, "strength", 0.8));
+        drawQuad(gl, prog, this.vbo); break;
+      }
+      case "CrossProcess": case "E6": {
+        const inTex = getInputTex(node.id, "in"); if (!inTex) break;
+        const prog = this.programs.get("crossProcess")!;
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, inTex);
+        gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+        gl.uniform1f(gl.getUniformLocation(prog, "u_strength"), pVal(node, "strength", 1.0));
+        drawQuad(gl, prog, this.vbo); break;
+      }
       //                     ShadowCaster, Switch, Switcher, Saver, TimeSpeed,
       //                     TimeStretcher, Delay, Custom, Expression, LUT,
       //                     Curves, Hue, MediaOut, CornerPin)

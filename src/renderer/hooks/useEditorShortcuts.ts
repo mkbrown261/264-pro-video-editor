@@ -357,6 +357,16 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           event.preventDefault();
           onNudgePlayhead(event.shiftKey ? sequenceFps : 1);
           break;
+        // , / . → industry-standard 1-frame nudge (Premiere / DaVinci / FCP).
+        // Shift +,/. → 5-frame nudge.
+        case ",":
+          event.preventDefault();
+          onNudgePlayhead(event.shiftKey ? -5 : -1);
+          break;
+        case ".":
+          event.preventDefault();
+          onNudgePlayhead(event.shiftKey ? 5 : 1);
+          break;
         case "home":
           event.preventDefault();
           onSeekToStart();

@@ -3,7 +3,7 @@
 // UX Polish: hover-scrub, grid/list toggle, search+filter bar
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { memo, useState, useRef, useCallback, useEffect } from "react";
 import ReactDOM from "react-dom";
 import type { ClipTransitionType, MediaAsset, MediaBin } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
@@ -390,7 +390,7 @@ function sortAssets(assets: MediaAsset[], key: SortKey, dir: SortDir): MediaAsse
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function MediaPool({
+function MediaPoolImpl({
   assets,
   selectedAssetId,
   selectedSegment,
@@ -724,3 +724,7 @@ export function MediaPool({
     </section>
   );
 }
+
+// Memoised export — props are mostly stable refs, so this avoids re-rendering
+// the media pool every time an unrelated piece of editor state changes.
+export const MediaPool = memo(MediaPoolImpl);

@@ -15,7 +15,8 @@ type AITool =
   | "depth_map"
   | "video_denoise"
   | "video_upscale"
-  | "object_remove";
+  | "object_remove"
+  | "voice_isolate";
 
 type VideoGenModel =
   | "seedance_t2v"
@@ -241,7 +242,7 @@ const TOOLS: Array<{
   icon: string;
   desc: string;
   inputType: "image" | "video" | "both";
-  category: "quality" | "motion" | "creative" | "utility";
+  category: "quality" | "motion" | "creative" | "utility" | "audio";
   params?: Array<{ key: string; label: string; type: "range" | "number" | "checkbox"; min?: number; max?: number; step?: number; defaultValue: number | boolean }>;
 }> = [
   {
@@ -337,6 +338,14 @@ const TOOLS: Array<{
       { key: "steps", label: "Quality Steps", type: "range", min: 15, max: 50, step: 5, defaultValue: 30 },
     ],
   },
+  {
+    id: "voice_isolate",
+    label: "Voice Isolation",
+    icon: "🎤",
+    desc: "Remove background noise and isolate vocals using FFmpeg anlmdn AI denoising — runs locally, no cloud upload required",
+    inputType: "video",
+    category: "audio",
+  },
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -344,6 +353,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   motion: "⚡ Motion",
   creative: "🎨 Creative",
   utility: "🛠 Utility",
+  audio: "🎤 Audio",
 };
 
 // AIToolsPanel uses flowstateAPI declared in FlowStatePanel.tsx (same global interface Window merge)
@@ -384,6 +394,17 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
   const [result, setResult] = useState<ToolResult | null>(null);
   const [progress, setProgress] = useState(0);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Scene Detection state ───────────────────────────────────────────────────
+  const [sceneStatus, setSceneStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [sceneError, setSceneError] = useState<string | null>(null);
+  const [detectedScenes, setDetectedScenes] = useState<number[]>([]);
+  const [sceneThreshold, setSceneThreshold] = useState(0.3);
+  // ── Voice Isolation state
+  const [voiceIsolateBusy, setVoiceIsolateBusy] = useState(false);
+  const [voiceIsolateResult, setVoiceIsolateResult] = useState<string | null>(null);
+  const [voiceIsolateError, setVoiceIsolateError] = useState<string | null>(null);
+  const splitClipsAtBeats = useEditorStore((s) => s.splitClipsAtBeats);
 
   // ── Video Generation Studio state ───────────────────────────────────────────
   const [vgModel, setVgModel] = useState<VideoGenModel>("seedance_t2v");
@@ -453,6 +474,82 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
     setParamValues((p) => ({ ...p, [key]: value }));
   };
 
+  // ── Scene Detection helpers ─────────────────────────────────────────────────
+  const getSelectedAssetPath = useCallback((): string | null => {
+    const clip = project.sequence.clips.find((c) => c.id === selectedClipId);
+    const asset = clip
+      ? project.assets.find((a) => a.id === clip.assetId)
+      : project.assets.find((a) => a.id === selectedAssetId);
+    return asset?.sourcePath ?? null;
+  }, [project, selectedClipId, selectedAssetId]);
+
+  const runDetectScenes = useCallback(async () => {
+    const path = getSelectedAssetPath();
+    if (!path) {
+      setSceneStatus("error");
+      setSceneError("Select a clip or media asset first.");
+      return;
+    }
+    if (!window.electronAPI?.detectScenes) {
+      setSceneStatus("error");
+      setSceneError("Scene detection is only available in the desktop app.");
+      return;
+    }
+    setSceneStatus("running");
+    setSceneError(null);
+    setDetectedScenes([]);
+    try {
+      const res = await window.electronAPI.detectScenes({ filePath: path, threshold: sceneThreshold });
+      if (res?.success && Array.isArray(res.scenes)) {
+        setDetectedScenes(res.scenes);
+        setSceneStatus("done");
+      } else {
+        setSceneStatus("error");
+        setSceneError(res?.error ?? "Detection failed");
+      }
+    } catch (e) {
+      setSceneStatus("error");
+      setSceneError(e instanceof Error ? e.message : String(e));
+    }
+  }, [getSelectedAssetPath, sceneThreshold]);
+
+  const handleVoiceIsolate = useCallback(async () => {
+    const inputPath = getSelectedAssetPath();
+    if (!inputPath) { setVoiceIsolateError('Select a clip first'); return; }
+    if (!window.electronAPI?.voiceIsolate) { setVoiceIsolateError('Voice isolation not available'); return; }
+    setVoiceIsolateBusy(true);
+    setVoiceIsolateResult(null);
+    setVoiceIsolateError(null);
+    try {
+      const ext = inputPath.includes('.') ? inputPath.slice(inputPath.lastIndexOf('.')) : '.wav';
+      const outputPath = inputPath.replace(ext, `_isolated${ext}`);
+      const res = await window.electronAPI.voiceIsolate({ inputPath, outputPath });
+      if (res?.success) {
+        setVoiceIsolateResult(res.outputPath ?? outputPath);
+      } else {
+        setVoiceIsolateError(res?.error ?? 'Voice isolation failed');
+      }
+    } catch (e) {
+      setVoiceIsolateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVoiceIsolateBusy(false);
+    }
+  }, [getSelectedAssetPath]);
+
+  const cutAtAllScenes = useCallback(() => {
+    if (!detectedScenes.length) return;
+    const fps = project.sequence.settings.fps || 30;
+    // Convert seconds → absolute timeline frames relative to the selected clip's start
+    const clip = project.sequence.clips.find((c) => c.id === selectedClipId);
+    const baseFrame = clip ? clip.startFrame : 0;
+    const trimStartFrames = clip ? (clip.trimStartFrames ?? 0) : 0;
+    const beatFrames = detectedScenes
+      .map((s) => baseFrame + Math.round(s * fps) - trimStartFrames)
+      .filter((f) => f > baseFrame);
+    if (!beatFrames.length) return;
+    splitClipsAtBeats(beatFrames, clip ? [clip.id] : undefined);
+  }, [detectedScenes, project, selectedClipId, splitClipsAtBeats]);
+
   const runTool = useCallback(async () => {
     if (!inputUrl.trim()) return;
     setStatus("running");
@@ -461,6 +558,36 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
 
     // Record in Clawbot memory so it knows which enhancement tools this user runs
     notifyToolUsed(selectedTool);
+
+    // ── Voice Isolation runs locally via FFmpeg anlmdn (no cloud upload) ───
+    if (selectedTool === "voice_isolate") {
+      if (!window.electronAPI?.voiceIsolate) {
+        setStatus("error");
+        setResult({ error: "Voice Isolation requires the desktop app." });
+        return;
+      }
+      // Extract local file path from the media:// URL or use raw path
+      let filePath = inputUrl;
+      try {
+        const m = inputUrl.match(/[?&]path=([^&]+)/);
+        if (m && m[1]) filePath = decodeURIComponent(m[1]);
+      } catch { /* fall through with raw url */ }
+      try {
+        const res = await window.electronAPI.voiceIsolate({ inputPath: filePath });
+        if (res?.success && res.outputPath) {
+          const outUrl = `media://localhost?path=${encodeURIComponent(res.outputPath)}`;
+          setStatus("complete");
+          setResult({ outputUrl: outUrl, message: `Saved to ${res.outputPath}` });
+        } else {
+          setStatus("error");
+          setResult({ error: res?.error || "Voice isolation failed." });
+        }
+      } catch (e: any) {
+        setStatus("error");
+        setResult({ error: e?.message ?? String(e) });
+      }
+      return;
+    }
 
     if (!window.flowstateAPI?.runAITool) {
       setStatus("error");
@@ -1304,6 +1431,121 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
               <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.6 }}>
                 {tool.desc}
               </div>
+            </div>
+
+            {/* ── Scene Detection (FFmpeg-powered) ──────────────────────────── */}
+            <div style={{
+              background: "rgba(59,130,246,0.06)",
+              border: "1px solid rgba(59,130,246,0.25)",
+              borderRadius: 10,
+              padding: "12px 14px",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#93c5fd" }}>
+                  🎬 Detect Scenes
+                </div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
+                  threshold
+                  <input
+                    type="number"
+                    min={0.05}
+                    max={1}
+                    step={0.05}
+                    value={sceneThreshold}
+                    onChange={(e) => setSceneThreshold(Math.max(0.05, Math.min(1, parseFloat(e.target.value) || 0.3)))}
+                    style={{
+                      marginLeft: 6, width: 50, padding: "2px 4px",
+                      background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.15)",
+                      borderRadius: 4, color: "#e8e8e8", fontSize: 10,
+                    }}
+                  />
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", lineHeight: 1.5, marginBottom: 10 }}>
+                Auto-detect scene cuts in the selected clip using FFmpeg. Then split the timeline at every detected scene.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={runDetectScenes}
+                  disabled={sceneStatus === "running"}
+                  style={{
+                    padding: "7px 14px", borderRadius: 7, border: "none",
+                    background: sceneStatus === "running"
+                      ? "rgba(255,255,255,0.08)"
+                      : "linear-gradient(135deg, #3b82f6, #06b6d4)",
+                    color: sceneStatus === "running" ? "rgba(255,255,255,0.5)" : "#fff",
+                    fontSize: 12, fontWeight: 700, cursor: sceneStatus === "running" ? "default" : "pointer",
+                  }}
+                >
+                  {sceneStatus === "running" ? "Detecting…" : "🎬 Detect Scenes"}
+                </button>
+                <button
+                  onClick={cutAtAllScenes}
+                  disabled={!detectedScenes.length}
+                  style={{
+                    padding: "7px 14px", borderRadius: 7,
+                    border: "1px solid rgba(16,185,129,0.4)",
+                    background: detectedScenes.length ? "rgba(16,185,129,0.15)" : "rgba(255,255,255,0.04)",
+                    color: detectedScenes.length ? "#34d399" : "rgba(255,255,255,0.3)",
+                    fontSize: 12, fontWeight: 700,
+                    cursor: detectedScenes.length ? "pointer" : "default",
+                  }}
+                >
+                  ✂︎ Cut at all scenes ({detectedScenes.length})
+                </button>
+              </div>
+              {sceneStatus === "error" && sceneError && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "#f87171" }}>{sceneError}</div>
+              )}
+              {detectedScenes.length > 0 && (
+                <div style={{
+                  marginTop: 10,
+                  maxHeight: 110, overflowY: "auto",
+                  background: "rgba(0,0,0,0.25)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 7, padding: "6px 8px",
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  fontSize: 10.5, color: "rgba(255,255,255,0.75)",
+                  lineHeight: 1.5,
+                }}>
+                  {detectedScenes.map((s, i) => (
+                    <div key={i}>#{i + 1} · {s.toFixed(3)}s</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Voice Isolation ────────────────────────────────────────── */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '14px 14px 12px', border: '1px solid rgba(255,255,255,0.07)', marginBottom: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.8)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                🎤 Voice Isolation
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontWeight: 400 }}>FFmpeg AI denoiser</span>
+              </div>
+              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', margin: '0 0 10px' }}>
+                Remove background noise from the selected audio/video clip and export a clean isolated vocal track.
+              </p>
+              <button
+                type="button"
+                onClick={handleVoiceIsolate}
+                disabled={voiceIsolateBusy}
+                style={{
+                  width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: voiceIsolateBusy ? 'wait' : 'pointer',
+                  background: voiceIsolateBusy ? 'rgba(168,85,247,0.1)' : 'rgba(168,85,247,0.18)',
+                  border: '1px solid rgba(168,85,247,0.4)', color: '#c084fc',
+                }}
+              >
+                {voiceIsolateBusy ? '⏳ Isolating...' : '🎤 Isolate Voice'}
+              </button>
+              {voiceIsolateResult && (
+                <div style={{ marginTop: 8, fontSize: 11, color: '#34d399', background: 'rgba(52,211,153,0.08)', borderRadius: 6, padding: '5px 8px' }}>
+                  ✓ Saved: {voiceIsolateResult}
+                </div>
+              )}
+              {voiceIsolateError && (
+                <div style={{ marginTop: 8, fontSize: 11, color: '#f87171', background: 'rgba(248,113,113,0.08)', borderRadius: 6, padding: '5px 8px' }}>
+                  ⚠ {voiceIsolateError}
+                </div>
+              )}
             </div>
 
             {/* Media Input — auto-fill from timeline selection or browse local files */}

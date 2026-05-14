@@ -63,6 +63,11 @@ const editorApi = {
     ipcRenderer.invoke("project:open"),
   saveProjectAs: (json: string, filePath: string): Promise<string> =>
     ipcRenderer.invoke("project:save-as", json, filePath),
+  // ── Auto-save / crash recovery ────────────────────────────────────────────
+  autosaveProject: (json: string, projectId: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke("project:autosave", json, projectId),
+  listAutosaves: (): Promise<{ success: boolean; saves: Array<{ path: string; name: string; mtime: number }>; error?: string }> =>
+    ipcRenderer.invoke("project:autosave-list"),
   // ── App lifecycle ─────────────────────────────────────────────────────────
   confirmClose: (): Promise<void> =>
     ipcRenderer.invoke("app:confirm-close"),
@@ -112,6 +117,12 @@ const electronAPI = {
     ipcRenderer.invoke("publish:upload-tiktok", params),
   transcribeAudio: (args: { filePath: string; language?: string }) =>
     ipcRenderer.invoke('ai:transcribe', args),
+  // ── Voice Isolation — FFmpeg anlmdn denoiser, no model file required ─────
+  voiceIsolate: (args: { inputPath: string; outputPath?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:voice-isolate', args),
+  // ── Scene Detection (FFmpeg) ──────────────────────────────────────────────
+  detectScenes: (args: { filePath: string; threshold?: number }): Promise<{ success: boolean; scenes?: number[]; error?: string }> =>
+    ipcRenderer.invoke('ai:detect-scenes', args),
   exportLut: (args: { grade: Record<string, number>; name: string }) => ipcRenderer.invoke('lut:export', args),
   // ── Render Cache ─────────────────────────────────────────────────────────
   renderCacheSegment: (args: {

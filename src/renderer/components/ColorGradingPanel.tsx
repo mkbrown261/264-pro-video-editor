@@ -19,6 +19,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as RMouseEvent,
 } from "react";
 import type { ColorGrade, ColorStill, ColorSliceState, CurvePoint, RGBValue, VectorAdjustment } from "../../shared/models";
@@ -56,6 +57,7 @@ interface ColorNode {
   type: "corrector" | "effect" | "serial";
   enabled: boolean;
   active: boolean;
+  grade: ColorGrade;
 }
 
 // ─── One-Click Color Looks (UX 1) ─────────────────────────────────────────────
@@ -842,6 +844,18 @@ interface NodeGraphProps {
   onToggleNode: (id: string) => void;
 }
 
+function getNodeThumbnailStyle(grade: ColorGrade): CSSProperties {
+  const warmth = grade.temperature / 100; // -1 to 1
+  const r = Math.round(Math.min(255, Math.max(0, 128 + warmth * 60 + grade.exposure * 30)));
+  const g = Math.round(Math.min(255, Math.max(0, 128 + grade.exposure * 25)));
+  const b = Math.round(Math.min(255, Math.max(0, 128 - warmth * 60 + grade.exposure * 20)));
+  const sat = grade.saturation;
+  return {
+    background: `radial-gradient(circle, rgb(${r},${g},${b}) 0%, rgba(${r},${g},${b},0.4) 100%)`,
+    filter: `saturate(${sat})`,
+  };
+}
+
 function NodeGraph({ nodes, onSelectNode, onAddNode, onDeleteNode, onToggleNode }: NodeGraphProps) {
   return (
     <div className="ng-root">
@@ -865,7 +879,10 @@ function NodeGraph({ nodes, onSelectNode, onAddNode, onDeleteNode, onToggleNode 
               onClick={() => onSelectNode(node.id)}
             >
               <div className="ng-node-thumb">
-                <div className="ng-node-thumb-inner" style={{ opacity: node.enabled ? 1 : 0.2 }} />
+                <div
+                  className="ng-node-thumb-inner"
+                  style={{ opacity: node.enabled ? 1 : 0.2, ...getNodeThumbnailStyle(node.grade) }}
+                />
               </div>
               <div className="ng-node-label">{node.label}</div>
               <div className="ng-node-actions">
@@ -925,19 +942,61 @@ export function ColorGradingPanel({
   const [renameValue, setRenameValue] = useState("");
 
   const [nodes, setNodes] = useState<ColorNode[]>([
-    { id: "node-1", label: "Corrector 1", type: "corrector", enabled: true, active: true },
+    { id: "node-1", label: "Corrector 1", type: "corrector", enabled: true, active: true, grade: createDefaultColorGrade() },
   ]);
 
+  // ── Active node + derived grade ─────────────────────────────────────────────
+  const activeNode = nodes.find((n) => n.active) ?? nodes[0];
+  const activeNodeGrade = activeNode?.grade ?? createDefaultColorGrade();
+
   // ── Auto-enable helper ──────────────────────────────────────────────────────
-  // Always call onEnableGrade first if no grade exists, then immediately
-  // call onUpdateGrade. Both calls hit Zustand synchronously so setColorGrade
-  // will safely merge on top of the just-created default.
+  // Updates the ACTIVE node's grade. The accumulation effect below merges all
+  // enabled node grades and pushes the final merged grade to the store.
   const handleUpdate = useCallback((partial: Partial<ColorGrade>) => {
     if (!colorGrade) {
       onEnableGrade();
     }
-    onUpdateGrade(partial);
-  }, [colorGrade, onEnableGrade, onUpdateGrade]);
+    setNodes((prev) => prev.map((n) =>
+      n.active ? { ...n, grade: { ...n.grade, ...partial } } : n
+    ));
+  }, [colorGrade, onEnableGrade]);
+
+  // ── Grade accumulation: merge all enabled node grades and push to store ───
+  useEffect(() => {
+    const enabledNodes = nodes.filter((n) => n.enabled);
+    if (enabledNodes.length === 0) {
+      onUpdateGrade(createDefaultColorGrade());
+      return;
+    }
+    let merged = createDefaultColorGrade();
+    for (const node of enabledNodes) {
+      const g = node.grade;
+      merged = {
+        ...merged,
+        exposure:     merged.exposure     + g.exposure,
+        contrast:     merged.contrast     + g.contrast,
+        saturation:   merged.saturation   * g.saturation,
+        temperature:  merged.temperature  + g.temperature,
+        tint:         merged.tint         + g.tint,
+        lift:    { r: merged.lift.r   + g.lift.r,   g: merged.lift.g   + g.lift.g,   b: merged.lift.b   + g.lift.b   },
+        gamma:   { r: merged.gamma.r  + g.gamma.r,  g: merged.gamma.g  + g.gamma.g,  b: merged.gamma.b  + g.gamma.b  },
+        gain:    { r: merged.gain.r   + g.gain.r,   g: merged.gain.g   + g.gain.g,   b: merged.gain.b   + g.gain.b   },
+        offset:  { r: merged.offset.r + g.offset.r, g: merged.offset.g + g.offset.g, b: merged.offset.b + g.offset.b },
+        curves:       g.curves,
+        lutPath:      g.lutPath,
+        lutIntensity: g.lutIntensity,
+        lutName:      g.lutName,
+        colorSlice:   g.colorSlice ?? merged.colorSlice,
+        maskIds:      [...merged.maskIds, ...g.maskIds],
+        keyframes:    merged.keyframes,
+        bypass:       merged.bypass,
+      };
+    }
+    if (!merged.bypass) {
+      onEnableGrade();
+      onUpdateGrade(merged);
+    }
+  }, [nodes, onUpdateGrade, onEnableGrade]);
 
   // ── LUT export ──────────────────────────────────────────────────────────────
   const handleExportLut = async () => {
@@ -950,15 +1009,17 @@ export function ColorGradingPanel({
     else toast.error(result?.error ?? 'Export failed');
   };
 
-  // ── Working grade — always derived, never stale ──
-  const grade = colorGrade ?? createDefaultColorGrade();
+  // ── Working grade — always derived from the active node ──
+  // The UI controls bind to the active node's grade; the accumulation effect
+  // above pushes the merged grade of all enabled nodes to the store.
+  const grade = activeNodeGrade;
 
   // ── Node helpers ──
   function addNode() {
     const id = createId();
     setNodes((prev) => [
       ...prev.map((n) => ({ ...n, active: false })),
-      { id, label: `Corrector ${prev.length + 1}`, type: "corrector" as const, enabled: true, active: true },
+      { id, label: `Corrector ${prev.length + 1}`, type: "corrector" as const, enabled: true, active: true, grade: createDefaultColorGrade() },
     ]);
   }
   function deleteNode(id: string) {

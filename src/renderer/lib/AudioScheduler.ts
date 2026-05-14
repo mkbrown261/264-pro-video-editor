@@ -14,7 +14,7 @@
  *   scheduler.dispose();
  */
 
-import type { MediaAsset } from "../../shared/models";
+import type { EQBand, MediaAsset } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 
 // ── AudioScheduler (one-shot, for FlowState panel) ───────────────────────────
@@ -198,6 +198,10 @@ export class AudioEngine {
 
   /** Per-track analyser nodes for real-time VU metering, keyed by track ID. */
   private trackAnalysers = new Map<string, AnalyserNode>();
+
+  /** Per-track EQ filter chain, keyed by track ID. Inserted between trackGain
+   *  and trackAnalyser. Empty array = no EQ (trackGain connects directly). */
+  private trackEQChains = new Map<string, BiquadFilterNode[]>();
 
   /** Master analyser for the master channel VU meter. */
   private masterAnalyser: AnalyserNode | null = null;
@@ -398,6 +402,62 @@ export class AudioEngine {
     if (this.masterGain) this.masterGain.gain.value = Math.max(0, Math.min(2, vol));
   }
 
+  // ── EQ ────────────────────────────────────────────────────────────────────
+  /**
+   * Apply a multi-band EQ to the given track. Creates/updates a BiquadFilterNode
+   * chain inserted between the track's gain node and its analyser. Calling with
+   * an empty array (or all bands at 0 dB / disabled) tears the chain down so the
+   * signal path bypasses the EQ entirely.
+   */
+  setTrackEQ(trackId: string, bands: EQBand[]): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const trackGain = this.trackGains.get(trackId);
+    const analyser = this.trackAnalysers.get(trackId);
+    if (!trackGain || !analyser) return;
+
+    // Reuse existing filters where possible; create new ones as needed
+    const existing = this.trackEQChains.get(trackId) ?? [];
+    const activeBands = bands.filter((b) => b.enabled !== false);
+
+    // Disconnect the current routing so we can rebuild it
+    try { trackGain.disconnect(); } catch { /* ignore */ }
+    for (const f of existing) {
+      try { f.disconnect(); } catch { /* ignore */ }
+    }
+
+    // If no active EQ bands, route trackGain → analyser directly and drop the chain
+    if (activeBands.length === 0) {
+      this.trackEQChains.delete(trackId);
+      trackGain.connect(analyser);
+      return;
+    }
+
+    // Build / update filter chain
+    const chain: BiquadFilterNode[] = [];
+    for (let i = 0; i < activeBands.length; i++) {
+      const band = activeBands[i];
+      let filter = existing[i];
+      if (!filter) {
+        filter = ctx.createBiquadFilter();
+      }
+      filter.type = band.type;
+      filter.frequency.value = Math.max(20, Math.min(20000, band.frequency));
+      filter.gain.value = Math.max(-30, Math.min(30, band.gain));
+      filter.Q.value = Math.max(0.0001, Math.min(20, band.q));
+      chain.push(filter);
+    }
+
+    // Wire: trackGain → filter[0] → filter[1] → … → analyser
+    trackGain.connect(chain[0]);
+    for (let i = 0; i < chain.length - 1; i++) {
+      chain[i].connect(chain[i + 1]);
+    }
+    chain[chain.length - 1].connect(analyser);
+
+    this.trackEQChains.set(trackId, chain);
+  }
+
   isBufferCached(url: string): boolean {
     return this.bufferCache.has(url);
   }
@@ -414,6 +474,7 @@ export class AudioEngine {
     this.masterAnalyser = null;
     this.trackGains.clear();
     this.trackAnalysers.clear();
+    this.trackEQChains.clear();
     this.bufferCache.clear();
     this.activeSources.clear();
     this.pendingFetches.clear();

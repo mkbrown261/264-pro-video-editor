@@ -1758,6 +1758,21 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectPath]);
 
+  // ── Silent crash-recovery autosave (every 60s, no dialog) ─────────────────
+  // Writes a JSON snapshot to userData/autosave/{projectId}.json so we can
+  // restore on next launch if the app crashed before the user saved.
+  useEffect(() => {
+    const id = setInterval(() => {
+      try {
+        if (project.id && project.sequence.clips.length > 0) {
+          const json = serializeProject(project, createdAtRef.current);
+          window.editorApi?.autosaveProject?.(json, project.id).catch(() => {});
+        }
+      } catch { /* silent */ }
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [project]);
+
   // ── Updater + bridge ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!window.editorApi) { setBridgeReady(false); return; }

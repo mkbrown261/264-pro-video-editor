@@ -8579,6 +8579,31 @@ kbd {
 .mixer-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
 .mixer-mute.active { background: rgba(229,57,53,0.25); border-color: rgba(229,57,53,0.5); color: #ef5350; }
 .mixer-solo.active { background: rgba(245,197,66,0.25); border-color: rgba(245,197,66,0.5); color: #f7c948; }
+.mixer-eq-btn.active { background: rgba(59,138,247,0.2); border-color: rgba(59,138,247,0.5); color: #3b8af7; }
+/* Per-track EQ strip */
+.mixer-eq-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 4px 4px 2px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 4px;
+  margin-top: 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.mixer-eq-band { display:flex; flex-direction:column; align-items:center; gap:2px; flex:1; }
+.mixer-eq-label { font-size: 8px; color: var(--text-s); }
+.mixer-eq-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  height: 48px;
+  width: 16px;
+  cursor: pointer;
+  accent-color: #3b8af7;
+  padding: 0;
+}
+.mixer-eq-val { font-size: 8px; color: #3b8af7; min-width: 20px; text-align: center; }
 .mixer-master-sep {
   width: 1px;
   background: rgba(255,255,255,0.1);

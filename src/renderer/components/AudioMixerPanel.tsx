@@ -11,8 +11,15 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { TimelineTrack } from "../../shared/models";
+import type { TimelineTrack, EQBand, CompressorSettings } from "../../shared/models";
 import type { AudioEngine } from "../lib/AudioScheduler";
+
+// ── Default EQ bands (3-band: low shelf / peak mid / high shelf) ───────────────
+const defaultEQBands: EQBand[] = [
+  { id: "low",  type: "lowshelf",  frequency: 80,    gain: 0, q: 0.7, enabled: true },
+  { id: "mid",  type: "peak",      frequency: 1000,  gain: 0, q: 1.0, enabled: true },
+  { id: "high", type: "highshelf", frequency: 10000, gain: 0, q: 0.7, enabled: true },
+];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -64,15 +71,20 @@ interface ChannelStripProps {
   onMute: () => void;
   onSolo: () => void;
   onVolumeChange: (v: number) => void;
+  onUpdateEQ?: (bands: EQBand[]) => void;
+  onUpdateCompressor?: (settings: CompressorSettings) => void;
   /** Live RMS level 0–1 from AnalyserNode, or null when not playing */
   liveLevel: number | null;
 }
 
-function ChannelStrip({ track, onMute, onSolo, onVolumeChange, liveLevel }: ChannelStripProps) {
+function ChannelStrip({ track, onMute, onSolo, onVolumeChange, onUpdateEQ, liveLevel }: ChannelStripProps) {
   const isAudio = track.kind === "audio";
   const vol = track.volume ?? 1;
   // Show live level when playing, fall back to gain-based display otherwise
   const displayLevel = liveLevel !== null ? liveLevel : (track.muted ? 0 : vol * 0.5);
+
+  // Collapsible EQ section ───────────────────────────────────────────────────
+  const [eqOpen, setEqOpen] = useState(false);
 
   return (
     <div className={`mixer-channel${track.muted ? " mixer-channel--muted" : ""}${track.solo ? " mixer-channel--solo" : ""}`}>
@@ -105,7 +117,7 @@ function ChannelStrip({ track, onMute, onSolo, onVolumeChange, liveLevel }: Chan
       {/* Volume readout */}
       <div className="mixer-vol-readout">{Math.round(vol * 100)}%</div>
 
-      {/* Mute / Solo */}
+      {/* Mute / Solo / EQ */}
       <div className="mixer-channel-btns">
         <button
           className={`mixer-btn mixer-mute${track.muted ? " active" : ""}`}
@@ -123,7 +135,50 @@ function ChannelStrip({ track, onMute, onSolo, onVolumeChange, liveLevel }: Chan
         >
           S
         </button>
+        {isAudio && (
+          <button
+            className={`mixer-btn mixer-eq-btn${eqOpen ? " active" : ""}`}
+            onClick={() => setEqOpen((v) => !v)}
+            title="EQ"
+            type="button"
+          >
+            EQ
+          </button>
+        )}
       </div>
+
+      {/* Collapsible 3-band EQ strip ─────────────────────────────────────── */}
+      {eqOpen && (
+        <div className="mixer-eq-strip">
+          {defaultEQBands.map((band, i) => {
+            const currentBands = track.eq ?? defaultEQBands;
+            const live = currentBands[i] ?? band;
+            const gain = live?.gain ?? 0;
+            const freqLabel = band.frequency >= 1000 ? `${band.frequency / 1000}k` : `${band.frequency}`;
+            return (
+              <div key={band.id} className="mixer-eq-band">
+                <span className="mixer-eq-label">{freqLabel}</span>
+                <input
+                  type="range"
+                  min={-18}
+                  max={18}
+                  step={0.5}
+                  value={gain}
+                  onChange={(e) => {
+                    const bands: EQBand[] = (track.eq ?? defaultEQBands).map((b) => ({ ...b }));
+                    if (!bands[i]) bands[i] = { ...defaultEQBands[i] };
+                    bands[i] = { ...bands[i], gain: Number(e.target.value) };
+                    onUpdateEQ?.(bands);
+                  }}
+                  className="mixer-eq-slider"
+                  title={`${freqLabel}Hz: ${gain}dB`}
+                />
+                <span className="mixer-eq-val">{gain > 0 ? "+" : ""}{gain}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -167,6 +222,17 @@ export function AudioMixerPanel({
     audioEngineRef.current?.setTrackVolume(trackId, vol);
   }, [onUpdateTrack, audioEngineRef]);
 
+  const handleTrackEQ = useCallback((trackId: string, bands: EQBand[]) => {
+    onUpdateTrack(trackId, { eq: bands });
+    // Apply immediately to the live audio engine
+    audioEngineRef.current?.setTrackEQ?.(trackId, bands);
+  }, [onUpdateTrack, audioEngineRef]);
+
+  const handleTrackCompressor = useCallback((trackId: string, settings: CompressorSettings) => {
+    onUpdateTrack(trackId, { compressor: settings });
+    // TODO: audioEngineRef.current?.setTrackCompressor?.(trackId, settings) — implement in AudioScheduler
+  }, [onUpdateTrack]);
+
   const handleMasterVolume = useCallback((vol: number) => {
     onUpdateMasterVolume(vol);
     audioEngineRef.current?.setMasterVolume(vol);
@@ -207,6 +273,8 @@ export function AudioMixerPanel({
               onMute={() => handleMute(track)}
               onSolo={() => handleSolo(track)}
               onVolumeChange={(v) => handleTrackVolume(track.id, v)}
+              onUpdateEQ={(bands) => handleTrackEQ(track.id, bands)}
+              onUpdateCompressor={(settings) => handleTrackCompressor(track.id, settings)}
               liveLevel={trackLevels[track.id] ?? null}
             />
           ))}

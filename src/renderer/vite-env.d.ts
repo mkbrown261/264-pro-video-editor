@@ -60,6 +60,10 @@ declare global {
       uploadTikTok?: (args: { videoPath: string; title: string; privacyLevel?: string }) => Promise<{ success: boolean; publishId?: string; error?: string }>;
       /** Whisper AI transcription via Groq */
       transcribeAudio?: (args: { filePath: string; language?: string }) => Promise<{ success: boolean; segments?: Array<{ startMs: number; endMs: number; text: string }>; error?: string }>;
+      /** Voice Isolation — FFmpeg anlmdn (non-local means denoising) */
+      voiceIsolate?: (args: { inputPath: string; outputPath?: string }) => Promise<{ success: boolean; outputPath?: string; error?: string }>;
+      /** Scene detection via FFmpeg select filter */
+      detectScenes?: (args: { filePath: string; threshold?: number }) => Promise<{ success: boolean; scenes?: number[]; error?: string }>;
       exportLut?: (args: { grade: Record<string, number>; name: string }) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
       // ── Render Cache ────────────────────────────────────────────────────
       renderCacheSegment?: (args: {
@@ -125,6 +129,10 @@ declare global {
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;
       saveProjectAs: (json: string, filePath: string) => Promise<string>;
+      /** Auto-save current project to userData/autosave (silent, no dialog) */
+      autosaveProject?: (json: string, projectId: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+      /** List autosave files (most-recent first) */
+      listAutosaves?: () => Promise<{ success: boolean; saves: Array<{ path: string; name: string; mtime: number }>; error?: string }>;
       // App lifecycle
       confirmClose: () => Promise<void>;
       installUpdate: () => Promise<void>;

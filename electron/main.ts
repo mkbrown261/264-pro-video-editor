@@ -1617,6 +1617,71 @@ ipcMain.handle('ai:transcribe', async (_ev, args: { filePath: string; language?:
   }
 });
 
+// ── Voice Isolation — FFmpeg anlmdn (non-local means denoising, no model file) ─
+ipcMain.handle('ai:voice-isolate', async (_ev, args: { inputPath: string; outputPath?: string }) => {
+  try {
+    const { inputPath } = args;
+    if (!inputPath || typeof inputPath !== 'string') {
+      return { success: false, error: 'Invalid input path' };
+    }
+    // Validate the input is a local file path (not a URL)
+    if (!inputPath.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(inputPath)) {
+      return { success: false, error: 'Invalid input path — must be an absolute local file path' };
+    }
+
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    if (!fsM.existsSync(inputPath)) {
+      return { success: false, error: `File not found: ${inputPath}` };
+    }
+
+    // Default output: <input>-voice-isolated.<ext>
+    const ext = pathM.extname(inputPath) || '.wav';
+    const base = pathM.basename(inputPath, ext);
+    const dir = pathM.dirname(inputPath);
+    const outputPath = args.outputPath && args.outputPath.trim()
+      ? args.outputPath
+      : pathM.join(dir, `${base}-voice-isolated${ext}`);
+
+    // Resolve ffmpeg binary — same logic as elsewhere in this file
+    let ffmpegBin: string;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ffmpegStaticMod: any = await import('ffmpeg-static');
+      const resolved: string | null =
+        process.env.FFMPEG_PATH ||
+        (typeof ffmpegStaticMod === 'string' ? ffmpegStaticMod : null) ||
+        (typeof ffmpegStaticMod?.default === 'string' ? ffmpegStaticMod.default : null);
+      ffmpegBin = resolved ?? 'ffmpeg';
+    } catch {
+      ffmpegBin = 'ffmpeg';
+    }
+
+    const { spawn } = await import('child_process');
+    // anlmdn = built-in non-local means denoising — no external model required.
+    // s=7 (strength), p=0.002 (patch radius), r=0.002 (research radius), m=15 (smoothing).
+    const ffArgs = [
+      '-y',
+      '-i', inputPath,
+      '-af', 'anlmdn=s=7:p=0.002:r=0.002:m=15',
+      outputPath,
+    ];
+
+    return new Promise<{ success: boolean; outputPath?: string; error?: string }>((resolve) => {
+      const proc = spawn(ffmpegBin, ffArgs);
+      let stderr = '';
+      proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('close', (code: number) => {
+        if (code === 0) resolve({ success: true, outputPath });
+        else resolve({ success: false, error: stderr.slice(-400) || `ffmpeg exited with code ${code}` });
+      });
+      proc.on('error', (e: Error) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 ipcMain.handle('lut:export', async (_ev, args: { grade: Record<string, number>; name: string }) => {
   try {
     const { dialog } = await import('electron');
@@ -2221,6 +2286,107 @@ ipcMain.handle('proxy:delete', async (_ev, proxyPath: string) => {
     return { success: true };
   } catch (e) {
     return { success: false };
+  }
+});
+
+// ── Scene Detection (FFmpeg select filter) ───────────────────────────────────
+ipcMain.handle("ai:detect-scenes", async (_ev, args: { filePath: string; threshold?: number }) => {
+  try {
+    const { filePath, threshold = 0.3 } = args || ({} as { filePath: string; threshold?: number });
+    if (!filePath || typeof filePath !== "string") {
+      return { success: false, error: "Invalid path" };
+    }
+    const { spawn } = await import("child_process");
+    const ffmpeg = getEnvironmentStatus().ffmpegPath;
+    if (!ffmpeg) {
+      return { success: false, error: "FFmpeg not available" };
+    }
+    return await new Promise((resolve) => {
+      let output = "";
+      const proc = spawn(ffmpeg, [
+        "-i", filePath,
+        "-vf", `select=gt(scene\\,${threshold}),showinfo`,
+        "-vsync", "vfr",
+        "-f", "null", "-"
+      ]);
+      proc.stderr.on("data", (d: Buffer) => { output += d.toString(); });
+      proc.on("close", () => {
+        const scenes: number[] = [];
+        const re = /pts_time:([\d.]+)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(output)) !== null) {
+          scenes.push(parseFloat(m[1]));
+        }
+        resolve({ success: true, scenes });
+      });
+      proc.on("error", (e: Error) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// ── Auto-Save / Crash Recovery ───────────────────────────────────────────────
+ipcMain.handle("project:autosave", async (_event, json: string, projectId: string) => {
+  try {
+    const fs = await import("fs/promises");
+    const autosaveDir = join(app.getPath("userData"), "autosave");
+    await fs.mkdir(autosaveDir, { recursive: true });
+    const safeId = (projectId || "untitled").replace(/[^a-zA-Z0-9-_]/g, "_");
+    const filePath = join(autosaveDir, `${safeId}.json`);
+    await fs.writeFile(filePath, json, "utf8");
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("project:autosave-list", async () => {
+  try {
+    const fs = await import("fs/promises");
+    const autosaveDir = join(app.getPath("userData"), "autosave");
+    try {
+      const files = await fs.readdir(autosaveDir);
+      const saves = await Promise.all(
+        files
+          .filter((f) => f.endsWith(".json"))
+          .map(async (f) => {
+            const p = join(autosaveDir, f);
+            const st = await fs.stat(p);
+            return { path: p, name: f, mtime: st.mtime.getTime() };
+          })
+      );
+      return { success: true, saves: saves.sort((a, b) => b.mtime - a.mtime) };
+    } catch {
+      return { success: true, saves: [] };
+    }
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e), saves: [] };
+  }
+});
+
+// ── AI: Voice Isolation ─────────────────────────────────────────────────────────
+ipcMain.handle('ai:voice-isolate', async (_ev, args: { inputPath: string; outputPath: string }) => {
+  try {
+    const { inputPath, outputPath } = args || {} as { inputPath: string; outputPath: string };
+    if (!inputPath || !outputPath) return { success: false, error: 'Missing paths' };
+    if (!inputPath.startsWith('/') && !(/^[A-Za-z]:[/\\]/).test(inputPath)) {
+      return { success: false, error: 'Invalid input path' };
+    }
+    const { spawn } = await import('child_process');
+    const ffmpeg = getEnvironmentStatus().ffmpegPath;
+    if (!ffmpeg) return { success: false, error: 'FFmpeg not available' };
+    return await new Promise((resolve) => {
+      const proc = spawn(ffmpeg, [
+        '-i', inputPath,
+        '-af', 'anlmdn=s=7:p=0.002:r=0.002:m=15',
+        '-y', outputPath,
+      ]);
+      proc.on('close', (code) => resolve({ success: code === 0, outputPath }));
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
 
