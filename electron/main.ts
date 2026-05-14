@@ -2943,6 +2943,395 @@ ipcMain.handle('project:health-check', async (_ev, args: { project: unknown }) =
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ── WAVE 2 + 3: ADVANCED AI FEATURES ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── W2-1: Subtitle Burn-In (captions baked into video) ───────────────────────
+ipcMain.handle('ai:burn-subtitles', async (_ev, args: {
+  inputPath: string;
+  srtContent: string;
+  outputPath?: string;
+  style?: 'minimal' | 'bold' | 'outline';
+}) => {
+  try {
+    const { inputPath, srtContent, style = 'bold' } = args;
+    if (!inputPath || !srtContent) return { success: false, error: 'Missing inputPath or srtContent' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const os = await import('os');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const ext = pathM.extname(inputPath) || '.mp4';
+    const base = pathM.basename(inputPath, ext);
+    const dir = pathM.dirname(inputPath);
+    const outputPath = args.outputPath ?? pathM.join(dir, `${base}-captioned${ext}`);
+    const srtPath = pathM.join(os.tmpdir(), `subs_${Date.now()}.srt`);
+    fsM.writeFileSync(srtPath, srtContent, 'utf8');
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    // Style variants
+    const fontFile = process.platform === 'darwin' ? '/System/Library/Fonts/Helvetica.ttc' : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+    const styleStr = style === 'bold'
+      ? `FontSize=22,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1`
+      : style === 'outline'
+      ? `FontSize=20,Bold=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Shadow=0`
+      : `FontSize=18,Bold=0,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,Outline=1,Shadow=0`;
+    const srtEscaped = srtPath.replace(/'/g, "'\\''").replace(/:/g, '\\:');
+    const proc = spawn(ffmpegBin, [
+      '-i', inputPath,
+      '-vf', `subtitles=${srtEscaped}:force_style='${styleStr}'`,
+      '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+      '-c:a', 'copy', '-y', outputPath,
+    ]);
+    const stderr: string[] = [];
+    proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', (code) => {
+        try { fsM.unlinkSync(srtPath); } catch {}
+        if (code === 0) resolve({ success: true, outputPath });
+        else resolve({ success: false, error: stderr.slice(-4).join('').slice(-300) });
+      });
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W2-2: AI Revision Parser (natural language edit instructions) ─────────────
+// Parses instructions like "remove logo at 1:23", "tighten middle section"
+// Returns structured edit operations the renderer can execute.
+ipcMain.handle('ai:parse-revision', async (_ev, args: { instructions: string; projectJson: string }) => {
+  try {
+    const { instructions, projectJson } = args;
+    const groqKey = process.env.GROQ_API_KEY ||
+      (() => { try { const p = require('path').join(app.getPath('userData'), 'settings.json'); const s = JSON.parse(require('fs').readFileSync(p, 'utf8')); return s.groqApiKey ?? ''; } catch { return ''; } })();
+    if (!groqKey) return { success: false, error: 'GROQ_API_KEY required for AI Revision Mode' };
+    const systemPrompt = `You are a video editing AI assistant. The user will describe changes to make to their video project.
+Return ONLY a JSON array of edit operations. Each operation has this shape:
+{ "op": "remove_clip"|"trim_clip"|"adjust_volume"|"add_marker"|"split_at"|"color_grade", "clipId"?: string, "startSec"?: number, "endSec"?: number, "value"?: number, "note"?: string }
+The project JSON (clips with id/startFrame/endFrame, fps) is provided as context.
+Be precise. If you cannot determine a clipId from context, set clipId to null and include a note.`;
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Project: ${projectJson.slice(0, 3000)}\n\nInstructions: ${instructions}` },
+        ],
+        temperature: 0.1,
+        max_tokens: 1024,
+        response_format: { type: 'json_object' },
+      }),
+    });
+    const text = await resp.text();
+    let data: { choices?: Array<{ message?: { content?: string } }> };
+    try { data = JSON.parse(text); } catch { return { success: false, error: `Parse error: ${text.slice(0, 200)}` }; }
+    if (!resp.ok) return { success: false, error: text.slice(0, 300) };
+    const content = data.choices?.[0]?.message?.content ?? '{"ops":[]}';
+    let ops: unknown[];
+    try {
+      const parsed = JSON.parse(content);
+      ops = Array.isArray(parsed) ? parsed : parsed.ops ?? parsed.operations ?? [];
+    } catch { ops = []; }
+    return { success: true, ops };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W2-3: Waveform Data Extraction (for visual waveform on audio clips) ───────
+// Returns normalized amplitude samples for rendering a waveform SVG in the timeline.
+ipcMain.handle('ai:extract-waveform', async (_ev, args: { filePath: string; samples?: number }) => {
+  try {
+    const { filePath, samples = 200 } = args;
+    if (!filePath) return { success: false, error: 'Missing filePath' };
+    const fsM = await import('fs');
+    if (!fsM.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    // Extract audio as raw PCM s16le mono, then compute RMS per chunk
+    const out: Buffer[] = [];
+    const proc = spawn(ffmpegBin, [
+      '-i', filePath,
+      '-af', 'aresample=8000',
+      '-ac', '1',
+      '-f', 's16le',
+      '-acodec', 'pcm_s16le',
+      'pipe:1',
+    ]);
+    proc.stdout?.on('data', (d: Buffer) => out.push(d));
+    return await new Promise((resolve) => {
+      proc.on('close', () => {
+        const buf = Buffer.concat(out);
+        const totalSamples = buf.length / 2; // 16-bit = 2 bytes per sample
+        if (totalSamples === 0) { resolve({ success: true, waveform: [] }); return; }
+        const chunkSize = Math.max(1, Math.floor(totalSamples / samples));
+        const waveform: number[] = [];
+        for (let i = 0; i < samples; i++) {
+          const start = i * chunkSize * 2;
+          let sum = 0, count = 0;
+          for (let j = 0; j < chunkSize * 2 && start + j + 1 < buf.length; j += 2) {
+            const sample = buf.readInt16LE(start + j);
+            sum += sample * sample;
+            count++;
+          }
+          waveform.push(count > 0 ? Math.sqrt(sum / count) / 32768 : 0);
+        }
+        resolve({ success: true, waveform });
+      });
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W2-4: Multicam Audio Sync (align multiple clips by audio) ────────────────
+ipcMain.handle('ai:multicam-sync', async (_ev, args: { clips: Array<{ id: string; filePath: string }> }) => {
+  try {
+    const { clips } = args;
+    if (!clips || clips.length < 2) return { success: false, error: 'Need at least 2 clips' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const os = await import('os');
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    // Extract onset timestamps for each clip
+    const getOnset = async (filePath: string): Promise<number> => {
+      if (!fsM.existsSync(filePath)) return 0;
+      const silOut: string[] = [];
+      await new Promise<void>((res) => {
+        const p = spawn(ffmpegBin, ['-i', filePath, '-af', 'silencedetect=noise=-25dB:d=0.05', '-f', 'null', '-']);
+        p.stderr?.on('data', (d: Buffer) => silOut.push(d.toString()));
+        p.on('close', () => res()); p.on('error', () => res());
+      });
+      const m = silOut.join('').match(/silence_end:\s*([\d.]+)/);
+      return m ? parseFloat(m[1]) : 0;
+    };
+    const onsets = await Promise.all(clips.map(c => getOnset(c.filePath)));
+    const reference = onsets[0];
+    const offsets = onsets.map(t => reference - t); // shift each clip by this many seconds
+    return { success: true, offsets: clips.map((c, i) => ({ id: c.id, offsetSeconds: offsets[i] })) };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W3-1: Noise Reduction (background hiss/hum removal) ──────────────────────
+ipcMain.handle('ai:noise-reduce', async (_ev, args: { inputPath: string; outputPath?: string; strength?: number }) => {
+  try {
+    const { inputPath, strength = 5 } = args;
+    if (!inputPath) return { success: false, error: 'Missing inputPath' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const ext = pathM.extname(inputPath) || '.mp4';
+    const base = pathM.basename(inputPath, ext);
+    const dir = pathM.dirname(inputPath);
+    const outputPath = args.outputPath ?? pathM.join(dir, `${base}-denoised${ext}`);
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    const s = Math.max(1, Math.min(10, strength));
+    // anlmdn: stronger settings for high strength
+    const filter = `anlmdn=s=${s}:p=${0.001 * s}:r=${0.002 * s}:m=${10 + s}`;
+    const proc = spawn(ffmpegBin, ['-i', inputPath, '-af', filter, '-c:v', 'copy', '-y', outputPath]);
+    const stderr: string[] = [];
+    proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', (code) => code === 0 ? resolve({ success: true, outputPath }) : resolve({ success: false, error: stderr.slice(-3).join('').slice(-300) }));
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W3-2: Auto Color Match (match grade of clip B to clip A) ─────────────────
+// Extracts histogram stats from reference clip, builds a grade to match.
+ipcMain.handle('ai:color-match', async (_ev, args: { referenceClipPath: string; targetClipPath: string }) => {
+  try {
+    const { referenceClipPath, targetClipPath } = args;
+    const fsM = await import('fs');
+    if (!fsM.existsSync(referenceClipPath)) return { success: false, error: 'Reference file not found' };
+    if (!fsM.existsSync(targetClipPath)) return { success: false, error: 'Target file not found' };
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    // Get signalstats for both clips (YAVG, UAVG, VAVG)
+    const getStats = (filePath: string): Promise<{ yavg: number; uavg: number; vavg: number; yrms: number }> =>
+      new Promise((res) => {
+        const out: string[] = [];
+        const p = spawn(ffmpegBin, ['-i', filePath, '-vf', 'signalstats', '-frames:v', '10', '-f', 'null', '-']);
+        p.stderr?.on('data', (d: Buffer) => out.push(d.toString()));
+        p.on('close', () => {
+          const t = out.join('');
+          const yavg = parseFloat(t.match(/YAVG:(\d+\.?\d*)/)?.[1] ?? '128');
+          const uavg = parseFloat(t.match(/UAVG:(\d+\.?\d*)/)?.[1] ?? '128');
+          const vavg = parseFloat(t.match(/VAVG:(\d+\.?\d*)/)?.[1] ?? '128');
+          const yrms = parseFloat(t.match(/YRMS:(\d+\.?\d*)/)?.[1] ?? '128');
+          res({ yavg, uavg, vavg, yrms });
+        });
+        p.on('error', () => res({ yavg: 128, uavg: 128, vavg: 128, yrms: 128 }));
+      });
+    const [refStats, tgtStats] = await Promise.all([getStats(referenceClipPath), getStats(targetClipPath)]);
+    // Calculate grade adjustments needed
+    const exposureDiff = (refStats.yavg - tgtStats.yavg) / 255; // -1 to +1
+    const tempDiff = ((refStats.uavg - tgtStats.uavg) + (refStats.vavg - tgtStats.vavg)) / 255 * 50; // rough kelvin approximation
+    const contrastFactor = tgtStats.yrms > 0 ? (refStats.yrms / tgtStats.yrms) : 1;
+    return {
+      success: true,
+      suggestedGrade: {
+        exposure: Math.max(-1, Math.min(1, exposureDiff)),
+        temperature: Math.max(-50, Math.min(50, tempDiff)),
+        contrast: Math.max(0.5, Math.min(2, contrastFactor)),
+        saturation: 1,
+        lift: [0, 0, 0, 0] as [number, number, number, number],
+        gamma: [1, 1, 1, 1] as [number, number, number, number],
+        gain: [1, 1, 1, 1] as [number, number, number, number],
+        offset: [0, 0, 0, 0] as [number, number, number, number],
+        hue: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+        tint: 0, vibrance: 0, clarity: 0,
+        logInputTransform: 'none' as const,
+        customCurvePoints: null,
+      },
+      referenceStats: refStats,
+      targetStats: tgtStats,
+    };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W3-3: Loudness Normalize (individual clip, not just export) ───────────────
+ipcMain.handle('ai:normalize-clip', async (_ev, args: { inputPath: string; outputPath?: string; targetLufs?: number }) => {
+  try {
+    const { inputPath, targetLufs = -16 } = args;
+    if (!inputPath) return { success: false, error: 'Missing inputPath' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const ext = pathM.extname(inputPath) || '.mp4';
+    const base = pathM.basename(inputPath, ext);
+    const dir = pathM.dirname(inputPath);
+    const outputPath = args.outputPath ?? pathM.join(dir, `${base}-normalized${ext}`);
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    const proc = spawn(ffmpegBin, [
+      '-i', inputPath,
+      '-af', `loudnorm=I=${targetLufs}:TP=-1.5:LRA=11`,
+      '-c:v', 'copy', '-y', outputPath,
+    ]);
+    const stderr: string[] = [];
+    proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', (code) => code === 0 ? resolve({ success: true, outputPath }) : resolve({ success: false, error: stderr.slice(-3).join('').slice(-300) }));
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W3-4: Stabilization (FFmpeg vidstab — shaky footage fix) ─────────────────
+ipcMain.handle('ai:stabilize', async (_ev, args: { inputPath: string; outputPath?: string; strength?: number }) => {
+  try {
+    const { inputPath, strength = 5 } = args;
+    if (!inputPath) return { success: false, error: 'Missing inputPath' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    const os = await import('os');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const ext = pathM.extname(inputPath) || '.mp4';
+    const base = pathM.basename(inputPath, ext);
+    const dir = pathM.dirname(inputPath);
+    const outputPath = args.outputPath ?? pathM.join(dir, `${base}-stabilized${ext}`);
+    const transformsPath = pathM.join(os.tmpdir(), `stab_${Date.now()}.trf`);
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    const smoothing = Math.round(strength * 3);
+    // Pass 1: analyze
+    const pass1 = spawn(ffmpegBin, [
+      '-i', inputPath,
+      '-vf', `vidstabdetect=shakiness=${strength}:accuracy=9:result=${transformsPath}`,
+      '-f', 'null', '-',
+    ]);
+    const p1Err: string[] = [];
+    pass1.stderr?.on('data', (d: Buffer) => p1Err.push(d.toString()));
+    await new Promise<void>((res) => { pass1.on('close', () => res()); pass1.on('error', () => res()); });
+    if (!fsM.existsSync(transformsPath)) {
+      // vidstab not available (not compiled in) — use deshake fallback
+      const proc = spawn(ffmpegBin, ['-i', inputPath, '-vf', `deshake`, '-c:v', 'libx264', '-crf', '18', '-preset', 'fast', '-c:a', 'copy', '-y', outputPath]);
+      const stderr: string[] = [];
+      proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+      return await new Promise((resolve) => {
+        proc.on('close', (code) => code === 0 ? resolve({ success: true, outputPath, method: 'deshake' }) : resolve({ success: false, error: stderr.slice(-3).join('').slice(-300) }));
+        proc.on('error', (e) => resolve({ success: false, error: e.message }));
+      });
+    }
+    // Pass 2: stabilize
+    const pass2 = spawn(ffmpegBin, [
+      '-i', inputPath,
+      '-vf', `vidstabtransform=input=${transformsPath}:smoothing=${smoothing}:crop=black:zoom=2`,
+      '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+      '-c:a', 'copy', '-y', outputPath,
+    ]);
+    const p2Err: string[] = [];
+    pass2.stderr?.on('data', (d: Buffer) => p2Err.push(d.toString()));
+    return await new Promise((resolve) => {
+      pass2.on('close', (code) => {
+        try { fsM.unlinkSync(transformsPath); } catch {}
+        if (code === 0) resolve({ success: true, outputPath, method: 'vidstab' });
+        else resolve({ success: false, error: p2Err.slice(-3).join('').slice(-300) });
+      });
+      pass2.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W3-5: Proxy Media Generation ─────────────────────────────────────────────
+// Generates low-res proxies for smooth real-time editing of 4K/8K footage.
+ipcMain.handle('media:generate-proxy', async (_ev, args: { inputPath: string; outputPath?: string; resolution?: '540p' | '720p' | '1080p' }) => {
+  try {
+    const { inputPath, resolution = '540p' } = args;
+    if (!inputPath) return { success: false, error: 'Missing inputPath' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const ext = pathM.extname(inputPath);
+    const base = pathM.basename(inputPath, ext);
+    const dir = pathM.dirname(inputPath);
+    const proxyDir = pathM.join(dir, '.264proxies');
+    if (!fsM.existsSync(proxyDir)) fsM.mkdirSync(proxyDir, { recursive: true });
+    const outputPath = args.outputPath ?? pathM.join(proxyDir, `${base}_proxy_${resolution}.mp4`);
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    const height = resolution === '540p' ? 540 : resolution === '720p' ? 720 : 1080;
+    const proc = spawn(ffmpegBin, [
+      '-i', inputPath,
+      '-vf', `scale=-2:${height}`,
+      '-c:v', 'libx264', '-crf', '23', '-preset', 'ultrafast',
+      '-c:a', 'aac', '-b:a', '128k',
+      '-y', outputPath,
+    ]);
+    const stderr: string[] = [];
+    proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', (code) => code === 0 ? resolve({ success: true, outputPath, resolution }) : resolve({ success: false, error: stderr.slice(-3).join('').slice(-300) }));
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// ── W3-6: Deinterlace ────────────────────────────────────────────────────────
+ipcMain.handle('ai:deinterlace', async (_ev, args: { inputPath: string; outputPath?: string }) => {
+  try {
+    const { inputPath } = args;
+    if (!inputPath) return { success: false, error: 'Missing inputPath' };
+    const fsM = await import('fs');
+    const pathM = await import('path');
+    if (!fsM.existsSync(inputPath)) return { success: false, error: `File not found: ${inputPath}` };
+    const ext = pathM.extname(inputPath) || '.mp4';
+    const outputPath = args.outputPath ?? pathM.join(pathM.dirname(inputPath), `${pathM.basename(inputPath, ext)}-deinterlaced${ext}`);
+    const { spawn } = await import('child_process');
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
+    const proc = spawn(ffmpegBin, ['-i', inputPath, '-vf', 'yadif=mode=1', '-c:v', 'libx264', '-crf', '18', '-preset', 'fast', '-c:a', 'copy', '-y', outputPath]);
+    const stderr: string[] = [];
+    proc.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
+    return await new Promise((resolve) => {
+      proc.on('close', (code) => code === 0 ? resolve({ success: true, outputPath }) : resolve({ success: false, error: stderr.slice(-3).join('').slice(-300) }));
+      proc.on('error', (e) => resolve({ success: false, error: e.message }));
+    });
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+
 // ── Kill active FFmpeg processes on quit ──────────────────────────────────────
 app.on("will-quit", () => {
   killAllActiveProcesses();

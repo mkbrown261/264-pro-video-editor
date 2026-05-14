@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { AIToolsWave2Panel } from "./AIToolsWave2Panel";
 import { useAuthGate, AuthGateModal, AuthGateWrapper, type RequiredAccess } from "./AuthGateModal";
 import { useEditorStore } from "../store/editorStore";
 import { notifyToolUsed } from "../lib/projectMemoryBridge";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type PanelTab = "enhance" | "generate";
+type PanelTab = "enhance" | "generate" | "power";
 
 type AITool =
   | "upscale"
@@ -913,7 +914,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
           </span>
           {/* Tab switcher */}
           <div style={{ display: "flex", gap: 4, marginRight: 12 }}>
-            {(["generate", "enhance"] as PanelTab[]).map((tab) => (
+            {(["generate", "enhance", "power"] as PanelTab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => tab === "enhance" ? (reset(), setActiveTab(tab)) : (resetVg(), setActiveTab(tab))}
@@ -926,7 +927,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   textTransform: "uppercase", letterSpacing: "0.06em",
                 }}
               >
-                {tab === "generate" ? "🎬 Generate" : "🔧 Enhance"}
+                {tab === "generate" ? "🎬 Generate" : tab === "enhance" ? "🔧 Enhance" : "⚡ Power"}
               </button>
             ))}
           </div>
@@ -2200,6 +2201,12 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
             </div>
           </div>
         </div>
+        )}
+      {/* ── Power Tab (Wave 2+3) ── */}
+        {activeTab === "power" && (
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            <AIToolsWave2Panel />
+          </div>
         )}
       </div>
     </div>

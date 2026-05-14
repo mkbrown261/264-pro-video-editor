@@ -146,6 +146,27 @@ const electronAPI = {
   /** Project health check: returns issues array + score 0-100 */
   projectHealthCheck: (args: { project: unknown }): Promise<{ success: boolean; issues?: Array<{severity:string;message:string;clipId?:string}>; score?: number; summary?: string; error?: string }> =>
     ipcRenderer.invoke('project:health-check', args),
+  // ── Wave 2 + 3 Features ────────────────────────────────────────────────────
+  burnSubtitles: (args: { inputPath: string; srtContent: string; outputPath?: string; style?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:burn-subtitles', args),
+  parseRevision: (args: { instructions: string; projectJson: string }): Promise<{ success: boolean; ops?: unknown[]; error?: string }> =>
+    ipcRenderer.invoke('ai:parse-revision', args),
+  extractWaveform: (args: { filePath: string; samples?: number }): Promise<{ success: boolean; waveform?: number[]; error?: string }> =>
+    ipcRenderer.invoke('ai:extract-waveform', args),
+  multicamSync: (args: { clips: Array<{ id: string; filePath: string }> }): Promise<{ success: boolean; offsets?: Array<{ id: string; offsetSeconds: number }>; error?: string }> =>
+    ipcRenderer.invoke('ai:multicam-sync', args),
+  noiseReduce: (args: { inputPath: string; outputPath?: string; strength?: number }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:noise-reduce', args),
+  colorMatch: (args: { referenceClipPath: string; targetClipPath: string }): Promise<{ success: boolean; suggestedGrade?: Record<string, unknown>; error?: string }> =>
+    ipcRenderer.invoke('ai:color-match', args),
+  normalizeClip: (args: { inputPath: string; outputPath?: string; targetLufs?: number }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:normalize-clip', args),
+  stabilize: (args: { inputPath: string; outputPath?: string; strength?: number }): Promise<{ success: boolean; outputPath?: string; method?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:stabilize', args),
+  generateProxyMedia: (args: { inputPath: string; outputPath?: string; resolution?: '540p'|'720p'|'1080p' }): Promise<{ success: boolean; outputPath?: string; resolution?: string; error?: string }> =>
+    ipcRenderer.invoke('media:generate-proxy', args),
+  deinterlace: (args: { inputPath: string; outputPath?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
+    ipcRenderer.invoke('ai:deinterlace', args),
   // ── Render Cache ─────────────────────────────────────────────────────────
   renderCacheSegment: (args: {
     projectId: string;
