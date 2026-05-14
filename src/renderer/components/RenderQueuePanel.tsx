@@ -25,6 +25,7 @@ export interface RenderJob {
   outputPath?: string;     // set on success
   errorMessage?: string;   // set on error
   createdAt: number;       // Date.now()
+  loudnormTarget?: -14 | -23; // optional loudness normalization
 }
 
 // ── Batch Export Presets (GAP D) ──────────────────────────────────────────────

@@ -982,7 +982,18 @@ export async function exportSequence(
   }
 
   // Use [afinal] if audio-only tracks were mixed in, otherwise use [aout]
-  const finalAudioLabel = allAudioLabels.length > 0 ? "[afinal]" : "[aout]";
+  let finalAudioLabel = allAudioLabels.length > 0 ? "[afinal]" : "[aout]";
+
+  // ── Loudness normalization (optional) — EBU R128 / YouTube standard ─────────
+  if (request.loudnormTarget) {
+    const target = request.loudnormTarget;
+    // Two-pass loudnorm is ideal but requires a separate analysis pass.
+    // Single-pass loudnorm with measured_I=-99 is a safe approximation for export.
+    filterParts.push(
+      `${finalAudioLabel}loudnorm=I=${target}:TP=-1.5:LRA=11[anorm]`
+    );
+    finalAudioLabel = "[anorm]";
+  }
 
   // ── Codec-specific output args ─────────────────────────────────────────────
   function getVideoCodecArgs(c: typeof codec, hwEncoder?: string | null): string[] {

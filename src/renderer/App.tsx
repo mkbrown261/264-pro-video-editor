@@ -1923,7 +1923,7 @@ export default function App() {
   }
 
   // ── Render Queue ───────────────────────────────────────────────────────────
-  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string }) {
+  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23 }) {
     const job: RenderJob = {
       id: `rj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       label: opts.label,
@@ -1933,6 +1933,7 @@ export default function App() {
       status: "queued",
       progress: 0,
       createdAt: Date.now(),
+      loudnormTarget: opts.loudnormTarget,
     };
     setRenderJobs((prev) => [...prev, job]);
     setRenderQueueOpen(true);
@@ -1979,6 +1980,7 @@ export default function App() {
           codec: pendingJob.codec,
           outputWidth: pendingJob.outputWidth,
           outputHeight: pendingJob.outputHeight,
+          loudnormTarget: pendingJob.loudnormTarget,
         });
         setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "done" as const, progress: 100, outputPath: result.outputPath } : j));
       } catch (err) {
@@ -3777,6 +3779,8 @@ export default function App() {
                 onMoveClipTo={(clipId, trackId, frame) => { pauseViewerPlayback(); moveClipTo(clipId, trackId, frame); }}
                 onTrimClipStart={(clipId, trim) => { pauseViewerPlayback(); trimClipStart(clipId, trim); }}
                 onTrimClipEnd={(clipId, trim) => { pauseViewerPlayback(); trimClipEnd(clipId, trim); }}
+                onRippleTrim={rippleTrim}
+                onRollTrim={rollTrim}
                 onBladeCut={(clipId, frame) => { pauseViewerPlayback(); splitClipAtFrame(clipId, frame); }}
                 onDropAsset={(assetId, trackId, frame) => { pauseViewerPlayback(); dropAssetAtFrame(assetId, trackId, frame); }}
                 onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}

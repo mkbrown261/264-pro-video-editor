@@ -119,7 +119,7 @@ interface InspectorPanelProps {
 
   // Export
   onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
-  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string }) => void;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23 }) => void;
   exportProgress?: number;
 
   // Color grade (for effects page display)
@@ -1170,10 +1170,11 @@ function ExportPresetPanel({
   exportProgress?: number;
   environment: EnvironmentStatus | null;
   onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
-  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string }) => void;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23 }) => void;
 }) {
   const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
   const [selectedCodec, setSelectedCodec] = useState<ExportCodec>("libx264");
+  const [youtubeNormalize, setYoutubeNormalize] = useState(true); // default on — -14 LUFS
   const [selectedResIdx, setSelectedResIdx] = useState<number>(0); // 0 = Original
   const preset = EXPORT_PRESETS.find((p) => p.id === selectedPreset) ?? EXPORT_PRESETS[0];
   const resPre = EXPORT_RESOLUTION_PRESETS[selectedResIdx] ?? EXPORT_RESOLUTION_PRESETS[0];
@@ -1379,20 +1380,42 @@ function ExportPresetPanel({
           {exportBusy ? "⏳ Rendering…" : `▶ Export ${containerLabel}`}
         </button>
         {onAddToQueue && (
-          <button
-            className="panel-action export-btn"
-            style={{ marginTop: 4, background: "rgba(59,138,247,0.12)", borderColor: "rgba(59,138,247,0.35)", color: "#3b8af7" }}
-            disabled={exportBusy}
-            onClick={() => {
-              const codecLabel = CODEC_OPTIONS.find((c) => c.value === selectedCodec)?.label ?? selectedCodec;
-              const resLabel = resPre.width > 0 ? `${resPre.width}×${resPre.height}` : "Original";
-              onAddToQueue({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height, label: `${preset.label} · ${codecLabel} · ${resLabel}` });
-            }}
-            type="button"
-            title="Add this render configuration to the render queue"
-          >
-            + Add to Queue
-          </button>
+          <>
+            {/* YouTube loudness normalize toggle (-14 LUFS) */}
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, fontSize: 11, color: "var(--text-s)", cursor: "pointer", userSelect: "none" }}
+              title="Normalize audio to -14 LUFS (YouTube / Spotify standard). Recommended for all online publishing."
+            >
+              <input
+                type="checkbox"
+                checked={youtubeNormalize}
+                onChange={e => setYoutubeNormalize(e.target.checked)}
+                style={{ accentColor: "#2fc77a", width: 13, height: 13, cursor: "pointer" }}
+              />
+              🎧 YouTube Normalize (-14 LUFS)
+            </label>
+            <button
+              className="panel-action export-btn"
+              style={{ marginTop: 4, background: "rgba(59,138,247,0.12)", borderColor: "rgba(59,138,247,0.35)", color: "#3b8af7" }}
+              disabled={exportBusy}
+              onClick={() => {
+                const codecLabel = CODEC_OPTIONS.find((c) => c.value === selectedCodec)?.label ?? selectedCodec;
+                const resLabel = resPre.width > 0 ? `${resPre.width}×${resPre.height}` : "Original";
+                const normLabel = youtubeNormalize ? " · 🎧-14 LUFS" : "";
+                onAddToQueue({
+                  codec: selectedCodec,
+                  outputWidth: resPre.width,
+                  outputHeight: resPre.height,
+                  label: `${preset.label} · ${codecLabel} · ${resLabel}${normLabel}`,
+                  loudnormTarget: youtubeNormalize ? -14 : undefined,
+                });
+              }}
+              type="button"
+              title="Add this render configuration to the render queue"
+            >
+              + Add to Queue
+            </button>
+          </>
         )}
         {exportBusy && (
           <div className="export-progress-row">

@@ -52,12 +52,16 @@ interface DragState {
   durationFrames: number;  // cached for ghost preview
 }
 
+type TrimMode = 'extend' | 'ripple' | 'roll';
+
 interface TrimState {
   clipId: string;
   edge: TrimEdge;
   anchorX: number;
   trimStartFrames: number;
   trimEndFrames: number;
+  mode: TrimMode;        // extend=default, ripple=Alt, roll=Shift+Alt
+  lastDeltaFrames: number; // for delta-based ripple/roll
 }
 
 interface FadeHandleState {
@@ -124,6 +128,8 @@ interface TimelinePanelProps {
   onMoveClipTo: (clipId: string, trackId: string, startFrame: number) => void;
   onTrimClipStart: (clipId: string, trimStartFrames: number) => void;
   onTrimClipEnd: (clipId: string, trimEndFrames: number) => void;
+  onRippleTrim: (clipId: string, side: 'start' | 'end', deltaFrames: number) => void;
+  onRollTrim: (clipId: string, deltaFrames: number) => void;
   onBladeCut: (clipId: string, frame: number) => void;
   onDropAsset: (assetId: string, trackId: string, startFrame: number) => void;
   onUpdateTrack: (trackId: string, updates: Partial<TimelineTrack>) => void;
@@ -267,7 +273,7 @@ export function TimelinePanel({
 
   const propsRef = useRef({
     onSetPlayheadFrame, onSelectClip, onMoveClipTo,
-    onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
+    onTrimClipStart, onTrimClipEnd, onRippleTrim, onRollTrim, onBladeCut, onDropAsset,
     onUpdateTrack, onSetTransitionDuration, onDropTransition,
     toolMode, sequenceFps,
     onAddTrack, onAddTracksAndMoveClip, onAddTracksAndDropAsset, onReorderTrack,
@@ -276,7 +282,7 @@ export function TimelinePanel({
   useEffect(() => {
     propsRef.current = {
       onSetPlayheadFrame, onSelectClip, onMoveClipTo,
-      onTrimClipStart, onTrimClipEnd, onBladeCut, onDropAsset,
+      onTrimClipStart, onTrimClipEnd, onRippleTrim, onRollTrim, onBladeCut, onDropAsset,
       onUpdateTrack, onSetTransitionDuration, onDropTransition,
       toolMode, sequenceFps,
       onAddTrack, onAddTracksAndMoveClip, onAddTracksAndDropAsset, onReorderTrack,
@@ -504,22 +510,42 @@ export function TimelinePanel({
   }, [isScrubbingPlayhead, timelineFrames]);
 
   // ── Trim ─────────────────────────────────────────────────────────────────
+  // Mode:  extend (default) — trims this clip only
+  //        ripple (Alt)     — trims + shifts all downstream clips
+  //        roll   (Shift)   — moves the edit point between two clips
   useEffect(() => {
     if (!trimState) return;
     const onMove = (e: MouseEvent) => {
       const rawDelta = Math.round((e.clientX - trimState.anchorX) / ppfRef.current);
-      // Shift key disables snap for precision trimming
       const { snapEnabled: se, snapDivIdx: sdi } = snapRef.current;
-      const snapActive = se && !e.shiftKey;
-      // Apply snap to the absolute trim value, not to the delta
-      if (trimState.edge === "start") {
-        const rawTrim = trimState.trimStartFrames + rawDelta;
-        const snappedTrim = snapFrame(rawTrim, snapActive, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
-        propsRef.current.onTrimClipStart(trimState.clipId, snappedTrim);
+      // Shift-only disables snap for precision trimming in extend mode
+      const snapActive = se && !(trimState.mode === 'extend' && e.shiftKey);
+
+      if (trimState.mode === 'ripple') {
+        // Ripple: delta from last position so we don't double-apply
+        const delta = rawDelta - trimState.lastDeltaFrames;
+        if (delta !== 0) {
+          propsRef.current.onRippleTrim(trimState.clipId, trimState.edge === 'start' ? 'start' : 'end', delta);
+          setTrimState(prev => prev ? { ...prev, lastDeltaFrames: rawDelta } : null);
+        }
+      } else if (trimState.mode === 'roll') {
+        // Roll: move edit point — delta from last position
+        const delta = rawDelta - trimState.lastDeltaFrames;
+        if (delta !== 0) {
+          propsRef.current.onRollTrim(trimState.clipId, delta);
+          setTrimState(prev => prev ? { ...prev, lastDeltaFrames: rawDelta } : null);
+        }
       } else {
-        const rawTrim = trimState.trimEndFrames - rawDelta;
-        const snappedTrim = snapFrame(rawTrim, snapActive, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
-        propsRef.current.onTrimClipEnd(trimState.clipId, snappedTrim);
+        // Extend (default): absolute trim value with snap
+        if (trimState.edge === "start") {
+          const rawTrim = trimState.trimStartFrames + rawDelta;
+          const snappedTrim = snapFrame(rawTrim, snapActive, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+          propsRef.current.onTrimClipStart(trimState.clipId, snappedTrim);
+        } else {
+          const rawTrim = trimState.trimEndFrames - rawDelta;
+          const snappedTrim = snapFrame(rawTrim, snapActive, propsRef.current.sequenceFps, SNAP_DIVISIONS[sdi].factor);
+          propsRef.current.onTrimClipEnd(trimState.clipId, snappedTrim);
+        }
       }
     };
     const onUp = () => setTrimState(null);
@@ -2161,17 +2187,20 @@ export function TimelinePanel({
                           }}
                         />
 
-                        {/* Trim start handle */}
+                        {/* Trim start handle — Alt=ripple, Shift=roll, default=extend */}
                         <span
                           className="timeline-clip-handle start"
+                          title={"Trim start\nAlt+drag: Ripple trim\nShift+drag: Roll trim"}
                           onMouseDown={(e) => {
                             if (propsRef.current.toolMode !== "select" || isLocked) return;
                             e.preventDefault(); e.stopPropagation();
                             propsRef.current.onSelectClip(segment.clip.id);
+                            const mode: TrimMode = e.shiftKey ? 'roll' : e.altKey ? 'ripple' : 'extend';
                             setTrimState({
                               clipId: segment.clip.id, edge: "start", anchorX: e.clientX,
                               trimStartFrames: segment.clip.trimStartFrames,
-                              trimEndFrames: segment.clip.trimEndFrames
+                              trimEndFrames: segment.clip.trimEndFrames,
+                              mode, lastDeltaFrames: 0,
                             });
                           }}
                         />
@@ -2380,17 +2409,20 @@ export function TimelinePanel({
                           </span>
                         )}
 
-                        {/* Trim end handle */}
+                        {/* Trim end handle — Alt=ripple, Shift=roll, default=extend */}
                         <span
                           className="timeline-clip-handle end"
+                          title={"Trim end\nAlt+drag: Ripple trim\nShift+drag: Roll trim"}
                           onMouseDown={(e) => {
                             if (propsRef.current.toolMode !== "select" || isLocked) return;
                             e.preventDefault(); e.stopPropagation();
                             propsRef.current.onSelectClip(segment.clip.id);
+                            const mode: TrimMode = e.shiftKey ? 'roll' : e.altKey ? 'ripple' : 'extend';
                             setTrimState({
                               clipId: segment.clip.id, edge: "end", anchorX: e.clientX,
                               trimStartFrames: segment.clip.trimStartFrames,
-                              trimEndFrames: segment.clip.trimEndFrames
+                              trimEndFrames: segment.clip.trimEndFrames,
+                              mode, lastDeltaFrames: 0,
                             });
                           }}
                         />

@@ -905,6 +905,8 @@ export interface ExportRequest {
   /** Override output resolution. 0×0 means use sequence settings. */
   outputWidth?: number;
   outputHeight?: number;
+  /** Loudness normalization target in LUFS. -14 = YouTube/Spotify, -23 = Broadcast/EBU R128. Omit to skip normalization. */
+  loudnormTarget?: -14 | -23;
 }
 
 export interface ExportResponse {
