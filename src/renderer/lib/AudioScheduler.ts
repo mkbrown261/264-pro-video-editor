@@ -180,12 +180,27 @@ export interface PlayParams {
   seamResume?: boolean;
 }
 
+/** Files larger than this (bytes) are too big to decode into an AudioBuffer.
+ *  A 58-min video at typical bitrates can be 4–20 GB. We stream those instead
+ *  by routing the HTMLVideoElement through a MediaElementAudioSourceNode. */
+const MAX_BUFFER_BYTES = 200 * 1024 * 1024; // 200 MB
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
 
   /** URL → decoded AudioBuffer. Persistent across play/pause/seek cycles. */
   private bufferCache = new Map<string, AudioBuffer>();
+
+  /** URLs that are too large to buffer — streamed via MediaElementAudioSourceNode. */
+  private streamingUrls = new Set<string>();
+
+  /** URL → { element, sourceNode, gainNode } for streaming (large file) playback. */
+  private streamingElements = new Map<string, {
+    element: HTMLAudioElement;
+    sourceNode: MediaElementAudioSourceNode;
+    gainNode: GainNode;
+  }>();
 
   /** URLs currently being fetched — prevents duplicate in-flight downloads. */
   private pendingFetches = new Set<string>();
@@ -294,6 +309,7 @@ export class AudioEngine {
           const url = seg.asset?.previewUrl;
           if (!url) return false;
           if (this.bufferCache.has(url)) return false;
+          if (this.streamingUrls.has(url)) return false; // already marked as streaming
           if (this.pendingFetches.has(url)) return false;
           return true;
         })
@@ -302,9 +318,35 @@ export class AudioEngine {
           if (!url) return;
           this.pendingFetches.add(url);
           try {
+            // HEAD request first — check Content-Length before downloading.
+            // Large files (>200 MB, e.g. 58-min videos) cannot fit in an
+            // AudioBuffer (decodeAudioData requires the whole file in RAM).
+            // Mark them as streaming so _scheduleNodes uses MediaElementAudioSourceNode.
+            let isLarge = false;
+            try {
+              const head = await fetch(url, { method: 'HEAD' });
+              const len = head.headers.get('content-length');
+              if (len && parseInt(len, 10) > MAX_BUFFER_BYTES) isLarge = true;
+            } catch { /* HEAD not supported — fall through to buffer attempt */ }
+
+            if (isLarge) {
+              this.streamingUrls.add(url);
+              // Pre-create the HTMLAudioElement and connect it to Web Audio
+              // so seek + play is instant when playback starts.
+              this._ensureStreamingElement(ctx, url, seg);
+              return;
+            }
+
             const response = await fetch(url);
             if (!response.ok) return;
             const ab = await response.arrayBuffer();
+            // If the file turned out larger than expected (no Content-Length),
+            // fall back to streaming rather than crashing.
+            if (ab.byteLength > MAX_BUFFER_BYTES) {
+              this.streamingUrls.add(url);
+              this._ensureStreamingElement(ctx, url, seg);
+              return;
+            }
             const audioBuffer = await ctx.decodeAudioData(ab);
             this.bufferCache.set(url, audioBuffer);
           } catch {
@@ -314,6 +356,27 @@ export class AudioEngine {
           }
         })
     );
+  }
+
+  /** Create (or reuse) an HTMLAudioElement routed through Web Audio for streaming. */
+  private _ensureStreamingElement(ctx: AudioContext, url: string, seg: TimelineSegment): void {
+    if (this.streamingElements.has(url)) return;
+    try {
+      const element = new Audio();
+      element.src = url;
+      element.crossOrigin = 'anonymous';
+      element.preload = 'auto';
+      element.volume = 1;
+      element.muted = false;
+      const sourceNode = ctx.createMediaElementSource(element);
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = Math.max(0, seg.clip.volume ?? 1);
+      sourceNode.connect(gainNode);
+      gainNode.connect(this.getMasterGain(ctx));
+      this.streamingElements.set(url, { element, sourceNode, gainNode });
+    } catch {
+      // createMediaElementSource can fail if the element is already connected
+    }
   }
 
   // ── Play ───────────────────────────────────────────────────────────────────
@@ -370,6 +433,42 @@ export class AudioEngine {
     }
   }
 
+  // ── Streaming playback helpers ─────────────────────────────────────────────
+  private _playStreaming(segments: TimelineSegment[], playheadFrame: number, fps: number): void {
+    for (const seg of segments) {
+      const url = seg.asset?.previewUrl;
+      if (!url || !this.streamingUrls.has(url)) continue;
+      const entry = this.streamingElements.get(url);
+      if (!entry) continue;
+      const { element, gainNode } = entry;
+      const clipSpeed = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+      const clipVol   = Math.max(0, Math.min(2, seg.clip.volume ?? 1));
+      const trackMuted = seg.track.muted ?? false;
+      gainNode.gain.value = trackMuted ? 0 : clipVol * Math.max(0, seg.track.volume ?? 1);
+      const playheadOffset = Math.max(0, playheadFrame - seg.startFrame);
+      const targetTime = seg.sourceInSeconds + (playheadOffset / fps) * clipSpeed;
+      // Seek if more than 0.5 s out of sync
+      if (Math.abs(element.currentTime - targetTime) > 0.5) {
+        element.currentTime = targetTime;
+      }
+      element.playbackRate = clipSpeed;
+      void element.play().catch(() => {});
+    }
+  }
+
+  private _pauseStreaming(): void {
+    for (const { element } of this.streamingElements.values()) {
+      element.pause();
+    }
+  }
+
+  private _stopStreaming(): void {
+    for (const { element } of this.streamingElements.values()) {
+      element.pause();
+      try { element.currentTime = 0; } catch {}
+    }
+  }
+
   // ── Stop ───────────────────────────────────────────────────────────────────
   stop(): void {
     const ctx = this.ctx;
@@ -390,11 +489,13 @@ export class AudioEngine {
         source.stop(stopAt);
       } catch { /* already stopped */ }
     }
+    this._pauseStreaming();
   }
 
   // ── Pause (same as stop for AudioBufferSourceNode) ────────────────────────
   pause(): void {
     this.stop();
+    this._pauseStreaming();
   }
 
   // ── Volume ────────────────────────────────────────────────────────────────
@@ -553,6 +654,15 @@ export class AudioEngine {
   // ── Dispose ───────────────────────────────────────────────────────────────
   dispose(): void {
     this.stop();
+    this._stopStreaming();
+    // Disconnect and release streaming elements
+    for (const { element, sourceNode, gainNode } of this.streamingElements.values()) {
+      try { sourceNode.disconnect(); } catch {}
+      try { gainNode.disconnect(); } catch {}
+      element.src = '';
+    }
+    this.streamingElements.clear();
+    this.streamingUrls.clear();
     const ctx = this.ctx;
     if (ctx) {
       window.setTimeout(() => void ctx.close(), Math.ceil((STOP_FADE_S + 0.01) * 1000));
@@ -580,9 +690,14 @@ export class AudioEngine {
     startAt: number,
     fadeInSecs: number
   ): void {
+    // Handle streaming (large file) segments separately
+    const streamingSegs = segments.filter(s => s.asset?.previewUrl && this.streamingUrls.has(s.asset.previewUrl));
+    if (streamingSegs.length > 0) this._playStreaming(streamingSegs, playheadFrame, fps);
+
     for (const seg of segments) {
       const url = seg.asset?.previewUrl;
       if (!url) continue;
+      if (this.streamingUrls.has(url)) continue; // handled above
       const buffer = this.bufferCache.get(url);
       if (!buffer) continue;
 

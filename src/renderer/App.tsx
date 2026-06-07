@@ -598,6 +598,27 @@ export default function App() {
   const resetColorGrade = useEditorStore((s) => s.resetColorGrade);
   const updateSequenceSettings = useEditorStore((s) => s.updateSequenceSettings);
 
+  // Stable callbacks for ColorGradingPanel — prevents infinite render loop.
+  // Inline arrow functions passed as props get a new reference every render,
+  // causing the grade-accumulation useEffect in ColorGradingPanel to fire
+  // on every render cycle (its deps include onUpdateGrade / onEnableGrade).
+  // useCallback with stable deps breaks that cycle.
+  const stableEnableColorGrade = useCallback(() => {
+    const id = useEditorStore.getState().selectedClipId;
+    if (id) enableColorGrade(id);
+  }, [enableColorGrade]);
+  const stableUpdateGrade = useCallback((grade: Parameters<typeof setColorGrade>[1]) => {
+    const id = useEditorStore.getState().selectedClipId;
+    if (id) {
+      setColorGrade(id, grade);
+      updateFromGrade(grade);
+    }
+  }, [setColorGrade]);
+  const stableResetGrade = useCallback(() => {
+    const id = useEditorStore.getState().selectedClipId;
+    if (id) resetColorGrade(id);
+  }, [resetColorGrade]);
+
   // Phase 3 additions
   const rippleDelete = useEditorStore((s) => s.rippleDelete);
   const fixedPlayheadMode = useEditorStore((s) => s.fixedPlayheadMode);
@@ -1171,12 +1192,18 @@ export default function App() {
     };
   });
 
-  // Sync colorPageVideoRef with the ViewerPanel's video element on every render
+  // Sync colorPageVideoRef with the ViewerPanel's video element.
+  // Uses a callback ref pattern via useEffect with no deps — refs are stable
+  // objects so this runs once on mount, which is sufficient. The ViewerPanel
+  // exposes getVideoRef() imperatively so we don't need reactive tracking.
+  // NOTE: no dep array intentional — runs after every commit so that if the
+  // ViewerPanel remounts (page switch) the ref stays current. Writing only to
+  // .current (never to state) means this cannot cause an infinite render loop.
   useEffect(() => {
     const vid = viewerPanelRef.current?.getVideoRef() ?? null;
     colorPageVideoRef.current = vid;
     viewerVideoRef.current = vid;
-  });
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     voiceStateRef.current = {
@@ -3841,18 +3868,9 @@ export default function App() {
                 selectedSegment={inspectorSegment}
                 colorGrade={inspectorSegment?.clip.colorGrade ?? null}
                 videoRef={colorPageVideoRef}
-                onEnableGrade={() => {
-                  if (selectedClipId) enableColorGrade(selectedClipId);
-                }}
-                onUpdateGrade={(grade) => {
-                  if (selectedClipId) {
-                    setColorGrade(selectedClipId, grade);
-                    updateFromGrade(grade);
-                  }
-                }}
-                onResetGrade={() => {
-                  if (selectedClipId) resetColorGrade(selectedClipId);
-                }}
+                onEnableGrade={stableEnableColorGrade}
+                onUpdateGrade={stableUpdateGrade}
+                onResetGrade={stableResetGrade}
                 onAutoColorMatch={() => {
                   autoColorMatch();
                   toast.success("🎨 Auto Color Match applied to all clips");
