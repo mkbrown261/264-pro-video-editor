@@ -1670,13 +1670,18 @@ export default function App() {
   }, []);
 
   // ── Phase 9: ClawFlow Ambient Hook ────────────────────────────────────────
+  // onOpenBeatSync MUST be stable (useCallback) — it's a dep inside useClawFlowAmbient's
+  // analyze callback. An inline arrow here would be a new reference on every render,
+  // which propagates to a new `analyze` function, which re-fires the debounce useEffect,
+  // which calls setSuggestions, which re-renders App → infinite loop.
+  const onOpenBeatSyncStable = useCallback(() => setBeatSyncOpen(true), []);
   const { suggestions: ambientSuggestions, dismissSuggestion: dismissAmbient, actOnSuggestion: actAmbient } = useClawFlowAmbient({
     project,
     fps: project.sequence.settings.fps,
     onAutoColorMatch: autoColorMatch,
     onNormalizeAudio: normalizeAudioLevels,
     onCloseAllGaps: closeAllGaps,
-    onOpenBeatSync: () => setBeatSyncOpen(true),
+    onOpenBeatSync: onOpenBeatSyncStable,
   });
 
   // ── Phase 9: Voice Commands Hook ──────────────────────────────────────────

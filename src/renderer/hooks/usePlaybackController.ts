@@ -530,18 +530,40 @@ export function usePlaybackController({
     stateRef.current.setPlayheadFrame(frame);
 
     try {
-      // Load, seek and play video + audio.  This may take a moment
-      // (canplay + seeked events).  We MUST NOT start the RAF clock until
-      // both are ready, otherwise elapsed time accumulates during load and
-      // the playhead jumps forward the moment playback actually begins.
-      await Promise.all([
-        syncVideo(targetVideo, frame, true),
-        startAudio(frame)
-      ]);
+      // ── SYNC FIX: Run video seek FIRST, audio SECOND (sequential, not parallel)
+      //
+      // The previous Promise.all([syncVideo, startAudio]) caused permanent
+      // audio/playhead desync on every pause→resume:
+      //
+      //   1. startAudio() calls engine.preload() (instant on cache hit) then
+      //      engine.play() immediately.  Audio starts playing right away.
+      //   2. syncVideo() waits for canplay + seeked events — 200ms to 2000ms.
+      //   3. playbackStartedAt = performance.now() is stamped only after BOTH
+      //      resolve.  By that time audio has already played forward by the
+      //      full seek duration.
+      //   4. The RAF loop then computes elapsedFrames from the stamp — but
+      //      audio is already that many ms ahead, causing permanent drift that
+      //      compounds on every subsequent pause/resume.
+      //
+      // Sequential fix: seek video first (the slow operation), then start
+      // audio.  By the time startAudio() resolves, engine.play() has just
+      // scheduled nodes at (AudioContext.currentTime + START_LATENCY).
+      // We subtract START_LATENCY from the RAF clock anchor so the playhead
+      // accounts for the audio pre-schedule window and stays in sync.
+      await syncVideo(targetVideo, frame, true);
 
-      // ↓ Stamp the clock AFTER media is loaded & playing — this is the
-      //   authoritative zero-point for the RAF loop.
-      stateRef.current.playbackStartedAt = performance.now();
+      // ↓ Start audio AFTER video is loaded, seeked, and play() has been
+      //   called.  engine.play() schedules AudioBufferSourceNodes at
+      //   (ctx.currentTime + START_LATENCY_S) — typically 15 ms in the
+      //   future — so we backdate playbackStartedAt by the same amount.
+      await startAudio(frame);
+
+      // Stamp the RAF clock anchor.  Subtract START_LATENCY_MS so the
+      // playhead zero-point aligns with when audio actually starts playing,
+      // not when engine.play() was called.  This keeps video and audio
+      // perceptually in lock-step from the very first frame.
+      const START_LATENCY_MS = 15; // must match AudioEngine START_LATENCY (0.015 s)
+      stateRef.current.playbackStartedAt = performance.now() - START_LATENCY_MS;
       stateRef.current.playbackAnchorFrame = frame;  // anchor stays at start frame
       lastRafTimestampRef.current = null; // reset stall-detection history at play start
 
