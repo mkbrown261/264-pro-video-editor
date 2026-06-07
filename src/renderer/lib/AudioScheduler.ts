@@ -180,9 +180,41 @@ export interface PlayParams {
   seamResume?: boolean;
 }
 
-/** Files larger than this (bytes) are too big to decode into an AudioBuffer.
- *  A 58-min video at typical bitrates can be 4–20 GB. We stream those instead
- *  by routing the HTMLVideoElement through a MediaElementAudioSourceNode. */
+/**
+ * Audio source selection thresholds.
+ *
+ * WHY duration-based, not byte-size-based
+ * ────────────────────────────────────────
+ * We previously used a HEAD request to check Content-Length before deciding
+ * whether to stream or buffer a file.  That approach has two fatal flaws with
+ * Electron's custom `media://` protocol:
+ *
+ *   1. Electron's protocol.handle handler builds Responses from ReadableStreams
+ *      (range-sliced fs reads).  Streams don't carry a Content-Length, so the
+ *      HEAD response always returns null — isLarge is always false and the code
+ *      falls through to a full fetch + decodeAudioData on a file that could be
+ *      gigabytes, OOM-ing the renderer.
+ *
+ *   2. Even if streaming was reached, `crossOrigin = 'anonymous'` on the
+ *      HTMLAudioElement caused a SecurityError from createMediaElementSource().
+ *      `media://` is a local Electron protocol that does NOT serve CORS headers.
+ *      Chromium treats the element as cross-origin when crossOrigin is set,
+ *      and the Web Audio API refuses to tap it.  The catch {} swallowed the
+ *      error silently → the streamingElements map was never populated → silence.
+ *
+ * FIX: Use `seg.asset.durationSeconds` (populated by ffprobe at import time,
+ * always available, zero network cost) to decide stream vs buffer.  Any clip
+ * longer than STREAMING_DURATION_THRESHOLD_S gets the streaming path.
+ * Never set crossOrigin on streaming elements — media:// is same-origin.
+ */
+/** Source files longer than this (seconds) are too large to decode into RAM.
+ *  10 minutes covers virtually all "long" interview / cinema clips while still
+ *  buffering short music clips and SFX for sample-accurate scheduling. */
+const STREAMING_DURATION_THRESHOLD_S = 10 * 60; // 10 minutes
+
+/** How many bytes we allow decodeAudioData to consume (safety net for files
+ *  where durationSeconds is missing or wrong).  200 MB ≈ ~20 min of stereo
+ *  44.1 kHz at 128 kbps, or ~3 min of 24-bit PCM — well within JS heap. */
 const MAX_BUFFER_BYTES = 200 * 1024 * 1024; // 200 MB
 
 export class AudioEngine {
@@ -316,6 +348,23 @@ export class AudioEngine {
         .map(async (seg) => {
           const url = seg.asset?.previewUrl;
           if (!url) return;
+
+          // ── Duration-based routing (no network round-trip needed) ────────
+          // durationSeconds is populated by ffprobe at import time and is
+          // always correct.  We never send a HEAD request to media:// because:
+          //   • Electron's range-response handler doesn't set Content-Length
+          //     on streaming responses, so we'd always read null.
+          //   • A HEAD fetch would still hit the network stack unnecessarily.
+          const assetDuration = seg.asset?.durationSeconds ?? 0;
+          if (assetDuration > STREAMING_DURATION_THRESHOLD_S) {
+            // Mark as streaming and create the HTMLAudioElement immediately
+            // so _playStreaming can seek + play it without any async work.
+            this.streamingUrls.add(url);
+            this._ensureStreamingElement(ctx, url, seg);
+            return; // no fetch needed
+          }
+
+          // ── Buffer path: fetch + decodeAudioData (short files only) ─────
           this.pendingFetches.add(url);
           try {
             // HEAD request first — check Content-Length before downloading.
@@ -340,8 +389,9 @@ export class AudioEngine {
             const response = await fetch(url);
             if (!response.ok) return;
             const ab = await response.arrayBuffer();
-            // If the file turned out larger than expected (no Content-Length),
-            // fall back to streaming rather than crashing.
+            // Safety net: if the file is larger than our RAM budget (e.g.
+            // durationSeconds was missing or wrong), fall back to streaming
+            // rather than crashing decodeAudioData or the renderer process.
             if (ab.byteLength > MAX_BUFFER_BYTES) {
               this.streamingUrls.add(url);
               this._ensureStreamingElement(ctx, url, seg);
@@ -358,24 +408,39 @@ export class AudioEngine {
     );
   }
 
-  /** Create (or reuse) an HTMLAudioElement routed through Web Audio for streaming. */
+  /**
+   * Create (or reuse) an HTMLAudioElement routed through Web Audio for streaming.
+   *
+   * CORS note: Do NOT set `crossOrigin` on the element.  `media://` is a
+   * local Electron protocol — Chromium treats it as same-origin when crossOrigin
+   * is absent.  Setting `crossOrigin = 'anonymous'` forces an opaque-origin
+   * CORS check that `media://` never satisfies, causing createMediaElementSource
+   * to throw a SecurityError (silently caught → no element → silence).
+   *
+   * Track routing: connect through getTrackGain() so per-track volume and EQ
+   * work for streaming clips just like buffered clips.
+   */
   private _ensureStreamingElement(ctx: AudioContext, url: string, seg: TimelineSegment): void {
     if (this.streamingElements.has(url)) return;
     try {
       const element = new Audio();
+      // No crossOrigin attribute — media:// is local/same-origin in Electron.
+      // Setting crossOrigin triggers CORS enforcement which media:// cannot satisfy.
       element.src = url;
-      element.crossOrigin = 'anonymous';
       element.preload = 'auto';
       element.volume = 1;
       element.muted = false;
       const sourceNode = ctx.createMediaElementSource(element);
       const gainNode = ctx.createGain();
       gainNode.gain.value = Math.max(0, seg.clip.volume ?? 1);
+      // Route through track gain so setTrackVolume/EQ/mute apply to streaming clips.
       sourceNode.connect(gainNode);
-      gainNode.connect(this.getMasterGain(ctx));
+      gainNode.connect(this.getTrackGain(ctx, seg.track.id));
       this.streamingElements.set(url, { element, sourceNode, gainNode });
     } catch {
-      // createMediaElementSource can fail if the element is already connected
+      // createMediaElementSource can throw if the element is already connected
+      // to a different AudioContext. If this happens the entry is simply absent
+      // from streamingElements and _playStreaming will skip this segment.
     }
   }
 

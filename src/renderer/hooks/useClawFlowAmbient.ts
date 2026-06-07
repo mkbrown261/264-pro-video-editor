@@ -38,6 +38,31 @@ export function useClawFlowAmbient({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissedRef = useRef<Set<string>>(new Set());
 
+  // Store project and callbacks in refs so `analyze` never needs to be recreated
+  // when they change. This is the key fix for the infinite re-render loop:
+  //
+  // OLD (broken): analyze had [project, fps, onAutoColorMatch, ...] in deps.
+  //   - `project` is a Zustand object — new reference on every store mutation
+  //     (every clip drag, every playhead tick, every keystroke).
+  //   - `onOpenBeatSync` was an inline arrow in App.tsx — new ref every render.
+  //   - So: any store change → new `analyze` → useEffect fires → setSuggestions
+  //     → App re-renders → new `analyze` → loop. Logged as "Maximum update depth exceeded".
+  //
+  // FIX: Keep project and all callbacks in refs. `analyze` reads from refs at
+  // call-time (inside the setTimeout) so it always has fresh values without
+  // being a dep itself. The debounce useEffect only depends on `clipCount` and
+  // `fps` — stable primitives that only change when the timeline actually changes.
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const onAutoColorMatchRef = useRef(onAutoColorMatch);
+  onAutoColorMatchRef.current = onAutoColorMatch;
+  const onNormalizeAudioRef = useRef(onNormalizeAudio);
+  onNormalizeAudioRef.current = onNormalizeAudio;
+  const onCloseAllGapsRef = useRef(onCloseAllGaps);
+  onCloseAllGapsRef.current = onCloseAllGaps;
+  const onOpenBeatSyncRef = useRef(onOpenBeatSync);
+  onOpenBeatSyncRef.current = onOpenBeatSync;
+
   const dismissSuggestion = useCallback((id: string) => {
     dismissedRef.current.add(id);
     setSuggestions((prev) => prev.filter((s) => s.id !== id));
@@ -58,10 +83,12 @@ export function useClawFlowAmbient({
     []
   );
 
+  // analyze reads everything from refs — stable function, never recreated.
   const analyze = useCallback(() => {
-    if (!project?.sequence?.tracks) return;
+    const proj = projectRef.current;
+    if (!proj?.sequence?.tracks) return;
 
-    const segments = buildTimelineSegments(project.sequence, project.assets);
+    const segments = buildTimelineSegments(proj.sequence, proj.assets);
     const videoSegs = segments
       .filter((s) => s.track.kind === 'video')
       .sort((a, b) => a.startFrame - b.startFrame);
@@ -75,13 +102,13 @@ export function useClawFlowAmbient({
 
     // 1. Beat Grid: music track added but no BeatSyncConfig
     const hasLongAudio = audioSegs.some((s) => s.asset.durationSeconds > 30 && s.asset.hasAudio);
-    if (hasLongAudio && !project.sequence.beatSync) {
+    if (hasLongAudio && !proj.sequence.beatSync) {
       add({
         id: 'beat_grid_needed',
         type: 'beat_grid',
         message: '🎵 Music detected — draw beat grid?',
         actionLabel: 'Open Beat Sync',
-        action: () => onOpenBeatSync?.(),
+        action: () => onOpenBeatSyncRef.current?.(),
         dismissable: true,
         priority: 'medium',
       });
@@ -101,7 +128,7 @@ export function useClawFlowAmbient({
           type: 'grade_spread',
           message: `🎨 ${spreadCount + 1} clips have inconsistent exposure`,
           actionLabel: 'Auto-Match',
-          action: () => onAutoColorMatch?.(),
+          action: () => onAutoColorMatchRef.current?.(),
           dismissable: true,
           priority: 'high',
         });
@@ -116,7 +143,7 @@ export function useClawFlowAmbient({
         type: 'audio_peak',
         message: `🔊 ${peakingClips.length} clip${peakingClips.length > 1 ? 's' : ''} peak above safe level`,
         actionLabel: 'Normalize to -14 LUFS',
-        action: () => onNormalizeAudio?.(-14),
+        action: () => onNormalizeAudioRef.current?.(-14),
         dismissable: true,
         priority: 'high',
       });
@@ -125,7 +152,7 @@ export function useClawFlowAmbient({
     // 4. Pacing Alert: avg clip duration > 5s for fast-style project names
     if (videoSegs.length >= 3) {
       const avgDuration = videoSegs.reduce((sum, s) => sum + s.durationSeconds, 0) / videoSegs.length;
-      const nameLower = (project.name ?? '').toLowerCase();
+      const nameLower = (proj.name ?? '').toLowerCase();
       const isFastStyle =
         nameLower.includes('vlog') || nameLower.includes('travel') ||
         nameLower.includes('reel') || nameLower.includes('social');
@@ -135,7 +162,7 @@ export function useClawFlowAmbient({
           type: 'pacing',
           message: `⚡ Avg cut is ${avgDuration.toFixed(1)}s — fast cuts perform better for this style`,
           actionLabel: 'Tighten Pacing',
-          action: () => onOpenBeatSync?.(),
+          action: () => onOpenBeatSyncRef.current?.(),
           dismissable: true,
           priority: 'medium',
         });
@@ -160,7 +187,7 @@ export function useClawFlowAmbient({
         type: 'ungraded',
         message: `🎬 ${ungradedSegs.length} clips are ungraded`,
         actionLabel: 'Quick Grade All',
-        action: () => onAutoColorMatch?.(),
+        action: () => onAutoColorMatchRef.current?.(),
         dismissable: true,
         priority: 'low',
       });
@@ -178,7 +205,7 @@ export function useClawFlowAmbient({
         type: 'gap',
         message: `🕳 ${gapCount} gap${gapCount > 1 ? 's' : ''} in timeline`,
         actionLabel: 'Close Gaps',
-        action: () => onCloseAllGaps?.(),
+        action: () => onCloseAllGapsRef.current?.(),
         dismissable: true,
         priority: 'medium',
       });
@@ -195,15 +222,21 @@ export function useClawFlowAmbient({
         (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]
       );
     });
-  }, [project, fps, onAutoColorMatch, onNormalizeAudio, onCloseAllGaps, onOpenBeatSync]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ^ Intentionally empty: analyze reads project/callbacks from refs at call-time.
+  // This makes analyze a stable function reference that never triggers re-renders.
 
+  // Re-run analysis only when the timeline meaningfully changes — clip count and
+  // fps are cheap primitives. Playhead changes, volume tweaks, etc. do NOT
+  // trigger re-analysis (they don't affect the suggestions anyway).
+  const clipCount = project.sequence.clips.length;
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(analyze, 3000);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [project, analyze]);
+  }, [clipCount, fps, analyze]);
 
   return { suggestions, dismissSuggestion, actOnSuggestion };
 }
