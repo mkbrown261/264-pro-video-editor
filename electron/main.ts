@@ -2460,43 +2460,6 @@ ipcMain.handle('proxy:delete', async (_ev, proxyPath: string) => {
   }
 });
 
-// ── Scene Detection (FFmpeg select filter) ───────────────────────────────────
-ipcMain.handle("ai:detect-scenes", async (_ev, args: { filePath: string; threshold?: number }) => {
-  try {
-    const { filePath, threshold = 0.3 } = args || ({} as { filePath: string; threshold?: number });
-    if (!filePath || typeof filePath !== "string") {
-      return { success: false, error: "Invalid path" };
-    }
-    const { spawn } = await import("child_process");
-    const ffmpeg = getEnvironmentStatus().ffmpegPath;
-    if (!ffmpeg) {
-      return { success: false, error: "FFmpeg not available" };
-    }
-    return await new Promise((resolve) => {
-      let output = "";
-      const proc = spawn(ffmpeg, [
-        "-i", filePath,
-        "-vf", `select=gt(scene\\,${threshold}),showinfo`,
-        "-vsync", "vfr",
-        "-f", "null", "-"
-      ]);
-      proc.stderr.on("data", (d: Buffer) => { output += d.toString(); });
-      proc.on("close", () => {
-        const scenes: number[] = [];
-        const re = /pts_time:([\d.]+)/g;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(output)) !== null) {
-          scenes.push(parseFloat(m[1]));
-        }
-        resolve({ success: true, scenes });
-      });
-      proc.on("error", (e: Error) => resolve({ success: false, error: e.message }));
-    });
-  } catch (e) {
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
-  }
-});
-
 // ── Auto-Save / Crash Recovery ───────────────────────────────────────────────
 ipcMain.handle("project:autosave", async (_event, json: string, projectId: string) => {
   try {
