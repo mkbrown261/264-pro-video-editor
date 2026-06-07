@@ -15,35 +15,44 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "node_modules", "electron", "dist");
 const APP_NAME = "264 Pro";
 
-// Find existing .app (could be Electron.app or already renamed)
-const existing = existsSync(join(DIST, "Electron.app"))
-  ? "Electron.app"
-  : existsSync(join(DIST, `${APP_NAME}.app`))
-  ? `${APP_NAME}.app`
-  : null;
+// Find existing .app — scan by trimming names to catch stray whitespace/newlines
+let existingEntry = null;
+try {
+  const entries = readdirSync(DIST);
+  for (const entry of entries) {
+    const clean = entry.trim();
+    if (clean === "Electron.app" || clean === `${APP_NAME}.app`) {
+      existingEntry = entry; // keep the raw name for renameSync
+      break;
+    }
+  }
+} catch { /* dist not present */ }
 
-if (!existing) { console.log("[rename-electron] No .app found in dist/ — skipping"); process.exit(0); }
+if (!existingEntry) {
+  console.log("[rename-electron] No .app found in dist/ — skipping");
+  process.exit(0);
+}
 
-const appPath = join(DIST, existing);
+const appPath = join(DIST, existingEntry);
 const newAppPath = join(DIST, `${APP_NAME}.app`);
 const macosDir = join(appPath, "Contents", "MacOS");
 
-// Rename binary inside MacOS/
+// Rename binary inside MacOS/ — always normalise to exactly APP_NAME (no hidden whitespace)
 try {
   const bins = readdirSync(macosDir);
   for (const bin of bins) {
     if (bin !== APP_NAME) {
       renameSync(join(macosDir, bin), join(macosDir, APP_NAME));
-      console.log(`[rename-electron] Renamed binary: ${bin} → ${APP_NAME}`);
+      console.log(`[rename-electron] Renamed binary: ${JSON.stringify(bin)} → "${APP_NAME}"`);
     }
   }
 } catch (e) { console.error("[rename-electron] Binary rename failed:", e.message); }
 
-// Rename .app bundle
-if (existing !== `${APP_NAME}.app`) {
+// Rename .app bundle if needed (using raw existingEntry so the path resolves)
+if (existingEntry !== `${APP_NAME}.app`) {
   try {
     renameSync(appPath, newAppPath);
-    console.log(`[rename-electron] Renamed bundle: ${existing} → ${APP_NAME}.app`);
+    console.log(`[rename-electron] Renamed bundle: "${existingEntry.trim()}" → "${APP_NAME}.app"`);
   } catch (e) { console.error("[rename-electron] Bundle rename failed:", e.message); }
 }
 
