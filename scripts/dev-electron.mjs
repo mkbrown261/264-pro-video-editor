@@ -27,7 +27,7 @@ function getElectronBin() {
       for (const appBundle of apps) {
         const macosDir = join(distDir, appBundle, "Contents", "MacOS");
         if (existsSync(macosDir)) {
-          const bins = readdirSync(macosDir);
+          const bins = readdirSync(macosDir).map(b => b.trim()).filter(Boolean);
           if (bins.length > 0) {
             const bin = join(macosDir, bins[0]);
             if (existsSync(bin)) {
@@ -53,6 +53,23 @@ function getElectronBin() {
     const rel = readFileSync(pathTxt, "utf8").trim();
     const p = join(ROOT, "node_modules", "electron", "dist", rel);
     if (existsSync(p)) return p;
+    // On Mac the binary may have been renamed — try resolving from the .app
+    if (process.platform === "darwin") {
+      const distDir = join(ROOT, "node_modules", "electron", "dist");
+      try {
+        const apps = readdirSync(distDir).filter(f => f.trim().endsWith(".app"));
+        for (const appBundle of apps) {
+          const macosDir2 = join(distDir, appBundle.trim(), "Contents", "MacOS");
+          if (existsSync(macosDir2)) {
+            const bins2 = readdirSync(macosDir2).map(b => b.trim()).filter(Boolean);
+            if (bins2.length > 0) {
+              const bin2 = join(macosDir2, bins2[0]);
+              if (existsSync(bin2)) return bin2;
+            }
+          }
+        }
+      } catch { /* fall through */ }
+    }
   }
 
   return "electron";
