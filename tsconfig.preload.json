@@ -4,8 +4,8 @@
     "lib": [
       "ES2022"
     ],
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -18,7 +18,7 @@
     "declaration": false
   },
   "include": [
-    "electron/preload.ts",
+    "electron/preload.cts",
     "src/shared"
   ]
 }

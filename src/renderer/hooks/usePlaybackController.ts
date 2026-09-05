@@ -3,19 +3,28 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Orchestrates timeline playback for the ViewerPanel.
  *
- * Video: one <video> element showing the topmost visible clip at the playhead.
- * Audio: delegates to useMultiTrackAudio which keeps N <audio> elements in
- *        a Web Audio graph, one per active audio segment, all mixed together.
+ * Video: TWO <video> elements ("slots").  At any moment one slot is the
+ *        PRIMARY (shows the active clip) and the other is the PARTNER:
+ *          • during a two-clip transition the partner plays the adjacent clip
+ *            so the viewer can blend / wipe / push A and B for real;
+ *          • ahead of a plain cut the partner pre-rolls the next clip (loaded,
+ *            seeked to its in-point, paused).
+ *        When the playhead crosses the cut the two slots simply SWAP roles —
+ *        no load/seek on the visible element, so there is no freeze or black
+ *        frame at the seam.
+ * Audio: delegates to useMultiTrackAudio which keeps N buffer sources in a
+ *        Web Audio graph, one per active audio segment, all mixed together.
  *
  * Rendering hierarchy (video):
- *   Only the highest-trackIndex enabled video segment at the playhead is
- *   shown.  Lower clips are hidden unless transparency/mask allows
- *   see-through (handled by the ViewerPanel canvas layer in a future step).
+ *   Only the highest-priority enabled video segment at the playhead is the
+ *   active clip.  Which slot is primary is exposed via `primarySlot` so the
+ *   ViewerPanel can style the layers by role (outgoing / incoming).
  */
 
 import {
   useEffect,
   useRef,
+  useState,
   type RefObject,
   type MutableRefObject
 } from "react";
@@ -24,6 +33,11 @@ import {
   framesToSeconds,
   type TimelineSegment
 } from "../../shared/timeline";
+import {
+  getHandleTargetTime,
+  getPlayableOutTime,
+  getSegmentExtents
+} from "../../shared/transitions";
 import type { TimelineTrackKind } from "../../shared/models";
 import {
   useMultiTrackAudio,
@@ -32,12 +46,27 @@ import {
 import type { AudioEngine } from "../lib/AudioScheduler";
 import { AudioScheduler } from "../lib/AudioScheduler";
 
+export type VideoSlot = 0 | 1;
+
 interface PlaybackControllerOptions {
+  /** Video slot 0. */
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** Video slot 1.  Optional — without it the controller degrades to the
+   *  single-element behaviour (no A/B blending, reload at every cut). */
+  videoBRef?: RefObject<HTMLVideoElement | null>;
   /** @deprecated kept for API compatibility — audio is now fully managed by
    *  useMultiTrackAudio internally.  Pass a ref; it will not be used. */
   audioRef: RefObject<HTMLAudioElement | null>;
   activeSegment: TimelineSegment | null;
+  /**
+   * Clip to keep live in the partner slot: the other half of an in-progress
+   * transition, or the next clip to pre-roll before a plain cut.  Same
+   * (proxy / render-cache patched) shape as `activeSegment`.
+   */
+  partnerSegment?: TimelineSegment | null;
+  /** True while `partnerSegment` is the other half of a transition that is
+   *  currently blending (it must PLAY, not just sit pre-rolled). */
+  partnerIsBlending?: boolean;
   activeAudioSegment: TimelineSegment | null;
   segments: TimelineSegment[];
   isPlaying: boolean;
@@ -54,6 +83,8 @@ interface PlaybackControllerResult {
   pausePlayback: () => void;
   stopPlayback: () => void;
   audioEngineRef: MutableRefObject<AudioEngine | null>;
+  /** Which slot currently shows the active clip (React state — re-renders on swap). */
+  primarySlot: VideoSlot;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -73,6 +104,25 @@ function getTargetCurrentTime(
     Math.max(expectedTime, segment.sourceInSeconds),
     Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, sequenceFps))
   );
+}
+
+/**
+ * Target source time for a clip that may currently be OUTSIDE its own
+ * timeline bounds (the incoming half of a transition before the cut, or the
+ * outgoing half after it).  Runs into the source handles, clamped to media.
+ */
+function getTargetTimeWithHandles(
+  segments: TimelineSegment[],
+  segment: TimelineSegment,
+  playheadFrame: number,
+  sequenceFps: number
+): number {
+  const ext = getSegmentExtents(segments, segment);
+  const f = Math.max(ext.visibleStart, Math.min(ext.visibleEnd - 1, playheadFrame));
+  if (f >= segment.startFrame && f < segment.endFrame) {
+    return getTargetCurrentTime(segment, f, sequenceFps);
+  }
+  return getHandleTargetTime(segment, f, sequenceFps);
 }
 
 function getPlaybackErrorMessage(error: unknown): string {
@@ -111,6 +161,7 @@ function applyGain(media: HTMLMediaElement, volume: number): void {
     media.volume = Math.min(1, volume);
   }
 }
+void applyGain; // retained for parity with earlier builds (video elements are muted)
 
 function getEnabledSegments(segments: TimelineSegment[]): TimelineSegment[] {
   return segments.filter((s) => s.clip.isEnabled);
@@ -201,14 +252,31 @@ async function seekMediaElement(
   });
 }
 
+/** Per-slot bookkeeping. */
+interface SlotState {
+  loadedUrl: string | null;
+  /** clip.id of the segment last synced into this slot (null = empty). */
+  clipId: string | null;
+  generation: number;
+  loading: boolean;
+  trimGuardCleanup: (() => void) | null;
+}
+
+function newSlotState(): SlotState {
+  return { loadedUrl: null, clipId: null, generation: 0, loading: false, trimGuardCleanup: null };
+}
+
 // ── Main hook ─────────────────────────────────────────────────────────────────
 
 export function usePlaybackController({
   videoRef,
+  videoBRef,
   // audioRef is kept for API compatibility but audio is now handled by
   // useMultiTrackAudio internally
   audioRef: _audioRef,
   activeSegment,
+  partnerSegment = null,
+  partnerIsBlending = false,
   segments,
   isPlaying,
   playheadFrame,
@@ -231,11 +299,32 @@ export function usePlaybackController({
     schedulerRef.current = new AudioScheduler();
   }
 
+  // ── Slots ─────────────────────────────────────────────────────────────────
+  const [primarySlot, setPrimarySlot] = useState<VideoSlot>(0);
+  const primarySlotRef = useRef<VideoSlot>(0);
+  const slotStateRef = useRef<[SlotState, SlotState]>([newSlotState(), newSlotState()]);
+
+  function slotEl(slot: VideoSlot): HTMLVideoElement | null {
+    return slot === 0 ? videoRef.current : (videoBRef?.current ?? null);
+  }
+  function primaryEl(): HTMLVideoElement | null { return slotEl(primarySlotRef.current); }
+  function partnerSlot(): VideoSlot { return primarySlotRef.current === 0 ? 1 : 0; }
+  function partnerEl(): HTMLVideoElement | null {
+    return videoBRef ? slotEl(partnerSlot()) : null;
+  }
+  function swapSlots(): void {
+    const next = partnerSlot();
+    primarySlotRef.current = next;
+    setPrimarySlot(next);
+  }
+
   // All mutable state tracked via refs to avoid stale closures
   const stateRef = useRef({
     isPlaying,
     playheadFrame,
     activeSegment,
+    partnerSegment,
+    partnerIsBlending,
     segments,
     sequenceFps,
     totalFrames,
@@ -243,8 +332,7 @@ export function usePlaybackController({
     setPlaybackPlaying,
     onPlaybackMessage,
     playbackAnchorFrame: playheadFrame,
-    playbackStartedAt: null as number | null,
-    lastLoadedVideoUrl: null as string | null
+    playbackStartedAt: null as number | null
   });
 
   // Keep stateRef in sync with latest props
@@ -252,6 +340,8 @@ export function usePlaybackController({
     stateRef.current.isPlaying = isPlaying;
     stateRef.current.playheadFrame = playheadFrame;
     stateRef.current.activeSegment = activeSegment;
+    stateRef.current.partnerSegment = partnerSegment;
+    stateRef.current.partnerIsBlending = partnerIsBlending;
     stateRef.current.segments = segments;
     stateRef.current.sequenceFps = sequenceFps;
     stateRef.current.totalFrames = totalFrames;
@@ -286,187 +376,160 @@ export function usePlaybackController({
     sequenceFps
   });
 
-  const lastLoadedVideoUrlRef = useRef<string | null>(null);
-  // Guard: prevents two concurrent syncVideo calls from racing each other.
-  // Only one sync is allowed at a time; if a new one starts, the old one's
-  // results are discarded (via the generation counter below).
-  const syncGenerationRef = useRef(0);
   // True while startPlaybackAtFrame is in progress — prevents the scrub effect
-  // (which fires when playheadFrame changes) from racing the play-start syncVideo
+  // (which fires when playheadFrame changes) from racing the play-start sync
   // and winning the generation counter, leaving the video paused at the wrong frame.
   const startingPlaybackRef = useRef(false);
 
-  // ── Auto-invalidate lastLoadedVideoUrlRef on external video reset ─────────
+  // ── Auto-invalidate loadedUrl on external video reset ─────────────────────
   // ViewerPanel may call video.src = x; video.load() to show a media-pool
   // asset when no timeline clip is active.  That resets the element state
   // (currentTime → 0, readyState → 0).  We listen for 'emptied' to detect
-  // when the element is reset by an EXTERNAL caller, so the next syncVideo
+  // when the element is reset by an EXTERNAL caller, so the next sync
   // correctly re-loads instead of assuming the URL is still valid.
-  //
-  // We use a boolean ref that syncVideo sets to true while loadMediaSource
-  // is running, so the emptied listener knows to ignore those internal resets.
-  const syncVideoLoadingRef = useRef(false);
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onEmptied = () => {
-      // Ignore emptied events triggered by syncVideo's own loadMediaSource call.
-      if (syncVideoLoadingRef.current) return;
-      // External reset — clear the tracking ref so next syncVideo re-loads.
-      lastLoadedVideoUrlRef.current = null;
-    };
-    video.addEventListener("emptied", onEmptied);
-    return () => video.removeEventListener("emptied", onEmptied);
+    const cleanups: Array<() => void> = [];
+    ([0, 1] as VideoSlot[]).forEach((slot) => {
+      const video = slotEl(slot);
+      if (!video) return;
+      const onEmptied = () => {
+        const st = slotStateRef.current[slot];
+        if (st.loading) return; // our own loadMediaSource reset
+        st.loadedUrl = null;
+        st.clipId = null;
+      };
+      video.addEventListener("emptied", onEmptied);
+      cleanups.push(() => video.removeEventListener("emptied", onEmptied));
+    });
+    return () => cleanups.forEach((c) => c());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Cleanup handle for the trim-boundary timeupdate listener
-  const trimGuardCleanupRef = useRef<(() => void) | null>(null);
 
-  // ── Video lookahead: hidden <video> element that preloads the NEXT clip ──
-  // While clip A is playing we load clip B into preloadVideoRef so that when
-  // the transition fires, lastLoadedVideoUrlRef already matches and syncVideo
-  // can skip loadMediaSource, going straight to seekMediaElement + play().
-  const preloadVideoRef = useRef<HTMLVideoElement | null>(null);
-  const preloadedUrlRef = useRef<string | null>(null);
-
-  // Lazily create the hidden preload element once
-  function getPreloadElement(): HTMLVideoElement {
-    if (!preloadVideoRef.current) {
-      const el = document.createElement("video");
-      el.preload  = "auto";
-      el.muted    = true;
-      el.playsInline = true;
-      el.style.display = "none";
-      document.body.appendChild(el);
-      preloadVideoRef.current = el;
-    }
-    return preloadVideoRef.current;
-  }
-
-  /** Attach a timeupdate listener that hard-stops the video element the instant
-   *  it passes sourceOutSeconds.  Fires every ~250 ms (browser-driven) so we
-   *  catch the boundary even when the RAF is frozen during load/seek.
+  /** Attach a timeupdate listener that hard-stops a slot the instant it passes
+   *  its playable out-point (own out point + any transition tail).  Fires every
+   *  ~250 ms (browser-driven) so we catch the boundary even when the RAF is
+   *  frozen during load/seek.
    *
-   *  IMPORTANT: we only PAUSE here — we do NOT reset currentTime.  The RAF loop
-   *  does the per-frame clamping.  Resetting currentTime inside timeupdate creates
-   *  an infinite loop: set → timeupdate fires → set → … causing the video to
-   *  loop at the trim point instead of stopping. */
-  function attachTrimGuard(media: HTMLVideoElement, seg: TimelineSegment): void {
-    // Remove any previous guard first
-    trimGuardCleanupRef.current?.();
-    trimGuardCleanupRef.current = null;
+   *  IMPORTANT: we only PAUSE here — we do NOT reset currentTime.  Resetting
+   *  currentTime inside timeupdate creates an infinite loop. */
+  function attachTrimGuard(slot: VideoSlot, media: HTMLVideoElement, seg: TimelineSegment): void {
+    const st = slotStateRef.current[slot];
+    st.trimGuardCleanup?.();
+    st.trimGuardCleanup = null;
 
-    const outTime = seg.sourceOutSeconds;
-    const inTime  = seg.sourceInSeconds;
+    const outTime = getPlayableOutTime(stateRef.current.segments, seg, stateRef.current.sequenceFps);
+    const ext = getSegmentExtents(stateRef.current.segments, seg);
+    const inTime  = ext.preRollFrames > 0
+      ? getHandleTargetTime(seg, ext.visibleStart, stateRef.current.sequenceFps)
+      : seg.sourceInSeconds;
 
     const onTimeUpdate = () => {
-      // Past the out-point — pause so the viewer shows the last valid frame.
-      // Do NOT set currentTime here; the RAF loop / syncVideo will re-seek
-      // when the next segment loads.
       if (media.currentTime > outTime + 0.016) { // 16 ms ≈ 1 frame at 60fps
         media.pause();
       }
-      // If something seeks before the in-point, snap back.
       if (media.currentTime < inTime - 0.016) {
         media.currentTime = inTime;
       }
     };
 
     media.addEventListener("timeupdate", onTimeUpdate);
-    trimGuardCleanupRef.current = () => media.removeEventListener("timeupdate", onTimeUpdate);
+    st.trimGuardCleanup = () => media.removeEventListener("timeupdate", onTimeUpdate);
   }
 
-  function detachTrimGuard(): void {
-    trimGuardCleanupRef.current?.();
-    trimGuardCleanupRef.current = null;
+  function detachTrimGuard(slot: VideoSlot): void {
+    const st = slotStateRef.current[slot];
+    st.trimGuardCleanup?.();
+    st.trimGuardCleanup = null;
   }
 
-  // ── sync video element ────────────────────────────────────────────────────
-  async function syncVideo(
+  // ── sync one slot ─────────────────────────────────────────────────────────
+  /**
+   * Bring `slot` to `segment` @ `frame`.  Loads the URL if needed, seeks if
+   * needed, then plays or pauses.  `hideDuringSeek` hides the element while a
+   * load/seek is pending so a wrong frame is never painted (used for the
+   * primary slot; the partner is invisible anyway until a transition starts).
+   */
+  async function syncSlot(
+    slot: VideoSlot,
     segment: TimelineSegment | null,
     frame: number,
-    shouldPlay: boolean
+    shouldPlay: boolean,
+    hideDuringSeek: boolean
   ): Promise<boolean> {
-    // Each syncVideo call gets its own generation number.  If a newer call
-    // starts before this one finishes, we abort so stale results are never
-    // applied to the video element.
-    const myGen = ++syncGenerationRef.current;
-    const isStale = () => syncGenerationRef.current !== myGen;
+    const st = slotStateRef.current[slot];
+    const myGen = ++st.generation;
+    const isStale = () => st.generation !== myGen;
 
-    const media = videoRef.current;
+    const media = slotEl(slot);
     if (!media) return false;
 
     if (!segment) {
-      // No active segment — stop video completely and clear loaded URL so the
-      // next segment always triggers a fresh load (prevents stale frame showing).
-      detachTrimGuard();
+      detachTrimGuard(slot);
       media.pause();
       if (media.src) {
-        media.removeAttribute("src");
-        media.load();
-        lastLoadedVideoUrlRef.current = null;
+        st.loading = true;
+        try {
+          media.removeAttribute("src");
+          media.load();
+        } finally {
+          st.loading = false;
+        }
       }
+      st.loadedUrl = null;
+      st.clipId = null;
       return false;
     }
 
     try {
+      const fps = stateRef.current.sequenceFps;
       const nextUrl = segment.asset.previewUrl;
-      const urlChanged = lastLoadedVideoUrlRef.current !== nextUrl;
-      const targetTime = getTargetCurrentTime(segment, frame, stateRef.current.sequenceFps);
+      const urlChanged = st.loadedUrl !== nextUrl;
+      const targetTime = getTargetTimeWithHandles(stateRef.current.segments, segment, frame, fps);
+      const outTime = getPlayableOutTime(stateRef.current.segments, segment, fps);
 
-      // ── Determine whether a seek is needed BEFORE hiding ─────────────────
-      // We compute needsSeek first so we can hide proactively for ALL seeks,
-      // not just URL changes.  The root cause of the frame-0 flash on trimmed
-      // clips was: same URL → needsHide=false → video stayed visible → browser
-      // painted the previously-buffered frame (often frame 0 or wrong position)
-      // before seekMediaElement resolved.  Fix: hide whenever ANY seek happens.
+      // Determine whether a seek is needed BEFORE hiding.  The root cause of
+      // the frame-0 flash on trimmed clips was: same URL → no hide → browser
+      // painted the previously-buffered frame before seeked fired.  Fix: hide
+      // whenever ANY seek happens on a visible slot.
       const timeDrift = Math.abs(media.currentTime - targetTime);
-      const outOfBounds = media.currentTime > segment.sourceOutSeconds + framesToSeconds(1, stateRef.current.sequenceFps) ||
-        media.currentTime < segment.sourceInSeconds - framesToSeconds(1, stateRef.current.sequenceFps);
-      const needsSeek = urlChanged || !shouldPlay || outOfBounds ||
-        timeDrift > framesToSeconds(2, stateRef.current.sequenceFps);
+      const outOfBounds = media.currentTime > outTime + framesToSeconds(1, fps) ||
+        media.currentTime < Math.min(targetTime, segment.sourceInSeconds) - framesToSeconds(1, fps);
+      // When paused, a seek is skipped only if the element is already showing
+      // the exact frame (sub-frame drift with decoded data) — otherwise we
+      // would flash the stale frame.
+      const alreadyOnFrame = !urlChanged && !outOfBounds &&
+        timeDrift < framesToSeconds(0.5, fps) &&
+        media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      const needsSeek = urlChanged || outOfBounds ||
+        (!shouldPlay && !alreadyOnFrame) ||
+        timeDrift > framesToSeconds(2, fps);
 
-      // ── Hide video element during ANY load or seek ────────────────────────
-      // Hide BEFORE we start any async work so the browser cannot paint a
-      // wrong frame between now and when seeked fires.
-      // Covers: new URL load (urlChanged), trim-in/out change (same URL, different
-      // targetTime), scrub, out-of-bounds recovery, and play-start on any clip.
-      if (urlChanged || needsSeek) {
+      if (hideDuringSeek && (urlChanged || needsSeek)) {
         media.style.visibility = "hidden";
       }
 
       if (urlChanged) {
-        detachTrimGuard();
-        // ── Fast path when the lookahead pre-loaded this URL ─────────────
-        const preEl = preloadVideoRef.current;
-        const wasPreloaded =
-          preEl !== null &&
-          preloadedUrlRef.current === nextUrl &&
-          preEl.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
-        if (wasPreloaded) {
-          preloadedUrlRef.current = null; // slot is now consumed
-        }
-        // Set the loading flag so the emptied listener ignores this reset.
-        syncVideoLoadingRef.current = true;
+        detachTrimGuard(slot);
+        st.loading = true;
         try {
           // loadMediaSource is always called — when the browser cache is warm
           // the canplay event fires in <10 ms, making this effectively instant.
           await loadMediaSource(media, nextUrl, segment.asset.name);
         } finally {
-          syncVideoLoadingRef.current = false;
+          st.loading = false;
         }
-        lastLoadedVideoUrlRef.current = nextUrl;
+        st.loadedUrl = nextUrl;
         if (isStale()) { media.style.visibility = "visible"; return false; }
       }
 
       if (needsSeek) {
-        await seekMediaElement(media, targetTime, stateRef.current.sequenceFps);
+        await seekMediaElement(media, targetTime, fps);
         if (isStale()) { media.style.visibility = "visible"; return false; }
       }
 
       // Load + seek complete — the correct frame is decoded and ready.
-      // Restore visibility so the first painted frame is always correct.
       media.style.visibility = "visible";
+      st.clipId = segment.clip.id;
 
       if (shouldPlay) {
         const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
@@ -474,27 +537,44 @@ export function usePlaybackController({
         // Video element is muted — audio is handled by useMultiTrackAudio
         media.muted = true;
         media.volume = 1;
-        // Attach trim guard BEFORE play() so the boundary is enforced from frame 1
-        attachTrimGuard(media, segment);
+        attachTrimGuard(slot, media, segment);
         await media.play();
       } else {
-        detachTrimGuard();
+        detachTrimGuard(slot);
         media.pause();
       }
 
-      stateRef.current.onPlaybackMessage?.(null);
+      if (slot === primarySlotRef.current) stateRef.current.onPlaybackMessage?.(null);
       return true;
     } catch (error) {
-      // Always restore visibility on error to avoid leaving the viewer blank
-      if (videoRef.current) videoRef.current.style.visibility = "visible";
-      stateRef.current.onPlaybackMessage?.(getPlaybackErrorMessage(error));
+      const el = slotEl(slot);
+      if (el) el.style.visibility = "visible";
+      if (slot === primarySlotRef.current) {
+        stateRef.current.onPlaybackMessage?.(getPlaybackErrorMessage(error));
+      }
       return false;
     }
+  }
+
+  /** Sync the PRIMARY slot (the element that shows the active clip). */
+  function syncVideo(segment: TimelineSegment | null, frame: number, shouldPlay: boolean): Promise<boolean> {
+    return syncSlot(primarySlotRef.current, segment, frame, shouldPlay, true);
+  }
+
+  /**
+   * Sync the PARTNER slot.  During a blend it plays in lock-step with the
+   * primary; otherwise it sits paused on the next clip's first frame so a
+   * plain cut can swap slots with zero latency.
+   */
+  function syncPartner(segment: TimelineSegment | null, frame: number, shouldPlay: boolean): Promise<boolean> {
+    if (!videoBRef) return Promise.resolve(false);
+    return syncSlot(partnerSlot(), segment, frame, shouldPlay, false);
   }
 
   // ── pause ─────────────────────────────────────────────────────────────────
   function pausePlayback() {
     videoRef.current?.pause();
+    videoBRef?.current?.pause();
     pauseAudio();
 
     stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
@@ -518,9 +598,7 @@ export function usePlaybackController({
     const targetVideo = findActiveVideoSegmentAtFrame(segs, frame);
 
     // Block the scrub effect from racing us: while startingPlaybackRef is true,
-    // the scrub effect's syncVideo call is skipped.  This prevents the scrub
-    // effect (triggered by setPlayheadFrame below) from winning the generation
-    // counter and leaving the video paused instead of playing.
+    // the scrub effect's sync call is skipped.
     startingPlaybackRef.current = true;
 
     // Reset anchor; null out timestamp so RAF doesn't run ahead during load/seek
@@ -530,38 +608,21 @@ export function usePlaybackController({
     stateRef.current.setPlayheadFrame(frame);
 
     try {
-      // ── SYNC FIX: Run video seek FIRST, audio SECOND (sequential, not parallel)
-      //
-      // The previous Promise.all([syncVideo, startAudio]) caused permanent
-      // audio/playhead desync on every pause→resume:
-      //
-      //   1. startAudio() calls engine.preload() (instant on cache hit) then
-      //      engine.play() immediately.  Audio starts playing right away.
-      //   2. syncVideo() waits for canplay + seeked events — 200ms to 2000ms.
-      //   3. playbackStartedAt = performance.now() is stamped only after BOTH
-      //      resolve.  By that time audio has already played forward by the
-      //      full seek duration.
-      //   4. The RAF loop then computes elapsedFrames from the stamp — but
-      //      audio is already that many ms ahead, causing permanent drift that
-      //      compounds on every subsequent pause/resume.
-      //
-      // Sequential fix: seek video first (the slow operation), then start
-      // audio.  By the time startAudio() resolves, engine.play() has just
-      // scheduled nodes at (AudioContext.currentTime + START_LATENCY).
-      // We subtract START_LATENCY from the RAF clock anchor so the playhead
-      // accounts for the audio pre-schedule window and stays in sync.
+      // SYNC FIX: video seek FIRST, audio SECOND (sequential).  See git history
+      // for the audio/playhead drift analysis behind this ordering.
       await syncVideo(targetVideo, frame, true);
 
-      // ↓ Start audio AFTER video is loaded, seeked, and play() has been
-      //   called.  engine.play() schedules AudioBufferSourceNodes at
-      //   (ctx.currentTime + START_LATENCY_S) — typically 15 ms in the
-      //   future — so we backdate playbackStartedAt by the same amount.
+      // Partner: if a blend is in progress at this frame, start it too so the
+      // two layers move together from the very first frame.
+      const partner = stateRef.current.partnerSegment;
+      if (partner && stateRef.current.partnerIsBlending) {
+        void syncPartner(partner, frame, true);
+      }
+
       await startAudio(frame);
 
       // Stamp the RAF clock anchor.  Subtract START_LATENCY_MS so the
-      // playhead zero-point aligns with when audio actually starts playing,
-      // not when engine.play() was called.  This keeps video and audio
-      // perceptually in lock-step from the very first frame.
+      // playhead zero-point aligns with when audio actually starts playing.
       const START_LATENCY_MS = 15; // must match AudioEngine START_LATENCY (0.015 s)
       stateRef.current.playbackStartedAt = performance.now() - START_LATENCY_MS;
       stateRef.current.playbackAnchorFrame = frame;  // anchor stays at start frame
@@ -604,22 +665,15 @@ export function usePlaybackController({
 
   // ── Immediate video/audio stop when isPlaying changes to false externally ─
   // (e.g. dropping a new clip while playing, or clip removal from the store).
-  // This fires synchronously on the React render cycle, ensuring both the
-  // video element and all audio slots are silenced before the next effects run.
   useEffect(() => {
     if (!isPlaying) {
-      // Pause the video element right away — don't wait for syncVideo effect
-      const video = videoRef.current;
-      if (video && !video.paused) {
-        video.pause();
+      for (const video of [videoRef.current, videoBRef?.current ?? null]) {
+        if (video && !video.paused) video.pause();
       }
-      // Pause all audio slots immediately (same as pausePlayback, but driven
-      // by external store change rather than user action)
       pauseAudio();
-      // Reset RAF anchor so next play starts from the correct position
       stateRef.current.playbackStartedAt = null;
       stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
-      lastRafTimestampRef.current = null; // clear stall-detection history
+      lastRafTimestampRef.current = null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying]);
@@ -643,8 +697,7 @@ export function usePlaybackController({
         activeSegment: seg
       } = stateRef.current;
 
-      // BUG #25 fix: guard against corrupted project with fps=0 which would
-      // produce Infinity/NaN in framesToSeconds and elapsedFrames calculations.
+      // BUG #25 fix: guard against corrupted project with fps=0
       if (!fps || fps <= 0) {
         rafRef.current = requestAnimationFrame(step);
         return;
@@ -660,27 +713,16 @@ export function usePlaybackController({
 
       // ── Stall detection: compensate for RAF gaps caused by fullscreen
       //    transitions, OS-level tab switches, or resize events.
-      //    When the browser freezes the RAF loop (e.g. during a fullscreen
-      //    animation) the next frame arrives with a large timestamp gap.
-      //    Without compensation, elapsedFrames shoots way ahead and the
-      //    playhead jumps forward, desyncing audio from video.
-      //
-      //    Heuristic: any gap > 200 ms between consecutive RAF frames is
-      //    treated as a stall.  We shift playbackStartedAt forward by the
-      //    stall duration (minus one normal frame interval) so the elapsed
-      //    time calculation stays accurate.
       {
         const prevTs = lastRafTimestampRef.current;
         const oneFrameMs = 1000 / fps;
         if (prevTs !== null && timestamp - prevTs > 200) {
-          // Stall detected: amount of "lost" time beyond a normal frame gap
           const stallMs = (timestamp - prevTs) - oneFrameMs;
           stateRef.current.playbackStartedAt = playbackStartedAt + stallMs;
         }
         lastRafTimestampRef.current = timestamp;
       }
 
-      // Re-read playbackStartedAt in case stall detection adjusted it above
       const startedAt = stateRef.current.playbackStartedAt ?? playbackStartedAt;
 
       const elapsedFrames = ((timestamp - startedAt) / 1000) * fps;
@@ -692,58 +734,25 @@ export function usePlaybackController({
       }
 
       // ── TRIM ENFORCEMENT ──────────────────────────────────────────────────
-      // The HTML <video> element plays the raw source file and has no concept
-      // of trimStartFrames/trimEndFrames.  If it overshoots the trim end:
-      //   • Pause it so no new frames are decoded/rendered past the cut.
-      //   • Do NOT reset currentTime here — that causes a loop (reset→play
-      //     past end→reset→…).  The next syncVideo call will seek correctly.
-      const video = videoRef.current;
+      // The <video> element plays the raw source and has no concept of the
+      // clip's out point.  If the primary overshoots its playable end, pause it.
+      const video = primaryEl();
       if (video && seg && !video.paused) {
-        const outTime = seg.sourceOutSeconds;
+        const outTime = getPlayableOutTime(stateRef.current.segments, seg, fps);
         if (video.currentTime > outTime + framesToSeconds(1, fps)) {
           video.pause();
         }
       }
 
-      // ── VIDEO LOOKAHEAD PREFETCH ──────────────────────────────────────────
-      // When playing, look ahead LOOKAHEAD_FRAMES for the next video clip with
-      // a DIFFERENT source URL and start loading it into the hidden preload
-      // element.  This eliminates the canplay wait in syncVideo when the seam
-      // arrives, turning it into a near-instant seek + play swap.
-      if (seg) {
-        const VIDEO_LOOKAHEAD_FRAMES = 90; // ~3 s at 30 fps
-        const lookaheadFrame = nextFrame + VIDEO_LOOKAHEAD_FRAMES;
-        const segs = stateRef.current.segments;
-        // Find the next video segment that starts within the lookahead window
-        // and has a different source URL than the current clip.
-        const upcomingSeg = segs.find(
-          (s) =>
-            s.track.kind === "video" &&
-            s.clip.isEnabled &&
-            !s.track.muted &&
-            s.startFrame > nextFrame &&
-            s.startFrame <= lookaheadFrame &&
-            s.asset.previewUrl !== seg.asset.previewUrl
-        );
-        if (upcomingSeg) {
-          const nextUrl = upcomingSeg.asset.previewUrl;
-          if (nextUrl && preloadedUrlRef.current !== nextUrl) {
-            preloadedUrlRef.current = nextUrl;
-            const preEl = getPreloadElement();
-            if (preEl.src !== nextUrl) {
-              preEl.src = nextUrl;
-              preEl.load();
-              // Once enough data is buffered, seek the preload element to the
-              // clip's in-point so the decode pipeline is warm at exactly the
-              // right position.  This makes the subsequent seek on the main
-              // element near-instant (browser serves from decode cache).
-              preEl.addEventListener("canplay", () => {
-                if (preEl.src === nextUrl) {
-                  preEl.currentTime = upcomingSeg.sourceInSeconds;
-                }
-              }, { once: true });
-            }
-          }
+      // ── Partner drift correction (during a blend) ─────────────────────────
+      // Both elements are free-running; if the partner drifts more than ~3
+      // frames from where it should be, nudge it (rare — same clock).
+      const partner = stateRef.current.partnerSegment;
+      const pEl = partnerEl();
+      if (partner && pEl && stateRef.current.partnerIsBlending && !pEl.paused && !pEl.seeking) {
+        const want = getTargetTimeWithHandles(stateRef.current.segments, partner, nextFrame, fps);
+        if (Math.abs(pEl.currentTime - want) > framesToSeconds(3, fps)) {
+          pEl.currentTime = want;
         }
       }
 
@@ -766,28 +775,139 @@ export function usePlaybackController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying, totalFrames]);
 
+  // ── active clip change ────────────────────────────────────────────────────
+  // When the active clip changes (playing or paused) and the PARTNER slot is
+  // already holding that clip, swap roles instead of reloading — that is the
+  // whole point of the second element: the seam costs nothing.
+  //
+  // While playing and no swap is possible we fall back to the historic path:
+  // freeze the RAF clock, load/seek the primary, then re-anchor.
+  useEffect(() => {
+    const frameAtChange = stateRef.current.playheadFrame;
+
+    if (!activeSegment) {
+      if (isPlaying) {
+        stateRef.current.playbackStartedAt = null;
+        void syncVideo(null, frameAtChange, false);
+        pausePlayback();
+      }
+      return;
+    }
+
+    // ── Slot swap ───────────────────────────────────────────────────────────
+    if (videoBRef) {
+      const pSlot = partnerSlot();
+      const pSt = slotStateRef.current[pSlot];
+      const pEl = slotEl(pSlot);
+      if (pEl && pSt.clipId === activeSegment.clip.id && pSt.loadedUrl === activeSegment.asset.previewUrl) {
+        const fps = stateRef.current.sequenceFps;
+        const want = getTargetTimeWithHandles(stateRef.current.segments, activeSegment, frameAtChange, fps);
+        const drift = Math.abs(pEl.currentTime - want);
+        swapSlots();
+        // The old primary becomes the partner; the partner effect decides what
+        // it should hold next.  Make sure the new primary is running.
+        pEl.style.visibility = "visible";
+        if (isPlaying) {
+          if (drift > framesToSeconds(3, fps) || pEl.paused) {
+            // Pre-rolled (paused on first frame) — start it now.  A seek is
+            // only needed if it is not already at the right spot.
+            if (drift > framesToSeconds(2, fps)) pEl.currentTime = want;
+            pEl.playbackRate = Math.max(0.25, Math.min(4, activeSegment.clip.speed ?? 1));
+            attachTrimGuard(pSlot, pEl, activeSegment);
+            void pEl.play().catch(() => {});
+          } else {
+            attachTrimGuard(pSlot, pEl, activeSegment);
+          }
+          // Re-anchor so accumulated drift is zeroed out from this frame forward.
+          stateRef.current.playbackAnchorFrame = frameAtChange;
+          stateRef.current.playbackStartedAt = performance.now();
+          lastRafTimestampRef.current = null;
+        }
+        return;
+      }
+    }
+
+    if (!isPlaying) return; // scrub effect handles paused loads
+
+    const media = primaryEl();
+    const pst = slotStateRef.current[primarySlotRef.current];
+    const newUrl = activeSegment.asset.previewUrl;
+    const urlChanged = pst.loadedUrl !== newUrl;
+    // Same-URL segment change (e.g. split clip seam): if the element is already
+    // at the right position keep the RAF clock running — no stutter.
+    if (!urlChanged && media) {
+      const targetTime = getTargetCurrentTime(activeSegment, frameAtChange, stateRef.current.sequenceFps);
+      const timeDrift = Math.abs(media.currentTime - targetTime);
+      const twoFrames = framesToSeconds(2, stateRef.current.sequenceFps);
+      if (timeDrift < twoFrames && !media.paused) {
+        pst.clipId = activeSegment.clip.id;
+        attachTrimGuard(primarySlotRef.current, media, activeSegment);
+        stateRef.current.playbackAnchorFrame = frameAtChange;
+        stateRef.current.playbackStartedAt = performance.now();
+        lastRafTimestampRef.current = null;
+        return;
+      }
+    }
+
+    stateRef.current.playbackStartedAt = null;  // freeze RAF during load/seek
+    lastRafTimestampRef.current = null;
+    void syncVideo(activeSegment, frameAtChange, true).then(() => {
+      stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
+      stateRef.current.playbackStartedAt = performance.now();
+      lastRafTimestampRef.current = null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying]);
+
   // ── sync when NOT playing (scrub / seek) ──────────────────────────────────
-  // This is the SOLE loader/seeker for the video element when not playing.
-  // It fires whenever: playhead moves (scrub), active clip changes, trim
-  // changes (sourceInSeconds/sourceOutSeconds), or asset URL changes.
-  // The generation counter inside syncVideo ensures concurrent calls from
-  // rapid scrubbing don't produce stale seeks that overwrite the latest frame.
+  // This is the SOLE loader/seeker for the primary element when not playing.
   useEffect(() => {
     if (isPlaying) return;
-    // Skip if startPlaybackAtFrame is in progress — the play-start syncVideo
-    // owns the generation counter during startup and must not be interrupted
-    // by this effect firing when playheadFrame is updated by setPlayheadFrame.
     if (startingPlaybackRef.current) return;
     void syncVideo(activeSegment, playheadFrame, false);
     // Audio scrub is handled by useMultiTrackAudio's own effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying, playheadFrame]);
 
-  // ── FIX 4: Immediately apply playback speed change to video element ────────
-  // When clip speed changes while playing, update playbackRate in-place
-  // without seeking (no stutter, instant feedback).
+  // ── partner slot sync (playing or not) ────────────────────────────────────
+  // Keeps the second element holding the right clip at the right time.  While
+  // blending it plays (when we play) so both layers advance together; while
+  // merely pre-rolled it stays paused on its first frame.
   useEffect(() => {
-    const video = videoRef.current;
+    if (!videoBRef) return;
+    if (startingPlaybackRef.current) return;
+    if (!partnerSegment) {
+      // Nothing to hold — release the slot only if it is not the primary.
+      void syncPartner(null, playheadFrame, false);
+      return;
+    }
+    const pEl = partnerEl();
+    if (!pEl) return;
+    const st = slotStateRef.current[partnerSlot()];
+    const sameClip = st.clipId === partnerSegment.clip.id && st.loadedUrl === partnerSegment.asset.previewUrl;
+    const shouldPlay = isPlaying && partnerIsBlending;
+
+    if (sameClip && isPlaying) {
+      // Already holding the clip.  Only intervene at state changes:
+      if (shouldPlay && pEl.paused) {
+        // Blend just started — seek to the exact frame and run.
+        void syncPartner(partnerSegment, playheadFrame, true);
+      } else if (!shouldPlay && !pEl.paused) {
+        pEl.pause();
+      }
+      return;
+    }
+    if (sameClip && !isPlaying && !partnerIsBlending) {
+      // Paused, pre-rolled — nothing to update.
+      return;
+    }
+    void syncPartner(partnerSegment, playheadFrame, shouldPlay);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partnerSegment?.clip.id, partnerSegment?.asset.previewUrl, partnerSegment?.sourceInSeconds, partnerSegment?.sourceOutSeconds, partnerIsBlending, isPlaying, isPlaying ? 0 : playheadFrame, primarySlot]);
+
+  // ── FIX 4: Immediately apply playback speed change to video element ────────
+  useEffect(() => {
+    const video = primaryEl();
     const seg = activeSegment;
     if (!video || !seg) return;
     const newRate = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
@@ -797,71 +917,14 @@ export function usePlaybackController({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.speed]);
 
-  // ── sync when PLAYING and video segment changes ───────────────────────────
-  // When the active clip changes mid-play (different clip.id OR url changed due
-  // to track-switch OR trim point changed) we need to reload/seek the video element.
-  // Also handles the case where the active segment disappears (clip removed from timeline):
-  // in that case activeSegment is null and syncVideo will clear the video element.
-  useEffect(() => {
-    if (!isPlaying) return;
-    const frameAtChange = stateRef.current.playheadFrame;
-    if (!activeSegment) {
-      // Clip was removed from timeline while playing — stop everything cleanly
-      stateRef.current.playbackStartedAt = null;
-      void syncVideo(null, frameAtChange, false);
-      pausePlayback();
-      return;
-    }
-
-    const media = videoRef.current;
-    const newUrl = activeSegment.asset.previewUrl;
-    const urlChanged = lastLoadedVideoUrlRef.current !== newUrl;
-    // For same-URL segment changes (e.g. split clip seam), check if the video
-    // is already at the right position. If drift < 2 frames, skip the
-    // playbackStartedAt freeze entirely — the RAF keeps running uninterrupted,
-    // which eliminates the 1-3 frame video stutter at split seams.
-    if (!urlChanged && media) {
-      const targetTime = getTargetCurrentTime(activeSegment, frameAtChange, stateRef.current.sequenceFps);
-      const timeDrift = Math.abs(media.currentTime - targetTime);
-      const twoFrames = framesToSeconds(2, stateRef.current.sequenceFps);
-      if (timeDrift < twoFrames && !media.paused) {
-        // Video is already playing at the right position — just update the
-        // trim guard for the new segment and keep the RAF clock running.
-        attachTrimGuard(media, activeSegment);
-        // Re-anchor so accumulated drift is zeroed out from this frame forward.
-        stateRef.current.playbackAnchorFrame = frameAtChange;
-        stateRef.current.playbackStartedAt = performance.now();
-        lastRafTimestampRef.current = null; // reset stall history after re-anchor
-        return;
-      }
-    }
-
-    stateRef.current.playbackStartedAt = null;  // freeze RAF during load/seek
-    lastRafTimestampRef.current = null; // reset stall history during freeze
-    void syncVideo(activeSegment, frameAtChange, true).then(() => {
-      // Re-anchor from the frame we were at when the segment changed
-      stateRef.current.playbackAnchorFrame = stateRef.current.playheadFrame;
-      stateRef.current.playbackStartedAt = performance.now();
-      lastRafTimestampRef.current = null; // start fresh after re-anchor
-    });
-    // Audio segment changes are handled by useMultiTrackAudio
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying]);
-
-  // NOTE: The separate "preload on mount" effect that previously lived here
-  // was removed.  The scrub effect at line ~602 already handles load + seek
-  // whenever activeSegment appears or playheadFrame changes while not playing.
-  // Having two concurrent loaders caused a race where they both called
-  // loadMediaSource on the same element, the second call canceling the first
-  // and leaving the video at currentTime=0 (source frame 0) instead of the
-  // correct trim in-point.
-
   // ── cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      detachTrimGuard();
+      detachTrimGuard(0);
+      detachTrimGuard(1);
       videoRef.current?.pause();
+      videoBRef?.current?.pause();
       stopAudio();
       // Dispose AudioScheduler — releases AudioContext and cached buffers
       schedulerRef.current?.dispose();
@@ -870,19 +933,9 @@ export function usePlaybackController({
         void sharedAudioContext.close();
         sharedAudioContext = null;
       }
-      // Clean up hidden preload element
-      const preEl = preloadVideoRef.current;
-      if (preEl) {
-        preEl.pause();
-        preEl.src = "";
-        preEl.load();
-        preEl.parentNode?.removeChild(preEl);
-        preloadVideoRef.current = null;
-        preloadedUrlRef.current = null;
-      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { togglePlayback, pausePlayback, stopPlayback, audioEngineRef };
+  return { togglePlayback, pausePlayback, stopPlayback, audioEngineRef, primarySlot };
 }

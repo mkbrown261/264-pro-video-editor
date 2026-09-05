@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   type ClipEffect,
   type ClipMask,
+  type ClipTransition,
   type ClipTransitionType,
   type ColorGrade,
   type ColorStill,
@@ -34,6 +35,13 @@ import {
   getTrackEndFrame,
   normalizeTimelineFps
 } from "../../shared/timeline";
+import {
+  applyJunctionTransition,
+  findNextAdjacentSegment,
+  findPrevAdjacentSegment,
+  getEffectiveEdgeTransition,
+  getMaxJunctionDurationFrames
+} from "../../shared/transitions";
 
 type EditorProjectState = ReturnType<typeof createEmptyProject>;
 
@@ -794,6 +802,71 @@ function withUndo(
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
+/**
+ * Set (or clear with `transition = null`) the transition on the cut at `edge`
+ * of `clipId`.  Video/audio linked pairs are handled together: the video clip
+ * owns the visual transition, and the linked audio clip receives a matching
+ * audio fade record on the same edge so the mixer cross-fades at the cut.
+ *
+ * Exactly one record ever describes a cut (outgoing clip's `transitionOut`);
+ * the incoming clip's `transitionIn` is cleared.  Durations are clamped so
+ * neither clip loses its last un-blended frame.  See src/shared/transitions.ts.
+ */
+function setJunctionTransition(
+  set: (fn: (state: EditorStore) => Partial<EditorStore>) => void,
+  state: EditorStore,
+  clipId: string,
+  edge: "in" | "out",
+  transition: ClipTransition | null,
+  label: string
+): string {
+  const target = getTransitionTargetClip(state.project, clipId);
+  if (!target) return "Transitions apply to video clips.";
+  const asset = state.project.assets.find((a) => a.id === target.assetId);
+  if (!asset) return "The selected clip is missing its source media.";
+
+  const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+  const seg = segs.find((s) => s.clip.id === target.id);
+  if (!seg) return "The selected clip is not on the timeline.";
+
+  if (transition && transition.type !== "cut") {
+    const neighbour = edge === "out" ? findNextAdjacentSegment(segs, seg) : findPrevAdjacentSegment(segs, seg);
+    const maxDur = getMaxJunctionDurationFrames(seg.durationFrames, neighbour ? neighbour.durationFrames : null);
+    if (maxDur < 1) return "Clip is too short for that transition.";
+  }
+
+  set(withUndo(label, (s) => {
+    const t = getTransitionTargetClip(s.project, clipId);
+    if (!t) return s;
+    const allSegs = buildTimelineSegments(s.project.sequence, s.project.assets);
+    let clips = applyJunctionTransition(s.project.sequence.clips, allSegs, t.id, edge, transition);
+
+    // Mirror onto linked audio clips (same linked group, audio track) so the
+    // audio engine fades across the cut in step with the picture.  Audio uses
+    // the same junction rules on its own track.
+    const linked = getLinkedClips({ ...s.project, sequence: { ...s.project.sequence, clips } }, t.id)
+      .filter((c) => c.id !== t.id);
+    for (const lc of linked) {
+      const track = s.project.sequence.tracks.find((tr) => tr.id === lc.trackId);
+      if (track?.kind !== "audio") continue;
+      const audioRecord: ClipTransition | null = transition && transition.type !== "cut"
+        ? { type: "fade", durationFrames: transition.durationFrames }
+        : null;
+      const segsNow = buildTimelineSegments({ ...s.project.sequence, clips }, s.project.assets);
+      clips = applyJunctionTransition(clips, segsNow, lc.id, edge, audioRecord);
+    }
+
+    return {
+      project: { ...s.project, sequence: { ...s.project.sequence, clips } },
+      selectedClipId: t.id,
+      selectedAssetId: t.assetId
+    };
+  }));
+
+  if (!transition) return "Transition cleared.";
+  return `${transition.type} ${edge === "in" ? "in" : "out"} transition applied.`;
+}
+
 export const useEditorStore = create<EditorStore>((set, get) => ({
   project: createEmptyProject(),
   selectedAssetId: null,
@@ -1381,135 +1454,47 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   // ── Transitions ───────────────────────────────────────────────────────────
 
   applyTransitionToSelectedClip: (edge, type = "fade") => {
-    const state = useEditorStore.getState();
+    const state = get();
     if (!state.selectedClipId) return "Select a timeline clip before adding a transition.";
-    const target = getTransitionTargetClip(state.project, state.selectedClipId);
-    if (!target) return "Transitions apply to video clips.";
-    const asset = state.project.assets.find((a) => a.id === target.assetId);
-    if (!asset) return "The selected clip is missing its source media.";
-    const dur = getClipDurationFrames(target, asset, state.project.sequence.settings.fps);
-    const tDur = getClipTransitionDurationFrames(
-      { type, durationFrames: Math.max(6, Math.round(state.project.sequence.settings.fps * 0.5)) },
-      dur
-    );
-    if (tDur < 1) return "Clip is too short for that transition.";
-
-    set(withUndo("Apply Transition", (s) => {
-      const t = getTransitionTargetClip(s.project, s.selectedClipId!);
-      if (!t) return s;
-      return {
-        project: {
-          ...s.project,
-          sequence: {
-            ...s.project.sequence,
-            clips: s.project.sequence.clips.map((c) => {
-              if (c.id !== t.id) return c;
-              return edge === "in"
-                ? { ...c, transitionIn: { type, durationFrames: tDur } }
-                : { ...c, transitionOut: { type, durationFrames: tDur } };
-            })
-          }
-        },
-        selectedClipId: t.id,
-        selectedAssetId: t.assetId
-      };
-    }));
-    return `${type} ${edge === "in" ? "in" : "out"} transition added.`;
+    const fps = state.project.sequence.settings.fps;
+    return setJunctionTransition(set, state, state.selectedClipId, edge, {
+      type,
+      durationFrames: Math.max(6, Math.round(fps * 0.5))
+    }, "Apply Transition");
   },
 
   setSelectedClipTransitionType: (edge, type) => {
-    const state = useEditorStore.getState();
+    const state = get();
     if (!state.selectedClipId) return "Select a clip first.";
     const target = getTransitionTargetClip(state.project, state.selectedClipId);
     if (!target) return "Transitions apply to video clips.";
-    const asset = state.project.assets.find((a) => a.id === target.assetId);
-    if (!asset) return "Missing source media.";
+    const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+    const current = getEffectiveEdgeTransition(segs, target.id, edge);
     const fps = state.project.sequence.settings.fps;
-    const dur = getClipDurationFrames(target, asset, fps);
-    const current = edge === "in" ? target.transitionIn : target.transitionOut;
-    const tDur = getClipTransitionDurationFrames(
-      { type, durationFrames: current?.durationFrames ?? Math.max(6, Math.round(fps * 0.5)) },
-      dur
-    );
-    if (tDur < 1) return "Clip too short for that transition.";
-
-    set(withUndo("Set Transition Type", (s) => {
-      const t = getTransitionTargetClip(s.project, s.selectedClipId!);
-      if (!t) return s;
-      return {
-        project: {
-          ...s.project,
-          sequence: {
-            ...s.project.sequence,
-            clips: s.project.sequence.clips.map((c) => {
-              if (c.id !== t.id) return c;
-              return edge === "in"
-                ? { ...c, transitionIn: { type, durationFrames: tDur } }
-                : { ...c, transitionOut: { type, durationFrames: tDur } };
-            })
-          }
-        },
-        selectedClipId: t.id,
-        selectedAssetId: t.assetId
-      };
-    }));
-    return `Transition type updated to ${type}.`;
+    return setJunctionTransition(set, state, state.selectedClipId, edge, {
+      type,
+      durationFrames: current?.durationFrames ?? Math.max(6, Math.round(fps * 0.5))
+    }, "Set Transition Type");
   },
 
   setSelectedClipTransitionDuration: (edge, durationFrames) => {
-    const state = useEditorStore.getState();
+    const state = get();
     if (!state.selectedClipId) return "Select a clip first.";
     const target = getTransitionTargetClip(state.project, state.selectedClipId);
     if (!target) return "Transitions apply to video clips.";
-    const asset = state.project.assets.find((a) => a.id === target.assetId);
-    if (!asset) return "Missing source media.";
-    const fps = state.project.sequence.settings.fps;
-    const dur = getClipDurationFrames(target, asset, fps);
-    const current = edge === "in" ? target.transitionIn : target.transitionOut;
-    const tDur = getClipTransitionDurationFrames(
-      durationFrames > 0 ? { type: current?.type ?? "fade", durationFrames } : null,
-      dur
-    );
-
-    set(withUndo("Set Transition Duration", (s) => {
-      const t = getTransitionTargetClip(s.project, s.selectedClipId!);
-      if (!t) return s;
-      // Apply fade to the target clip AND all clips in the same linked group
-      // so audio clip gets the same fade as its paired video clip
-      const linkedIds = new Set(
-        t.linkedGroupId
-          ? s.project.sequence.clips
-              .filter((c) => c.linkedGroupId === t.linkedGroupId)
-              .map((c) => c.id)
-          : [t.id]
-      );
-      return {
-        project: {
-          ...s.project,
-          sequence: {
-            ...s.project.sequence,
-            clips: s.project.sequence.clips.map((c) => {
-              if (!linkedIds.has(c.id)) return c;
-              const existingType = (edge === "in" ? c.transitionIn?.type : c.transitionOut?.type) ?? "fade";
-              return edge === "in"
-                ? { ...c, transitionIn: tDur > 0 ? { type: existingType, durationFrames: tDur } : null }
-                : { ...c, transitionOut: tDur > 0 ? { type: existingType, durationFrames: tDur } : null };
-            })
-          }
-        },
-        selectedClipId: t.id,
-        selectedAssetId: t.assetId
-      };
-    }));
-    return tDur > 0 ? `Transition duration updated.` : `Transition cleared.`;
+    const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+    const current = getEffectiveEdgeTransition(segs, target.id, edge);
+    if (durationFrames <= 0) {
+      return setJunctionTransition(set, state, state.selectedClipId, edge, null, "Clear Transition");
+    }
+    return setJunctionTransition(set, state, state.selectedClipId, edge, {
+      type: current?.type ?? "fade",
+      durationFrames
+    }, "Set Transition Duration");
   },
 
   clearTransition: (clipId, edge) => {
-    set(withUndo("Clear Transition", (state) => updateClipInState(state, clipId, (c) => ({
-      ...c,
-      transitionIn: edge === "in" ? null : c.transitionIn,
-      transitionOut: edge === "out" ? null : c.transitionOut
-    }))));
+    setJunctionTransition(set, get(), clipId, edge, null, "Clear Transition");
   },
 
   // ── Audio ─────────────────────────────────────────────────────────────────
@@ -3320,3 +3305,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
   },
 }));
+
+// Expose the store for automated UI testing / debugging (dev builds and browser
+// preview only — never in the packaged Electron app).
+if (typeof window !== "undefined" && (import.meta.env?.DEV || !("editorApi" in window))) {
+  (window as unknown as { __editorStore?: typeof useEditorStore }).__editorStore = useEditorStore;
+}
