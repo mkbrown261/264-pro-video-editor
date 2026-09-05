@@ -5,7 +5,7 @@ app.name = "264 Pro";
 process.title = "264 Pro";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, extname, join } from "node:path";
@@ -227,8 +227,27 @@ async function createMediaResponse(request: Request): Promise<Response> {
 
 // ── Splash screen ─────────────────────────────────────────────────────────────
 
+// Resolve a file inside build-assets/ for both dev and packaged builds.
+// Packaged: build-assets/ is shipped via electron-builder `extraResources`,
+//           so it lives next to app.asar under process.resourcesPath.
+// Dev:      app.getAppPath() is the project root.
+function getBuildAssetPath(name: string): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, "build-assets", name)
+    : join(app.getAppPath(), "build-assets", name);
+}
+
 function createSplashWindow(): BrowserWindow {
-  const splashPath = join(__dirname, "../../build-assets/splash.png");
+  // The splash page is served from a data: URL, and Chromium refuses to let a
+  // data: document load file:// resources ("Not allowed to load local resource").
+  // Inline the PNG as a base64 data URI instead so it always renders.
+  let splashSrc = "";
+  try {
+    const png = readFileSync(getBuildAssetPath("splash.png"));
+    splashSrc = `data:image/png;base64,${png.toString("base64")}`;
+  } catch (err) {
+    console.warn("[splash] Could not read splash.png:", err instanceof Error ? err.message : String(err));
+  }
 
   const splash = new BrowserWindow({
     width: 960,
@@ -301,7 +320,7 @@ function createSplashWindow(): BrowserWindow {
 </head>
 <body>
 <div class="wrap">
-  <img src="file://${splashPath.replace(/\\/g, "/")}" alt="264 Pro Video Editor"/>
+  ${splashSrc ? `<img src="${splashSrc}" alt="264 Pro Video Editor"/>` : ""}
   <div class="bar-wrap">
     <div class="bar-track"><div class="bar-fill"></div></div>
     <span class="tag">Loading…</span>
