@@ -4,3 +4,6 @@ dist-electron
 release
 *.log
 *.pdf
+public/test-media/
+pwtest/node_modules/
+pwtest/shots/

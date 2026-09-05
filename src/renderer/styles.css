@@ -1131,10 +1131,13 @@ kbd {
 
 /* ── Trim handles ────────────────────────────────────────────────────────────── */
 .timeline-clip-handle {
-  position: absolute;
+  /* !important: the global `[title] { position: relative }` tooltip rule below
+     otherwise wins and collapses the handle to 0px tall (untrimmable clips). */
+  position: absolute !important;
   top: 0;
   bottom: 0;
-  z-index: 10;
+  /* Above the 18px fade handles so the outer 7px of a clip always trims. */
+  z-index: 20;
   width: 7px;
   background: rgba(255,255,255,0.12);
   cursor: ew-resize;
@@ -4112,7 +4115,7 @@ kbd {
 /* ═══════════════════════════════════════════════════════════════════════════
    BUTTON TOOLTIP SYSTEM
    ══════════════════════════════════════════════════════════════════════════ */
-[title]:not(input):not(select):not(textarea) {
+[title]:not(input):not(select):not(textarea):not(.timeline-clip-handle):not(.fade-handle):not(.timeline-transition-pill) {
   position: relative;
 }
 .panel-action[title]:hover::after,

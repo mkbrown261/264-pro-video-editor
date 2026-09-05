@@ -3320,3 +3320,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
   },
 }));
+
+// Expose the store for automated UI testing / debugging (dev builds and browser
+// preview only — never in the packaged Electron app).
+if (typeof window !== "undefined" && (import.meta.env?.DEV || !("editorApi" in window))) {
+  (window as unknown as { __editorStore?: typeof useEditorStore }).__editorStore = useEditorStore;
+}

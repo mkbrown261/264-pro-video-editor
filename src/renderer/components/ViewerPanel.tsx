@@ -80,6 +80,21 @@ interface ViewerPanelProps {
 
 // ─── Transition helpers ───────────────────────────────────────────────────────
 
+/**
+ * The viewer currently renders a SINGLE <video> element, so there is never a
+ * second (incoming/outgoing) frame available to feed the WebGL shaders.
+ * Feeding the same element as both `from` and `to` makes every GL transition
+ * render clip A at 100% opacity over the CSS fade — i.e. a visual no-op that
+ * ends in a hard cut (verified with Playwright pixel sampling).
+ * Until true A/B rendering exists, route these types through the CSS
+ * approximations, which at least animate. Flip this on once a second video
+ * element for the adjacent clip is wired into renderTransitionFrame.
+ */
+const WEBGL_TRANSITIONS_ENABLED = false;
+function useGlTransition(type: ClipTransitionType): boolean {
+  return WEBGL_TRANSITIONS_ENABLED && isWebGLTransition(type);
+}
+
 function getPreviewOpacity(activeSegment: TimelineSegment | null, frame: number): number {
   if (!activeSegment) return 1;
   const offset = Math.max(0, frame - activeSegment.startFrame);
@@ -654,7 +669,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       const canvas = webglCanvasRef.current;
       const video  = videoRef.current;
       if (!canvas || !video) return;
-      if (!transitionState || !isWebGLTransition(transitionState.type)) {
+      if (!transitionState || !useGlTransition(transitionState.type)) {
         if (webglRafRef.current) {
           cancelAnimationFrame(webglRafRef.current);
           webglRafRef.current = 0;
@@ -666,7 +681,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       const tick = () => {
         if (!alive) return;
         const ts = transitionState; // capture for closure
-        if (ts && isWebGLTransition(ts.type) && canvas && video) {
+        if (ts && useGlTransition(ts.type) && canvas && video) {
           renderTransitionFrame(canvas, ts.type, video, video, ts.progress, performance.now() / 1000);
         }
         webglRafRef.current = requestAnimationFrame(tick);
@@ -965,7 +980,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           )}
 
           {/* Transition overlay (CSS-based for non-WebGL transitions) */}
-          {previewAsset && transitionState && !isWebGLTransition(transitionState.type) && (
+          {previewAsset && transitionState && !useGlTransition(transitionState.type) && (
             <div
               className={`viewer-transition-overlay ${transitionState.type}`}
               style={overlayStyle}
@@ -983,7 +998,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
               position: "absolute", inset: 0, width: "100%", height: "100%",
               pointerEvents: "none", zIndex: 10,
               // Only show when a WebGL transition is actually active
-              display: (previewAsset && transitionState && isWebGLTransition(transitionState.type)) ? "block" : "none",
+              display: (previewAsset && transitionState && useGlTransition(transitionState.type)) ? "block" : "none",
             }}
           />
 
