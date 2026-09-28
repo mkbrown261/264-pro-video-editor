@@ -292,6 +292,14 @@ export interface ColorStill {
 /** Log-to-linear input transform — applied BEFORE all other grade operations */
 export type LogInputTransform = 'none' | 'slog2' | 'slog3' | 'clog' | 'clog2' | 'clog3' | 'logc' | 'log3g10' | 'vlog' | 'rec709';
 
+/** A serial color-correction node (node 2+ in the clip's grade chain). */
+export interface GradeNode {
+  id: string;
+  label: string;
+  enabled: boolean;
+  grade: ColorGrade;
+}
+
 export interface ColorGrade {
   /** Camera log input transform. Converts log footage to Rec.709 before grading. */
   logInputTransform?: LogInputTransform;
@@ -481,6 +489,8 @@ export interface TimelineClip {
   gradeVersions?: Partial<Record<'A' | 'B' | 'C', ColorGrade>>;
   /** Active grade slot: 'A' (default), 'B', or 'C' */
   activeGradeSlot?: 'A' | 'B' | 'C';
+  /** Extra serial color nodes applied after `colorGrade` (node 1), in order. */
+  gradeNodes?: GradeNode[];
   volume: number;  // 0-2
   speed: number;   // 0.1-4.0 (1=normal)
   transform: ClipTransform | null;  // null = use default (identity)
