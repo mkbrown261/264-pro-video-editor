@@ -248,7 +248,7 @@
       <button class="back-btn" id="btn-back-dev">← Back</button>
       <div class="headline" style="margin-bottom:8px;font-size:15px">Dev Bypass Key</div>
       <div class="subline" style="margin-bottom:16px;font-size:12px">Enter your developer key to skip FlowState authentication.</div>
-      <input class="dev-input" id="dev-key-input" type="text" placeholder="DEV-FS264-MKBROWN-2026-BYPASS" spellcheck="false" autocomplete="off">
+      <input class="dev-input" id="dev-key-input" type="text" placeholder="Developer key" spellcheck="false" autocomplete="off">
       <button class="btn btn-primary" id="btn-submit-dev">Unlock Editor</button>
       <div class="error-msg" id="dev-error"></div>
     </div>
@@ -258,7 +258,6 @@
 </div>
 
 <script>
-  const DEV_BYPASS_KEY = 'DEV-FS264-MKBROWN-2026-BYPASS';
   const FS_BASE_URL    = 'https://flowstate-67g.pages.dev';  // production FlowState
 
   function show(screenId) {
@@ -294,11 +293,12 @@
     if (e.key === 'Enter') submitDevKey();
   });
 
-  function submitDevKey() {
+  // The key is validated by the main process (FS264_DEV_KEY), never in the page.
+  async function submitDevKey() {
     const key = document.getElementById('dev-key-input').value.trim();
-    if (key === DEV_BYPASS_KEY) {
-      window.electronAPI.submitDevKey(key);
-    } else {
+    if (!key) return;
+    const res = await window.electronAPI.submitDevKey(key);
+    if (res && res.success === false) {
       document.getElementById('dev-error').textContent = 'Invalid key. Check your developer documentation.';
       document.getElementById('dev-key-input').style.borderColor = 'rgba(248,113,113,0.5)';
     }

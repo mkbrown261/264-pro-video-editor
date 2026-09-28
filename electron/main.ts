@@ -5,11 +5,27 @@ app.name = "264 Pro";
 process.title = "264 Pro";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
-import { createReadStream } from "node:fs";
+import { createReadStream, openAsBlob, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
+
+// This file is an ES module; handlers that lazily load CommonJS packages
+// (http, ffmpeg-static, …) need a real require().
+const require = createRequire(import.meta.url);
+
+/** Groq key from the environment or the user's saved settings. */
+function getGroqKey(): string {
+  if (process.env.GROQ_API_KEY) return process.env.GROQ_API_KEY;
+  try {
+    const settings = JSON.parse(readFileSync(join(app.getPath("userData"), "settings.json"), "utf8"));
+    return typeof settings.groqApiKey === "string" ? settings.groqApiKey : "";
+  } catch {
+    return "";
+  }
+}
 import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
 import {
   detectBestHWEncoder,
@@ -704,6 +720,33 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
   return result.canceled ? null : result.filePath ?? null;
 });
 
+ipcMain.handle("audio:measure-loudness", async (_event, args: { filePath: string; startSeconds: number; durationSeconds: number }) => {
+  try {
+    const info = await stat(String(args?.filePath ?? ""));
+    if (!info.isFile()) return { integratedLufs: null, error: "Not a file" };
+    const ffmpegPath = getEnvironmentStatus().ffmpegPath;
+    const { spawn } = await import("node:child_process");
+    const start = Math.max(0, Number(args.startSeconds) || 0);
+    const dur = Math.max(0.1, Number(args.durationSeconds) || 0.1);
+    const stderr = await new Promise<string>((resolve, reject) => {
+      const child = spawn(ffmpegPath, [
+        "-hide_banner", "-nostats", "-ss", String(start), "-t", String(dur), "-i", args.filePath,
+        "-vn", "-af", "ebur128=framelog=quiet", "-f", "null", "-",
+      ], { stdio: ["ignore", "ignore", "pipe"] });
+      let err = "";
+      child.stderr.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-8000); });
+      child.on("error", reject);
+      child.on("close", () => resolve(err));
+    });
+    // Summary block: "Integrated loudness:\n    I:         -23.0 LUFS"
+    const m = /Integrated loudness:\s*I:\s*(-?[\d.]+|-inf)\s*LUFS/.exec(stderr);
+    const value = m && m[1] !== "-inf" ? Number(m[1]) : null;
+    return { integratedLufs: value !== null && Number.isFinite(value) ? value : null };
+  } catch (e: unknown) {
+    return { integratedLufs: null, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 ipcMain.handle("export:render", async (event, request: ExportRequest) => {
   try {
     return await exportSequence(request, (pct) => {
@@ -909,7 +952,8 @@ ipcMain.handle("gate:start-auth", (_event, state: string) => {
 
 // Dev bypass key submitted from gate
 ipcMain.handle("gate:submit-dev-key", async (_event, key: string) => {
-  if (key !== DEV_BYPASS_KEY) {
+  // No configured key means the bypass is disabled (never match an empty key).
+  if (!DEV_BYPASS_KEY || key !== DEV_BYPASS_KEY) {
     return { success: false, error: 'Invalid key' };
   }
   const tokenPath = join(app.getPath('userData'), 'fs_token.txt');
@@ -1296,10 +1340,8 @@ ipcMain.handle('cloud:save', async (_event, projectData: unknown) => {
     const projectName = (projectData as any)?.name || 'Untitled Project';
     const filename = projectName.replace(/[^a-z0-9]/gi, '_') + '.264pro';
 
-    // Use Node.js FormData + Blob for multipart upload
-    const { FormData } = await import('node:form-data' as any).catch(() => ({ FormData: undefined }));
-    // Fall back to flowstate:api-call pattern with JSON body if FormData unavailable
-    const form = new (globalThis.FormData || FormData)();
+    // Node's built-in FormData + Blob for the multipart upload
+    const form = new FormData();
     const blob = new Blob([Buffer.from(projectJson, 'utf8')], { type: 'application/json' });
     form.append('file', blob, filename);
     form.append('app', '264pro');
@@ -1473,12 +1515,6 @@ ipcMain.handle('publish:upload-youtube', async (_ev, args: {
 
     if (!fsM.existsSync(args.videoPath)) return { success: false, error: `Video file not found: ${args.videoPath}` };
 
-    // Warn if file is very large (readFileSync will load it all into RAM)
-    const fileStat = fsM.statSync(args.videoPath);
-    const fileSizeMB = fileStat.size / (1024 * 1024);
-    if (fileSizeMB > 500) {
-      return { success: false, error: `File is ${Math.round(fileSizeMB)}MB. Files larger than 500MB require chunked upload (not yet supported). Please export a smaller file or use the YouTube Studio website.` };
-    }
 
     const initResp = await fetch(
       'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
@@ -1718,34 +1754,29 @@ ipcMain.handle('publish:disconnect', async (_ev, platform: string) => {
 // ── Whisper AI Transcription via Groq ─────────────────────────────────────────
 ipcMain.handle('ai:transcribe', async (_ev, args: { filePath: string; language?: string }) => {
   try {
-    const groqKey = process.env.GROQ_API_KEY || '';
+    const groqKey = getGroqKey();
     if (!groqKey) {
       return { success: false, error: 'Add GROQ_API_KEY in Settings → AI to enable transcription' };
     }
 
     const fs = await import('fs');
     const path = await import('path');
-    const FormData = (await import('form-data')).default;
-
     if (!fs.existsSync(args.filePath)) {
       return { success: false, error: `File not found: ${args.filePath}` };
     }
 
     const form = new FormData();
-    form.append('file', fs.readFileSync(args.filePath), {
-      filename: path.basename(args.filePath),
-      contentType: 'audio/mpeg',
-    });
+    form.append('file', await openAsBlob(args.filePath, { type: 'audio/mpeg' }), path.basename(args.filePath));
     form.append('model', 'whisper-large-v3');
     form.append('response_format', 'verbose_json');
     form.append('timestamp_granularities[]', 'word');
     if (args.language) form.append('language', args.language);
 
-    const formBuffer = form.getBuffer();
+    // Native FormData sets the multipart boundary header itself.
     const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${groqKey}`, ...form.getHeaders() },
-      body: formBuffer,
+      headers: { Authorization: `Bearer ${groqKey}` },
+      body: form,
     });
 
     if (!resp.ok) {
@@ -2886,24 +2917,21 @@ ipcMain.handle('ai:score-clip', async (_ev, args: { filePath: string }) => {
 ipcMain.handle('ai:generate-captions', async (_ev, args: { filePath: string; language?: string; style?: 'minimal' | 'bold' | 'outline' }) => {
   try {
     const { filePath, language = 'en' } = args;
-    const groqKey = process.env.GROQ_API_KEY ||
-      (() => { try { const p = require('path').join(app.getPath('userData'), 'settings.json'); const s = JSON.parse(require('fs').readFileSync(p, 'utf8')); return s.groqApiKey ?? ''; } catch { return ''; } })();
+    const groqKey = getGroqKey();
     if (!groqKey) return { success: false, error: 'GROQ_API_KEY required — add it in Settings → AI' };
     const fsM = await import('fs');
     if (!fsM.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
     // Use Groq Whisper (already have the handler — call it internally)
-    const FormData = (await import('form-data')).default;
     const form = new FormData();
-    form.append('file', fsM.createReadStream(filePath));
+    form.append('file', await openAsBlob(filePath), basename(filePath));
     form.append('model', 'whisper-large-v3');
     form.append('language', language);
     form.append('response_format', 'verbose_json');
     form.append('timestamp_granularities[]', 'word');
     const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${groqKey}`, ...form.getHeaders() },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      body: form as any,
+      headers: { Authorization: `Bearer ${groqKey}` },
+      body: form,
     });
     const text = await resp.text();
     let data: { text: string; words?: Array<{ word: string; start: number; end: number }> };
@@ -3050,8 +3078,7 @@ ipcMain.handle('ai:burn-subtitles', async (_ev, args: {
 ipcMain.handle('ai:parse-revision', async (_ev, args: { instructions: string; projectJson: string }) => {
   try {
     const { instructions, projectJson } = args;
-    const groqKey = process.env.GROQ_API_KEY ||
-      (() => { try { const p = require('path').join(app.getPath('userData'), 'settings.json'); const s = JSON.parse(require('fs').readFileSync(p, 'utf8')); return s.groqApiKey ?? ''; } catch { return ''; } })();
+    const groqKey = getGroqKey();
     if (!groqKey) return { success: false, error: 'GROQ_API_KEY required for AI Revision Mode' };
     const systemPrompt = `You are a video editing AI assistant. The user will describe changes to make to their video project.
 Return ONLY a JSON array of edit operations. Each operation has this shape:
@@ -3452,8 +3479,7 @@ ipcMain.handle('ai:transcribe-clip', async (_ev, args: { filePath: string; langu
     const pathM = await import('path');
     const os = await import('os');
     if (!fsM.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
-    const groqKey = process.env.GROQ_API_KEY ||
-      (() => { try { const p = require('path').join(app.getPath('userData'), 'settings.json'); return JSON.parse(require('fs').readFileSync(p, 'utf8')).groqApiKey ?? ''; } catch { return ''; } })();
+    const groqKey = getGroqKey();
     if (!groqKey) return { success: false, error: 'GROQ_API_KEY required for transcript editing' };
     // Extract audio as mp3 for Whisper upload
     const { spawn } = await import('child_process');
@@ -3463,17 +3489,16 @@ ipcMain.handle('ai:transcribe-clip', async (_ev, args: { filePath: string; langu
     await new Promise<void>((res) => { ext1.on('close', () => res()); ext1.on('error', () => res()); });
     if (!fsM.existsSync(audioPath)) return { success: false, error: 'Audio extraction failed' };
     // Upload to Groq Whisper with word timestamps
-    const FormData = (await import('form-data')).default;
     const form = new FormData();
-    form.append('file', fsM.createReadStream(audioPath), { filename: 'audio.mp3', contentType: 'audio/mp3' });
+    form.append('file', await openAsBlob(audioPath, { type: 'audio/mpeg' }), 'audio.mp3');
     form.append('model', 'whisper-large-v3');
     form.append('response_format', 'verbose_json');
     form.append('timestamp_granularities[]', 'word');
     if (language) form.append('language', language);
     const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${groqKey}`, ...form.getHeaders() },
-      body: form as any,
+      headers: { 'Authorization': `Bearer ${groqKey}` },
+      body: form,
     });
     try { fsM.unlinkSync(audioPath); } catch {}
     const text = await resp.text();

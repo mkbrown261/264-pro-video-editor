@@ -952,12 +952,11 @@ export default function App() {
     const asset = project.assets.find(a => a.id === assetId);
     const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
     if (!asset || !firstVideoTrack) { toast.warning("No video track found"); return; }
+    // Trims are in timeline frames (see buildTimelineSegments), not source frames.
     const fps = project.sequence.settings.fps;
-    const nativeFps = asset.nativeFps ?? fps;
-    const trimStart = Math.round((startMs / 1000) * nativeFps);
-    const totalNativeFrames = Math.round(asset.durationSeconds * nativeFps);
-    const clipEndNativeFrame = Math.round((endMs / 1000) * nativeFps);
-    const trimEnd = Math.max(0, totalNativeFrames - clipEndNativeFrame);
+    const trimStart = Math.round((startMs / 1000) * fps);
+    const totalFrames = Math.round(asset.durationSeconds * fps);
+    const trimEnd = Math.max(0, totalFrames - Math.round((endMs / 1000) * fps));
     const clip = createEmptyClip(assetId, firstVideoTrack.id, playback.playheadFrame);
     clip.trimStartFrames = trimStart;
     clip.trimEndFrames = trimEnd;

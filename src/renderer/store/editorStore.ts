@@ -301,7 +301,8 @@ interface EditorStore {
 
   // ── ClawFlow AI ──
   autoColorMatch: () => void;
-  normalizeAudioLevels: (targetDb: -14 | -23) => void;
+  /** Measure clip loudness (EBU R128) and set gains to hit the target LUFS. */
+  normalizeAudioLevels: (targetDb: -14 | -23) => Promise<void>;
   // ── Media Bins ───────────────────────────────────────────────────────────────
   createBin: (name: string, parentId?: string) => string;
   renameBin: (binId: string, name: string) => void;
@@ -2822,20 +2823,23 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const aTrack = audioTracks[0] ?? { id: createId(), name: "A1", kind: "audio" as const, muted: false, locked: false, solo: false, height: 44, color: "#2fc77a" };
 
       // Re-pack video clips sequentially (sort + compact)
+      const fps = sequence.settings.fps;
+      const assetsById = new Map(state.project.assets.map((a) => [a.id, a]));
+      const clipFrames = (c: TimelineClip) => {
+        const a = assetsById.get(c.assetId);
+        return a ? getClipDurationFrames(c, a, fps) : 1;
+      };
       let vFrame = 0;
       const repackedVideo = videoClips.map((c) => {
         const cloned = { ...c, trackId: vTrack.id, startFrame: vFrame };
-        // Estimate duration as (trimEnd - trimStart) if non-zero, else use a default
-        const dur = Math.max(1, c.trimEndFrames > 0 ? c.trimEndFrames - c.trimStartFrames : 90);
-        vFrame += dur;
+        vFrame += clipFrames(c);
         return cloned;
       });
 
       let aFrame = 0;
       const repackedAudio = audioClips.map((c) => {
         const cloned = { ...c, trackId: aTrack.id, startFrame: aFrame };
-        const dur = Math.max(1, c.trimEndFrames > 0 ? c.trimEndFrames - c.trimStartFrames : 90);
-        aFrame += dur;
+        aFrame += clipFrames(c);
         return cloned;
       });
 
@@ -2883,13 +2887,27 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
       // Build sub-sequence
       const subSeqId = createId();
-      const subTrackId = createId();
-      const subTrack = { id: subTrackId, name: "V1", kind: "video" as const, muted: false, locked: false, solo: false, height: 56, color: "#4f8ef7" };
-      const subClips = clipsToNest.map(c => ({ ...c, id: createId(), trackId: subTrackId, startFrame: c.startFrame - minStart }));
+      // Mirror the original tracks the clips came from (video and audio), in order.
+      const usedTrackIds = new Set(clipsToNest.map(c => c.trackId));
+      const trackMap = new Map<string, string>();
+      const subTracks = sequence.tracks
+        .filter(t => usedTrackIds.has(t.id))
+        .map(t => {
+          const id = createId();
+          trackMap.set(t.id, id);
+          return { ...t, id, muted: false, solo: false, locked: false };
+        });
+      const subClips = clipsToNest.map(c => ({ ...c, id: createId(), trackId: trackMap.get(c.trackId)!, startFrame: c.startFrame - minStart }));
+      const fps = sequence.settings.fps;
+      const assetsById = new Map(state.project.assets.map(a => [a.id, a]));
+      const nestedFrames = subClips.reduce((m, c) => {
+        const a = assetsById.get(c.assetId);
+        return a ? Math.max(m, c.startFrame + getClipDurationFrames(c, a, fps)) : m;
+      }, 1);
       const subSeq: import("../../shared/models").EditorSequence = {
         id: subSeqId,
         name: label,
-        tracks: [subTrack],
+        tracks: subTracks,
         clips: subClips,
         settings: sequence.settings,
         beatSync: null,
@@ -2904,14 +2922,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         sourcePath: "",
         previewUrl: "",
         thumbnailUrl: null,
-        durationSeconds: 60,
+        durationSeconds: nestedFrames / fps,
         nativeFps: sequence.settings.fps,
         width: sequence.settings.width,
         height: sequence.settings.height,
         hasAudio: false,
       };
 
-      const hostTrackId = clipsToNest[0].trackId;
+      // The nest lives on a video track: the topmost one it came from, else V1.
+      const videoTrackIds = sequence.tracks.filter(t => t.kind === "video").map(t => t.id);
+      const hostTrackId = videoTrackIds.find(id => usedTrackIds.has(id)) ?? videoTrackIds[0] ?? clipsToNest[0].trackId;
       const nestedClip: import("../../shared/models").TimelineClip = {
         id: createId(),
         assetId: placeholderAssetId,
@@ -3003,7 +3023,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         clipType: 'caption' as const,
         startFrame: clipStartFrame + Math.round(line.startSec * fps),
         trimStartFrames: 0,
-        trimEndFrames: 0,
+        // The shared caption asset is 9999 s long; trim each clip to its line.
+        trimEndFrames: Math.max(
+          0,
+          Math.round(9999 * state.project.sequence.settings.fps) -
+            Math.max(1, Math.round((line.endSec - line.startSec) * state.project.sequence.settings.fps))
+        ),
         linkedGroupId: null,
         isEnabled: true,
         transitionIn: null, transitionOut: null,
@@ -3184,27 +3209,44 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
   },
 
-  normalizeAudioLevels: (targetDb) => {
-    set(withUndo("Normalize Audio Levels", (state) => {
-      const targetVol = targetDb === -14 ? 1.0 : 0.7;
-      const audioTrackIds = new Set(
-        state.project.sequence.tracks
-          .filter(t => t.kind === "audio")
-          .map(t => t.id)
-      );
-      const newClips = state.project.sequence.clips.map(clip => {
-        if (!audioTrackIds.has(clip.trackId)) return clip;
-        const normalizedVol = Math.max(0.1, Math.min(2.0, targetVol));
-        return { ...clip, volume: parseFloat(normalizedVol.toFixed(2)) };
-      });
-      return {
-        ...state,
-        project: {
-          ...state.project,
-          sequence: { ...state.project.sequence, clips: newClips },
+  normalizeAudioLevels: async (targetDb) => {
+    // Measure each audio clip's integrated loudness (EBU R128) over the range
+    // it actually uses, then set its gain so it lands on the target.
+    const measure = typeof window !== "undefined" ? window.editorApi?.measureLoudness : undefined;
+    const { project } = get();
+    const segs = buildTimelineSegments(project.sequence, project.assets).filter(
+      (s) => s.track.kind === "audio" && s.asset.hasAudio && !!s.asset.sourcePath
+    );
+    if (!measure || segs.length === 0) return;
+    const gains = new Map<string, number>();
+    const queue = [...segs];
+    const worker = async () => {
+      for (let s = queue.shift(); s; s = queue.shift()) {
+        const r = await measure({
+          filePath: s.asset.sourcePath,
+          startSeconds: s.sourceInSeconds,
+          durationSeconds: Math.max(0.1, s.sourceOutSeconds - s.sourceInSeconds),
+        }).catch(() => null);
+        const lufs = r?.integratedLufs;
+        if (typeof lufs === "number" && lufs > -70) {
+          gains.set(s.clip.id, Math.max(0, Math.min(4, Math.pow(10, (targetDb - lufs) / 20))));
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (gains.size === 0) return;
+    set(withUndo(`Normalize Audio to ${targetDb} LUFS`, (state) => ({
+      ...state,
+      project: {
+        ...state.project,
+        sequence: {
+          ...state.project.sequence,
+          clips: state.project.sequence.clips.map((c) =>
+            gains.has(c.id) ? { ...c, volume: Number(gains.get(c.id)!.toFixed(3)) } : c
+          ),
         },
-      };
-    }));
+      },
+    })));
   },
 
   // ── Media Bins ───────────────────────────────────────────────────────────────

@@ -8,7 +8,6 @@
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const DEV_BYPASS_KEY  = 'DEV-FS264-MKBROWN-2026-BYPASS';
 export const FS_BASE_URL     = 'https://flowstate-67g.pages.dev';
 export const FS_API          = FS_BASE_URL;
 export const DEEP_LINK_SCHEME = '264pro';
@@ -114,22 +113,6 @@ export function declareAuthFlowIntent(state: string): AuthFlowIntent {
   };
 }
 
-/**
- * Declare a dev bypass intent — validates the key locally.
- */
-export function declareDevBypassIntent(key: string): { valid: boolean; user?: FSUser } {
-  if (key !== DEV_BYPASS_KEY) return { valid: false };
-  return {
-    valid: true,
-    user: {
-      userId:  'dev_user_local',
-      email:   'dev@flowstate.local',
-      name:    'Dev User (Bypass)',
-      picture: '',
-      tier:    'personal_pro',
-    },
-  };
-}
 
 /**
  * Declare tier access for a given tier.

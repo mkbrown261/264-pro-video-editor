@@ -27,7 +27,7 @@ describe("computePreviewUnits", () => {
     expect(u[0].transition?.name).toBe("fade");
     expect(u[0].transition?.progress).toBeCloseTo(15.5 / 30);
     expect(u[0].from?.key).toMatch(/:tail$/);
-    expect(u[0].from?.sourceTime).toBeCloseTo(4.5); // beyond clip A's out point (handle)
+    expect(u[0].from?.sourceTime).toBeCloseTo(4.5 + 1 / 60); // beyond clip A's out point (handle)
   });
 
   it("returns nothing in gaps", () => {

@@ -68,7 +68,10 @@ function getTargetCurrentTime(
   const segmentOffsetFrames = Math.max(0, playheadFrame - segment.startFrame);
   const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
   const sourceOffsetSeconds = framesToSeconds(segmentOffsetFrames, sequenceFps) * clipSpeed;
-  const expectedTime = segment.sourceInSeconds + sourceOffsetSeconds;
+  // Aim at the middle of the source frame: seeking to an exact n/fps boundary
+  // often lands on the previous frame because of timestamp rounding.
+  const halfFrame = 0.5 / Math.max(sequenceFps, segment.asset.nativeFps || sequenceFps);
+  const expectedTime = segment.sourceInSeconds + sourceOffsetSeconds + halfFrame;
   return Math.min(
     Math.max(expectedTime, segment.sourceInSeconds),
     Math.max(segment.sourceInSeconds, segment.sourceOutSeconds - framesToSeconds(1, sequenceFps))

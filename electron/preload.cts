@@ -35,6 +35,9 @@ const editorApi = {
     ipcRenderer.invoke("export:choose-file", suggestedName),
   exportSequence: (request: ExportRequest): Promise<ExportResponse> =>
     ipcRenderer.invoke("export:render", request),
+  /** EBU R128 integrated loudness of a source range (LUFS), via FFmpeg ebur128. */
+  measureLoudness: (args: { filePath: string; startSeconds: number; durationSeconds: number }): Promise<{ integratedLufs: number | null; error?: string }> =>
+    ipcRenderer.invoke("audio:measure-loudness", args),
   /** Non-blocking background export — editor stays live, progress via onBgExportProgress */
   exportSequenceBg: (request: ExportRequest & { jobId: string }): Promise<{ success: boolean; jobId?: string; mode?: string; error?: string }> =>
     ipcRenderer.invoke('export:render-bg', request),

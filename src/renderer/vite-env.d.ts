@@ -119,6 +119,7 @@ declare global {
       openMediaFiles: () => Promise<MediaAsset[]>;
       chooseExportFile: (suggestedName: string) => Promise<string | null>;
       exportSequence: (request: ExportRequest) => Promise<ExportResponse>;
+      measureLoudness?: (args: { filePath: string; startSeconds: number; durationSeconds: number }) => Promise<{ integratedLufs: number | null; error?: string }>;
       getEnvironmentStatus: () => Promise<EnvironmentStatus>;
       onUpdaterStatus: (callback: (status: UpdaterStatus) => void) => () => void;
       /** Called by main process when a background proxy finishes encoding */

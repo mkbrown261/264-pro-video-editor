@@ -77,7 +77,8 @@ function layerAt(seg: TimelineSegment, frame: number, fps: number, tail = false)
   return {
     key: tail ? `${seg.clip.id}:tail` : seg.clip.id,
     segment: seg,
-    sourceTime: seg.sourceInSeconds + ((frame - seg.startFrame) / fps) * rate,
+    // Middle of the source frame (exact n/fps boundaries can decode the previous frame).
+    sourceTime: seg.sourceInSeconds + ((frame - seg.startFrame) / fps) * rate + 0.5 / Math.max(fps, seg.asset.nativeFps || fps),
     rate,
     transform: resolveTransform(seg.clip, frame),
   };
