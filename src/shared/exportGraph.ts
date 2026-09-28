@@ -414,6 +414,10 @@ function effectFilters(ctx: Ctx, clip: TimelineClip): string[] {
   const out: string[] = [];
   const effects = [...(clip.effects ?? [])].filter((e) => e.enabled).sort((a, b) => a.order - b.order);
   for (const e of effects) {
+    if (/^(ai_|clawflow_style|defocus_background)/.test(e.type)) {
+      ctx.warnings.add(`The "${e.type}" AI effect needs its cloud render and is not baked into local exports.`);
+      continue;
+    }
     if (e.keyframes && Object.values(e.keyframes).some((k) => (k?.length ?? 0) > 1)) {
       ctx.warnings.add("Animated effect parameters export at their starting value.");
     }

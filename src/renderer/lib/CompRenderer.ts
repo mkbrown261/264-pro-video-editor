@@ -1330,5 +1330,7 @@ export class CompRenderer {
       gl.deleteProgram(prog);
     }
     gl.deleteBuffer(this.vbo);
+    // Release the context itself; Chromium caps live WebGL contexts (~16).
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 }

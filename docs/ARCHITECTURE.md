@@ -139,7 +139,7 @@ These are non-negotiable. Every AI prompt and code change must comply.
 5. **All audio preload/playback routes through `AudioEngine`** — never create raw AudioContext nodes outside AudioScheduler.ts
 6. **`startPlaybackAtFrame()` MUST seek video first, then start audio** — never parallel (Bug 6 law)
 7. **Large audio files (>600s) MUST use `MediaElementAudioSourceNode`** — never `decodeAudioData()` on them
-8. **`media://` protocol sources MUST NOT have `crossOrigin='anonymous'`** — causes SecurityError
+8. **Audio elements on `media://` stay without `crossOrigin`** (AudioScheduler). Viewer/compositor `<video>` elements DO use `crossOrigin="anonymous"`; `media://` responses send `Access-Control-Allow-Origin: *` so frames can be read by WebGL/canvas (compositor, scopes)
 9. **`playbackStartedAt` is backdated by `START_LATENCY_MS`** — never stamp before audio starts
 10. **Project saves MUST use `dialog.showSaveDialog` in main process** — never accept arbitrary paths from renderer
 11. **File deletions MUST validate path is within known safe directories** — never unlink renderer-supplied paths directly
@@ -1057,35 +1057,21 @@ Seek (during pause):
 
 ## 17. Color Grading Architecture
 
-Source: `src/renderer/lib/colorGradeRenderer.ts`, `src/renderer/components/ColorGradingPanel.tsx`
+Source: `src/shared/colorMath.ts` (single source of truth), `src/renderer/lib/viewerCompositor.ts`, `src/shared/exportGraph.ts`
 
-### Real WebGL Pipeline (WORKING)
 ```
-colorGradeRenderer.ts implements real GLSL shaders:
-  - Primary corrections: lift/gamma/gain/offset wheels
-  - Exposure, contrast, saturation, temperature, tint
-  - RGB curves (master + per-channel)
-  - LUT application (3D LUT via TEXTURE3D or 2D LUT strip)
-  - ColorSlice (targeted hue range corrections)
-  - VectorAdjustments (hue vs hue, hue vs saturation, etc.)
+Grade chain per clip = [clip.colorGrade, ...clip.gradeNodes (enabled)]  — applied in SERIES
+Per node: log transform → exposure → lift/gamma/gain/offset → contrast → temp/tint
+          → saturation → ColorSlice + hue curves → RGB curves → master → file LUT (× intensity)
 
-Render path:
-  ViewerPanel canvas overlay → colorGradeRenderer.render(videoElement, colorGrade)
-  → WebGL: video texture → GLSL uniforms → output canvas
-
-KNOWN BUGS FIXED:
-  - gain neutral value was 0 (black screen) → fixed to gain+1
-  - gamma exponent overflow → clamped to [0.1, 10]
+colorMath.bakeChainToLut(chain)  →  3D LUT
+  Viewer:  WebGL2 sampler3D (33³, trilinear)   — ViewerCompositor GradePass
+  Export:  .cube file + FFmpeg lut3d (65³, tetrahedral)
+Animated grades (keyframes) re-bake per frame (viewer) / per time slice (export).
 ```
 
-### Color Node Graph (COSMETIC — NOT WIRED)
-```
-⚠ CRITICAL: The Fusion-style node graph in ColorGradingPanel is VISUAL ONLY.
-   Connecting nodes does NOT chain grade operations.
-   Each node stores a delta grade but nothing traverses the graph.
-   The colorGradeRenderer applies a FLAT grade, not a node pipeline.
-   Fix: traverse graph edges, accumulate transforms, pass to renderer.
-```
+The Color page node graph edits these persisted nodes (node 1 = `colorGrade`).
+`getGradeFilterStyle` (SVG/CSS) remains only as the legacy fallback view.
 
 ---
 
@@ -1113,34 +1099,31 @@ The node graph is fully interactive (pan/zoom, drag nodes, draw wires).
 
 ## 19. Export / Render Pipeline
 
-Source: `electron/ffmpeg.ts`
+Source: `src/shared/exportGraph.ts` (pure graph builder, unit + FFmpeg-integration tested), `electron/ffmpeg.ts` (runner)
 
 ```
-exportSequence(project, request):
-  1. buildTimelineSegments() → ordered list of video/audio segments
-  2. For each video segment: build filter graph
-     - Clip scale/crop (trim, speed, transform)
-     - Color grade: lift/gamma/gain → exposure → contrast → saturation → temperature → curves → LUT
-     - Effects: CSS-like filter chain (blur, sharpen, hue, grain, etc.)
-     - Optical flow slow-mo (minterpolate)
-     - Transitions (xfade filter between adjacent clips)
-  3. Audio mixing: per-track gain, ducking keyframes, trim, sync
-  4. LUT export: write .cube file to tmp
-  5. If loudnormTarget: add loudnorm filter to audio chain
-  6. FFmpeg spawn with complex filter graph
-  7. Stream progress events back via webContents.send('export:progress', pct)
-
-KNOWN STUB ISSUES:
-  - clawflow_style: falls back to basic hue/edge-detect filters (not AI)
-  - defocus_background: applies full-frame boxblur (not depth-based)
+buildExportGraph(request, env):
+  video: black canvas for the full sequence (gaps stay black)
+         tracks composited bottom → top (track index 0 = top layer)
+         per clip: -ss/-t input seek → speed → fps → fit → effects → grade LUT
+                   → transform (static or keyframed) → opacity → place on a
+                   transparent canvas → clip masks as alpha
+         runs of adjacent clips joined by transitions → xfade (outgoing tail
+         uses handles, frozen if media runs out); lone edges xfade to transparency
+         adjustment clips re-process the composite below for their range
+         nested sequences recurse; titles/captions/burn-ins render via libass
+  audio: audio tracks only (video clips carry linked audio clips) → clip
+         volume/keyframes/fades → per-track EQ, compressor, volume, automation,
+         pan → ducking (sidechaincompress) → master volume → loudnorm
+Runner: graph written to -filter_complex_script (no command-line limit),
+        progress from time= vs sequence duration, warnings returned to the UI.
 ```
 
-### Background Export
-```
-export:render-bg creates a Node.js Worker thread to run FFmpeg independently.
-Main editor stays responsive during export.
-Progress streamed via export:bg-progress IPC event.
-```
+The viewer (`src/shared/previewLayers.ts` + `ViewerCompositor`) uses the same
+layer/transition rules, so preview and export match.
+
+Not rendered in export (reported as warnings): Fusion node graphs, AI
+background removal / AI effects, bezier masks, speed ramps (constant speed).
 
 ---
 
@@ -1406,6 +1389,17 @@ The following systems are **production-ready and fully connected end-to-end**:
 
 ## 24. What Exists but Is Incomplete or Broken
 
+> **2026-09 engine rebuild — fixed since this audit:** B1 (colour nodes are a
+> real persisted serial chain), B2/H12 (AudioContext closed on unmount), B4/H11
+> (uploads stream), H1 (real EBU R128 normalization), H7 (nested duration +
+> track layout), H8/C2 (hardcoded dev key removed), M1/M2 (subtitle, timecode
+> and watermark burn-in via libass), M3 (CompRenderer releases its context),
+> M6 (autoLayout durations). Also fixed: export concatenated all tracks, doubled
+> audio and crashed on transition-in; the viewer showed one layer with CSS
+> transitions; masks were cosmetic; drawtext is missing from the bundled FFmpeg;
+> bare require() in the ESM main process; form-data not packaged; the preload
+> build overwrote the ESM shared modules with CommonJS.
+
 ### 🔴 CRITICAL BREAKS (will fail users in production)
 
 **B1 — Color node graph is cosmetic (not functional)**
@@ -1666,7 +1660,7 @@ Effort: 1 hour
 **Decision:** Custom `media://` scheme registered with `registerSchemesAsPrivileged`  
 **Reason:** Supports HTTP Range (seek), same-origin (no CORS), serves any local file format  
 **Tradeoffs:** Does NOT serve CORS headers — `crossOrigin='anonymous'` will cause SecurityError  
-**Status:** LOCKED — never add crossOrigin attribute to elements loading media:// URLs
+**Status:** Superseded (2026-09) — media:// now sends `Access-Control-Allow-Origin: *`; viewer video elements use `crossOrigin="anonymous"`. Audio elements are unchanged.
 
 ### ADR-004: Sequential video→audio start for sync
 **Decision:** `await syncVideo()` then `await startAudio()` in `startPlaybackAtFrame()`  
