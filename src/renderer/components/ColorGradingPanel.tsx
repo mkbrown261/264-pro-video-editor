@@ -22,7 +22,7 @@ import {
   type CSSProperties,
   type MouseEvent as RMouseEvent,
 } from "react";
-import type { ColorGrade, ColorStill, ColorSliceState, CurvePoint, RGBValue, VectorAdjustment } from "../../shared/models";
+import type { ColorGrade, ColorStill, ColorSliceState, CurvePoint, GradeNode, RGBValue, VectorAdjustment } from "../../shared/models";
 import { createDefaultColorGrade, createDefaultColorSlice, createDefaultVectorAdjustment, createId } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 import { toast } from "../lib/toast";
@@ -49,6 +49,9 @@ export interface ColorGradingPanelProps {
   gradeVersions?: Partial<Record<'A' | 'B' | 'C', ColorGrade>>;
   onSwitchGradeSlot?: (slot: 'A' | 'B' | 'C') => void;
   onCopyGradeToSlot?: (from: 'A' | 'B' | 'C', to: 'A' | 'B' | 'C') => void;
+  /** Serial nodes 2+ of the clip's grade chain */
+  gradeNodes?: GradeNode[];
+  onUpdateGradeNodes?: (nodes: GradeNode[]) => void;
 }
 
 type ActiveScope   = "waveform" | "vectorscope" | "histogram" | "parade";
@@ -937,6 +940,8 @@ export function ColorGradingPanel({
   gradeVersions = {},
   onSwitchGradeSlot,
   onCopyGradeToSlot,
+  gradeNodes = [],
+  onUpdateGradeNodes,
 }: ColorGradingPanelProps) {
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("primary");
@@ -950,83 +955,37 @@ export function ColorGradingPanel({
   const [renamingStillId, setRenamingStillId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
-  const [nodes, setNodes] = useState<ColorNode[]>([
-    { id: "node-1", label: "Corrector 1", type: "corrector", enabled: true, active: true, grade: createDefaultColorGrade() },
-  ]);
+  // ── Serial node chain (persisted on the clip) ─────────────────────────────
+  // Node 1 is the clip's `colorGrade`; nodes 2+ are `clip.gradeNodes`. The
+  // viewer and export apply them in series (see src/shared/colorMath.ts).
+  const [activeNodeId, setActiveNodeId] = useState<string>("node-1");
+  const clipId = selectedSegment?.clip.id;
+  useEffect(() => { setActiveNodeId("node-1"); }, [clipId]);
 
-  // ── Active node + derived grade ─────────────────────────────────────────────
+  const nodes: ColorNode[] = [
+    {
+      id: "node-1", label: "Corrector 1", type: "corrector",
+      enabled: !colorGrade?.bypass, active: activeNodeId === "node-1",
+      grade: colorGrade ?? createDefaultColorGrade(),
+    },
+    ...gradeNodes.map((n) => ({
+      id: n.id, label: n.label, type: "serial" as const,
+      enabled: n.enabled, active: activeNodeId === n.id, grade: n.grade,
+    })),
+  ];
   const activeNode = nodes.find((n) => n.active) ?? nodes[0];
-  const activeNodeGrade = activeNode?.grade ?? createDefaultColorGrade();
+  const activeNodeGrade = activeNode.grade;
 
-  // ── Auto-enable helper ──────────────────────────────────────────────────────
-  // Updates the ACTIVE node's grade. The accumulation effect below merges all
-  // enabled node grades and pushes the final merged grade to the store.
+  // Edits go to the active node: node 1 through onUpdateGrade, others through
+  // onUpdateGradeNodes.
   const handleUpdate = useCallback((partial: Partial<ColorGrade>) => {
-    if (!colorGrade) {
-      onEnableGrade();
+    if (activeNode.id === "node-1") {
+      if (!colorGrade) onEnableGrade();
+      onUpdateGrade(partial);
+      return;
     }
-    setNodes((prev) => prev.map((n) =>
-      n.active ? { ...n, grade: { ...n.grade, ...partial } } : n
-    ));
-  }, [colorGrade, onEnableGrade]);
-
-  // ── Grade accumulation: merge all enabled node grades and push to store ───
-  // IMPORTANT: onUpdateGrade / onEnableGrade must NOT be called unconditionally
-  // here — doing so on every render causes an infinite loop (store update →
-  // re-render → effect fires → store update → …).  We guard with a ref that
-  // tracks the last serialised grade we pushed so we only call the callbacks
-  // when the merged grade actually changed.
-  const lastPushedGradeRef = useRef<string>("");
-  useEffect(() => {
-    const enabledNodes = nodes.filter((n) => n.enabled);
-    let merged: ColorGrade;
-    if (enabledNodes.length === 0) {
-      merged = createDefaultColorGrade();
-    } else {
-      merged = createDefaultColorGrade();
-      for (const node of enabledNodes) {
-        const g = node.grade;
-        merged = {
-          ...merged,
-          exposure:     merged.exposure     + g.exposure,
-          contrast:     merged.contrast     + g.contrast,
-          saturation:   merged.saturation   * g.saturation,
-          temperature:  merged.temperature  + g.temperature,
-          tint:         merged.tint         + g.tint,
-          lift:    { r: merged.lift.r   + g.lift.r,   g: merged.lift.g   + g.lift.g,   b: merged.lift.b   + g.lift.b   },
-          gamma:   { r: merged.gamma.r  + g.gamma.r,  g: merged.gamma.g  + g.gamma.g,  b: merged.gamma.b  + g.gamma.b  },
-          gain:    { r: merged.gain.r   + g.gain.r,   g: merged.gain.g   + g.gain.g,   b: merged.gain.b   + g.gain.b   },
-          offset:  { r: merged.offset.r + g.offset.r, g: merged.offset.g + g.offset.g, b: merged.offset.b + g.offset.b },
-          curves:       g.curves,
-          lutPath:      g.lutPath,
-          lutIntensity: g.lutIntensity,
-          lutName:      g.lutName,
-          colorSlice:   g.colorSlice ?? merged.colorSlice,
-          maskIds:      [...merged.maskIds, ...g.maskIds],
-          keyframes:    merged.keyframes,
-          bypass:       merged.bypass,
-        };
-      }
-    }
-
-    // Serialize key fields to detect real changes — avoids pushing identical
-    // grades to the store on every render (which would cause an infinite loop).
-    const serialized = JSON.stringify({
-      exposure: merged.exposure, contrast: merged.contrast,
-      saturation: merged.saturation, temperature: merged.temperature,
-      tint: merged.tint, bypass: merged.bypass,
-      lift: merged.lift, gamma: merged.gamma, gain: merged.gain, offset: merged.offset,
-      lutPath: merged.lutPath, lutIntensity: merged.lutIntensity,
-    });
-    if (serialized === lastPushedGradeRef.current) return; // nothing changed
-    lastPushedGradeRef.current = serialized;
-
-    if (!merged.bypass) {
-      onEnableGrade();
-      onUpdateGrade(merged);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes]); // intentionally omit onUpdateGrade/onEnableGrade — they are stable useCallback refs in App.tsx
+    onUpdateGradeNodes?.(gradeNodes.map((n) => (n.id === activeNode.id ? { ...n, grade: { ...n.grade, ...partial } } : n)));
+  }, [activeNode.id, colorGrade, gradeNodes, onEnableGrade, onUpdateGrade, onUpdateGradeNodes]);
 
   // ── LUT export ──────────────────────────────────────────────────────────────
   const handleExportLut = async () => {
@@ -1046,24 +1005,27 @@ export function ColorGradingPanel({
 
   // ── Node helpers ──
   function addNode() {
+    if (!onUpdateGradeNodes) return;
+    if (!colorGrade) onEnableGrade();
     const id = createId();
-    setNodes((prev) => [
-      ...prev.map((n) => ({ ...n, active: false })),
-      { id, label: `Corrector ${prev.length + 1}`, type: "corrector" as const, enabled: true, active: true, grade: createDefaultColorGrade() },
-    ]);
+    onUpdateGradeNodes([...gradeNodes, { id, label: `Corrector ${gradeNodes.length + 2}`, enabled: true, grade: createDefaultColorGrade() }]);
+    setActiveNodeId(id);
   }
   function deleteNode(id: string) {
-    setNodes((prev) => {
-      const next = prev.filter((n) => n.id !== id);
-      if (!next.length) return prev;
-      return next.map((n, i) => ({ ...n, active: i === 0 }));
-    });
+    if (id === "node-1") { onResetGrade(); return; }
+    onUpdateGradeNodes?.(gradeNodes.filter((n) => n.id !== id));
+    if (activeNodeId === id) setActiveNodeId("node-1");
   }
   function toggleNode(id: string) {
-    setNodes((prev) => prev.map((n) => n.id === id ? { ...n, enabled: !n.enabled } : n));
+    if (id === "node-1") {
+      if (!colorGrade) onEnableGrade();
+      onUpdateGrade({ bypass: !colorGrade?.bypass });
+      return;
+    }
+    onUpdateGradeNodes?.(gradeNodes.map((n) => (n.id === id ? { ...n, enabled: !n.enabled } : n)));
   }
   function selectNode(id: string) {
-    setNodes((prev) => prev.map((n) => ({ ...n, active: n.id === id })));
+    setActiveNodeId(id);
   }
 
   // ── No segment selected ──

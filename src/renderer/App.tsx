@@ -3420,6 +3420,7 @@ export default function App() {
                 onInsertAtPlayhead={handleInsertAtPlayhead}
                 onOverwriteAtPlayhead={handleOverwriteAtPlayhead}
                 getCachedVideoPath={renderCache.getCachedPath}
+                sequenceSize={project.sequence.settings}
               />
               {/* Edit-page Video Scopes — toggleable via Scopes toolbar button */}
               {editScopesOpen && (
@@ -3902,6 +3903,8 @@ export default function App() {
                 gradeVersions={inspectorSegment?.clip.gradeVersions ?? {}}
                 onSwitchGradeSlot={(slot) => { if (selectedClipId) switchGradeSlot(selectedClipId, slot); }}
                 onCopyGradeToSlot={(from, to) => { if (selectedClipId) copyGradeToSlot(selectedClipId, from, to); }}
+                gradeNodes={inspectorSegment?.clip.gradeNodes ?? []}
+                onUpdateGradeNodes={(nodes) => { if (inspectorSegment) patchClip(inspectorSegment.clip.id, { gradeNodes: nodes }); }}
               />
               {/* Open in Fusion button */}
               {selectedClipId && (
@@ -3949,6 +3952,7 @@ export default function App() {
                 onSplitAtPlayhead={splitSelectedClipAtPlayhead}
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
+                sequenceSize={project.sequence.settings}
               />
               {/* Professional Video Scopes — collapsible strip */}
               <div className="color-scopes-strip" style={{ position: "relative" }}>

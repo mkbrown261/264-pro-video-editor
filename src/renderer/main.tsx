@@ -2,7 +2,11 @@ import { Component, StrictMode } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { useEditorStore } from "./store/editorStore";
 import "./styles.css";
+
+// Automation hook for end-to-end tests (renderer code can reach the store anyway).
+(window as unknown as { __264proStore?: typeof useEditorStore }).__264proStore = useEditorStore;
 
 // ── Error Boundary ─────────────────────────────────────────────────────────────
 interface EBState { error: Error | null; info: ErrorInfo | null }

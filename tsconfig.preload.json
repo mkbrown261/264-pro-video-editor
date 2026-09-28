@@ -15,10 +15,10 @@
     "types": [
       "node"
     ],
-    "declaration": false
+    "declaration": false,
+    "noEmit": true
   },
   "include": [
-    "electron/preload.ts",
-    "src/shared"
+    "electron/preload.cts"
   ]
 }

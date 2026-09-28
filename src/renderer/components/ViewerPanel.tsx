@@ -29,6 +29,9 @@ import { computeCssFilterFromEffects } from "./EffectsPanel";
 import { interpolateKeyframes } from "./KeyframeCurveEditor";
 import type { CurveKeyframe } from "./KeyframeCurveEditor";
 import { isWebGLTransition, renderTransitionFrame, disposeTransitionRenderer } from "../lib/transitionRenderer";
+import { computePreviewUnits, type PreviewUnit } from "../../shared/previewLayers";
+import { ViewerCompositor } from "../lib/viewerCompositor";
+import { LayerSourcePool } from "../lib/layerSourcePool";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -76,6 +79,23 @@ interface ViewerPanelProps {
   onOverwriteAtPlayhead?: (assetId: string, inFrame: number, outFrame: number) => void;
   /** Optional: return a cached file path for a clip (from useRenderCache) */
   getCachedVideoPath?: (clipId: string) => string | null;
+  /** Sequence resolution — the compositor renders at this aspect ratio. */
+  sequenceSize?: { width: number; height: number };
+}
+
+/** Resolve animated effect parameters for a clip at a timeline frame. */
+function effectsAtFrame(effects: ClipEffect[] | undefined, frame: number): ClipEffect[] {
+  if (!effects?.length) return [];
+  return effects.map((ef) => {
+    if (!ef.enabled || !ef.keyframes || Object.keys(ef.keyframes).length === 0) return ef;
+    const params = { ...ef.params };
+    for (const [key, kfArr] of Object.entries(ef.keyframes)) {
+      if (!kfArr || kfArr.length === 0) continue;
+      const vals = (kfArr as CurveKeyframe[]).map((k) => k.value);
+      params[key] = interpolateKeyframes(kfArr as CurveKeyframe[], frame, Math.min(...vals), Math.max(...vals));
+    }
+    return { ...ef, params };
+  });
 }
 
 // ─── Transition helpers ───────────────────────────────────────────────────────
@@ -379,6 +399,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onInsertAtPlayhead,
     onOverwriteAtPlayhead,
     getCachedVideoPath,
+    sequenceSize,
   }, ref) {
 
     const panelRef       = useRef<HTMLElement | null>(null);
@@ -475,7 +496,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       // Check render cache first — it takes priority
       const cachedPath = getCachedVideoPath?.(activeSegment.clip.id);
       if (cachedPath) {
-        const cachedUrl = `file://${cachedPath}`;
+        const cachedUrl = `media://asset?path=${encodeURIComponent(cachedPath)}`;
         const durSecs = activeSegment.sourceOutSeconds - activeSegment.sourceInSeconds;
         return {
           ...activeSegment,
@@ -580,6 +601,82 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         }
         setIsFullscreen(false);
       };
+    }, []);
+
+    // ── GPU compositor: every visible layer, graded + transformed + blended ───
+    // Mirrors the export compositor (see src/shared/previewLayers.ts). Falls
+    // back to the legacy single-<video> view if frames can't be read (e.g. a
+    // media source without CORS).
+    const compositorCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const [compositorFailed, setCompositorFailed] = useState(false);
+    const previewUnits = useMemo<PreviewUnit[]>(
+      () => computePreviewUnits(segments, playheadFrame, sequenceFps),
+      [segments, playheadFrame, sequenceFps]
+    );
+    const compositorActive = !compositorFailed && previewUnits.some((u) => u.kind !== "text");
+    const seqW = sequenceSize?.width || 1920;
+    const seqH = sequenceSize?.height || 1080;
+    const compositorState = useRef({
+      units: previewUnits, isPlaying, frame: playheadFrame, fps: sequenceFps,
+      primaryClipId: null as string | null, width: 1920, height: 1080, proxy: proxyMode,
+    });
+    const compositorDirty = useRef(true);
+    {
+      // Render at the sequence aspect, no larger than the on-screen stage.
+      const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+      const maxW = Math.max(320, Math.min(seqW, Math.round(stageSize.w * dpr)));
+      const width = Math.round(maxW / 2) * 2;
+      const height = Math.max(2, Math.round((width * seqH) / seqW / 2) * 2);
+      compositorState.current = {
+        units: previewUnits, isPlaying, frame: playheadFrame, fps: sequenceFps,
+        primaryClipId: patchedActiveSegment?.clip.id ?? null, width, height, proxy: proxyMode,
+      };
+      compositorDirty.current = true;
+    }
+
+    useEffect(() => {
+      const canvas = compositorCanvasRef.current;
+      if (!canvas) return;
+      const markDirty = () => { compositorDirty.current = true; };
+      let compositor: ViewerCompositor;
+      try {
+        compositor = new ViewerCompositor(canvas, markDirty);
+      } catch {
+        setCompositorFailed(true);
+        return;
+      }
+      const pool = new LayerSourcePool(markDirty, compositorState.current.proxy);
+      let raf = 0;
+      let badFrames = 0;
+      let lastPrimaryTime = -1;
+      const tick = () => {
+        raf = requestAnimationFrame(tick);
+        const st = compositorState.current;
+        const primary = videoRef.current;
+        pool.setProxy(st.proxy);
+        pool.setPrimary(primary, st.primaryClipId);
+        pool.sync(st.units, st.isPlaying, st.fps);
+        const pt = primary ? primary.currentTime + primary.readyState * 1e4 : -1;
+        if (pt !== lastPrimaryTime) { lastPrimaryTime = pt; compositorDirty.current = true; }
+        if (!compositorDirty.current && !st.isPlaying) return;
+        if (!st.units.some((u) => u.kind !== "text")) return;
+        compositorDirty.current = false;
+        const ok = compositor.render(st.units, pool.sourceFor, {
+          width: st.width,
+          height: st.height,
+          frame: st.frame,
+          effectsFor: (clip) => effectsAtFrame(clip.effects, st.frame),
+        });
+        if (ok) badFrames = 0;
+        else if (++badFrames > 30) setCompositorFailed(true);
+      };
+      raf = requestAnimationFrame(tick);
+      return () => {
+        cancelAnimationFrame(raf);
+        pool.dispose();
+        compositor.dispose();
+      };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // ── Fallback: load preview asset when no timeline clip is active ──────────
@@ -875,6 +972,16 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
 
         {/* ── Stage ── */}
         <div ref={stageRef} className="viewer-stage">
+          <canvas
+            ref={compositorCanvasRef}
+            className="viewer-compositor-canvas"
+            aria-label="Program monitor"
+            style={{
+              position: "absolute", inset: 0, width: "100%", height: "100%",
+              objectFit: "contain", pointerEvents: "none", zIndex: 1,
+              display: compositorActive ? "block" : "none",
+            }}
+          />
           {previewAsset ? (
             <>
               {/*
@@ -901,8 +1008,9 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
                   ref={videoRef}
                   className="viewer-video"
                   controls={false}
+                  crossOrigin="anonymous"
                   style={{
-                    opacity: previewOpacity,
+                    opacity: compositorActive ? 0 : previewOpacity,
                     // merge grade filter + effects filter + transition filter into single CSS filter string
                     // (transitionFilter is extracted separately and NOT spread via videoStyle to avoid overwrites)
                     filter: [
@@ -965,7 +1073,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
           )}
 
           {/* Transition overlay (CSS-based for non-WebGL transitions) */}
-          {previewAsset && transitionState && !isWebGLTransition(transitionState.type) && (
+          {!compositorActive && previewAsset && transitionState && !isWebGLTransition(transitionState.type) && (
             <div
               className={`viewer-transition-overlay ${transitionState.type}`}
               style={overlayStyle}
@@ -983,12 +1091,12 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
               position: "absolute", inset: 0, width: "100%", height: "100%",
               pointerEvents: "none", zIndex: 10,
               // Only show when a WebGL transition is actually active
-              display: (previewAsset && transitionState && isWebGLTransition(transitionState.type)) ? "block" : "none",
+              display: (!compositorActive && previewAsset && transitionState && isWebGLTransition(transitionState.type)) ? "block" : "none",
             }}
           />
 
           {/* Mask visual effect overlay — shows tinted fill inside each mask shape */}
-          {previewAsset && maskSvg && (
+          {!compositorActive && previewAsset && maskSvg && (
             <div
               className="viewer-mask-svg-overlay"
               style={{ position: "absolute", inset: 0, pointerEvents: "none" }}

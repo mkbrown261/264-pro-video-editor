@@ -205,6 +205,9 @@ async function createMediaResponse(request: Request): Promise<Response> {
     });
     const headers = new Headers({
       "Accept-Ranges": "bytes",
+      // Lets the viewer's GPU compositor, scopes and histograms read frames
+      // (<video crossOrigin="anonymous">) without tainting their canvases.
+      "Access-Control-Allow-Origin": "*",
       "Cache-Control": "no-store",
       "Content-Length": String(end - start + 1),
       "Content-Type": getContentType(sourcePath)

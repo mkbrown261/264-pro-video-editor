@@ -363,7 +363,7 @@ function addInput(ctx: Ctx, path: string, options: string[]): number {
   return ctx.inputs.length - 1;
 }
 
-function playable(segments: TimelineSegment[], kind: "video" | "audio"): TimelineSegment[] {
+export function playable(segments: TimelineSegment[], kind: "video" | "audio"): TimelineSegment[] {
   const list = segments.filter((s) => s.track.kind === kind && s.clip.isEnabled && !s.track.muted);
   const solo = list.some((s) => s.track.solo);
   return solo ? list.filter((s) => s.track.solo) : list;
@@ -740,7 +740,7 @@ export function sequenceDurationSeconds(seq: TimelineSequence, assets: MediaAsse
 
 interface Run { segs: TimelineSegment[] }
 
-function transitionBetween(a: TimelineSegment, b: TimelineSegment): { name: string; frames: number } | null {
+export function transitionBetween(a: TimelineSegment, b: TimelineSegment): { name: string; frames: number } | null {
   if (a.endFrame !== b.startFrame) return null;
   const tr = b.clip.transitionIn ?? a.clip.transitionOut;
   const name = xfadeName(tr?.type);
