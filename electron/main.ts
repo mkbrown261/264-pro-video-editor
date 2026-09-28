@@ -703,7 +703,7 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
 
 ipcMain.handle("export:render", async (event, request: ExportRequest) => {
   try {
-    return exportSequence(request, (pct) => {
+    return await exportSequence(request, (pct) => {
       if (!event.sender.isDestroyed()) {
         event.sender.send("export:progress", pct);
       }

@@ -27,6 +27,7 @@ export interface RenderJob {
   createdAt: number;       // Date.now()
   loudnormTarget?: -14 | -23; // optional loudness normalization
   burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number };
+  burnSubtitles?: boolean;
 }
 
 // ── Batch Export Presets (GAP D) ──────────────────────────────────────────────

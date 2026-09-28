@@ -967,11 +967,15 @@ export interface ExportRequest {
     /** Watermark opacity 0–1 (default 0.7) */
     watermarkOpacity?: number;
   };
+  /** Burn the project's subtitle cues into the picture. */
+  burnSubtitles?: boolean;
 }
 
 export interface ExportResponse {
   outputPath: string;
   commandPreview: string;
+  /** Timeline features that could not be rendered exactly. */
+  warnings?: string[];
 }
 
 // ── Default Values & Factories ────────────────────────────────────────────────

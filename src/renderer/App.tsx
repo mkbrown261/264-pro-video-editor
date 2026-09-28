@@ -1970,7 +1970,7 @@ export default function App() {
     await triggerImport();
   }
 
-  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean }) {
+  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) {
     if (!window.editorApi) { setBridgeReady(false); setExportMessage("Export unavailable."); return; }
     setExportMessage(null);
     if (!segments.length) { setExportMessage("Add clips before exporting."); return; }
@@ -2003,6 +2003,7 @@ export default function App() {
         const bgResult = await window.editorApi.exportSequenceBg?.({
           jobId, outputPath, project, codec,
           outputWidth: opts.outputWidth, outputHeight: opts.outputHeight,
+          loudnormTarget: opts.loudnormTarget, burnIn: opts.burnIn, burnSubtitles: opts.burnSubtitles,
         });
         if (!bgResult?.success) {
           setExportBusy(false);
@@ -2015,14 +2016,19 @@ export default function App() {
       // ── Blocking export (original behaviour) ───────────────────────────
       setExportBusy(true);
       setExportProgress(0);
-      // Safety timeout: reset busy flag if export hangs for >10 minutes
-      safetyTimer = setTimeout(() => {
-        setExportBusy(false);
-        setExportProgress(0);
-        setExportMessage("✗ Export timed out after 10 minutes.");
-      }, 10 * 60 * 1000);
+      // Stall watchdog: long renders are fine as long as progress keeps moving.
+      const armWatchdog = () => {
+        if (safetyTimer) clearTimeout(safetyTimer);
+        safetyTimer = setTimeout(() => {
+          setExportBusy(false);
+          setExportProgress(0);
+          setExportMessage("✗ Export stalled — no progress for 10 minutes.");
+        }, 10 * 60 * 1000);
+      };
+      armWatchdog();
       // Subscribe to progress events
       const unsubProgress = window.editorApi.onExportProgress?.((pct) => {
+        armWatchdog();
         setExportProgress(pct);
       });
       try {
@@ -2032,9 +2038,13 @@ export default function App() {
           codec,
           outputWidth: opts?.outputWidth,
           outputHeight: opts?.outputHeight,
+          loudnormTarget: opts?.loudnormTarget,
+          burnIn: opts?.burnIn,
+          burnSubtitles: opts?.burnSubtitles,
         });
         setExportProgress(100);
         setExportMessage(`✓ Rendered to ${result.outputPath}`);
+        for (const w of result.warnings ?? []) toast.warning(w);
         setLastExportedPath(result.outputPath);
         // Notify FlowState of export activity
         if (window.flowstateAPI && fsLinked) {
@@ -2057,7 +2067,7 @@ export default function App() {
   }
 
   // ── Render Queue ───────────────────────────────────────────────────────────
-  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number } }) {
+  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number }; burnSubtitles?: boolean }) {
     const job: RenderJob = {
       id: `rj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       label: opts.label,
@@ -2069,6 +2079,7 @@ export default function App() {
       createdAt: Date.now(),
       loudnormTarget: opts.loudnormTarget,
       burnIn: opts.burnIn,
+      burnSubtitles: opts.burnSubtitles,
     };
     setRenderJobs((prev) => [...prev, job]);
     setRenderQueueOpen(true);
@@ -2117,7 +2128,9 @@ export default function App() {
           outputHeight: pendingJob.outputHeight,
           loudnormTarget: pendingJob.loudnormTarget,
           burnIn: pendingJob.burnIn,
+          burnSubtitles: pendingJob.burnSubtitles,
         });
+        for (const w of result.warnings ?? []) toast.warning(w);
         setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "done" as const, progress: 100, outputPath: result.outputPath } : j));
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Render failed.";

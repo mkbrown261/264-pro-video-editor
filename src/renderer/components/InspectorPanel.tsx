@@ -121,8 +121,8 @@ interface InspectorPanelProps {
   onSetVoiceGridFrames: (gridFrames: number) => void;
 
   // Export
-  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
-  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23 }) => void;
+  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => Promise<void>;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => void;
   exportProgress?: number;
 
   // Color grade (for effects page display)
@@ -1177,14 +1177,22 @@ function ExportPresetPanel({
   exportMessage: string | null;
   exportProgress?: number;
   environment: EnvironmentStatus | null;
-  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number }) => Promise<void>;
-  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23 }) => void;
+  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => Promise<void>;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => void;
 }) {
   const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
   const [selectedCodec, setSelectedCodec] = useState<ExportCodec>("libx264");
   const [youtubeNormalize, setYoutubeNormalize] = useState(true); // default on — -14 LUFS
   const [burnInTimecode, setBurnInTimecode]     = useState(false);
   const [watermarkText, setWatermarkText]       = useState('');
+  const [burnSubtitles, setBurnSubtitles]       = useState(false);
+  const renderExtras = {
+    loudnormTarget: youtubeNormalize ? (-14 as const) : undefined,
+    burnIn: (burnInTimecode || watermarkText.trim())
+      ? { timecode: burnInTimecode, watermarkText: watermarkText.trim() || undefined }
+      : undefined,
+    burnSubtitles,
+  };
   const [selectedResIdx, setSelectedResIdx] = useState<number>(0); // 0 = Original
   const preset = EXPORT_PRESETS.find((p) => p.id === selectedPreset) ?? EXPORT_PRESETS[0];
   const resPre = EXPORT_RESOLUTION_PRESETS[selectedResIdx] ?? EXPORT_RESOLUTION_PRESETS[0];
@@ -1384,7 +1392,7 @@ function ExportPresetPanel({
         <button
           className="panel-action primary export-btn"
           disabled={exportBusy}
-          onClick={() => void onExport({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height })}
+          onClick={() => void onExport({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height, ...renderExtras })}
           type="button"
         >
           {exportBusy ? "⏳ Rendering…" : `▶ Export ${containerLabel}`}
@@ -1393,7 +1401,7 @@ function ExportPresetPanel({
         <button
           className="panel-action"
           disabled={exportBusy}
-          onClick={() => void onExport({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height, background: true } as any)}
+          onClick={() => void onExport({ codec: selectedCodec, outputWidth: resPre.width, outputHeight: resPre.height, background: true, ...renderExtras })}
           type="button"
           title="Export in background — editor stays fully usable while rendering"
           style={{ marginTop: 6, background: 'rgba(52,211,153,0.1)', borderColor: 'rgba(52,211,153,0.35)', color: exportBusy ? 'rgba(52,211,153,0.3)' : '#34d399' }}
@@ -1427,6 +1435,18 @@ function ExportPresetPanel({
               />
               ⏱ Burn Timecode
             </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 4, fontSize: 11, color: "var(--text-s)", cursor: "pointer", userSelect: "none" }}
+              title="Burn the project's subtitle cues into the exported picture."
+            >
+              <input
+                type="checkbox"
+                checked={burnSubtitles}
+                onChange={e => setBurnSubtitles(e.target.checked)}
+                style={{ accentColor: "#f7c948", width: 13, height: 13, cursor: "pointer" }}
+              />
+              💬 Burn Subtitles
+            </label>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
               <span style={{ fontSize: 11, color: "var(--text-s)", whiteSpace: "nowrap" }}>Watermark:</span>
               <input
@@ -1450,8 +1470,7 @@ function ExportPresetPanel({
                   outputWidth: resPre.width,
                   outputHeight: resPre.height,
                   label: `${preset.label} · ${codecLabel} · ${resLabel}${normLabel}`,
-                  loudnormTarget: youtubeNormalize ? -14 : undefined,
-                  // burnIn removed — field not in ExportRenderOptions type
+                  ...renderExtras,
                 });
               }}
               type="button"
