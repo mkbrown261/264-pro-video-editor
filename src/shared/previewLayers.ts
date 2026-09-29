@@ -228,3 +228,41 @@ export function maskAtFrame(mask: ClipMask, frame: number): ClipMask {
     },
   };
 }
+
+// ── Nested-sequence audio ─────────────────────────────────────────────────────
+
+/**
+ * Audio segments inside nested clips, re-timed onto the parent timeline and
+ * clipped to the part of the nest that is visible (its trim), so the audio
+ * engine can play them like any other audio clip.
+ */
+export function flattenNestedAudio(segments: TimelineSegment[], fps: number, resolveNested?: NestedResolver, depth = 0): TimelineSegment[] {
+  if (!resolveNested || depth > 4) return [];
+  const out: TimelineSegment[] = [];
+  for (const nest of segments) {
+    if (!nest.clip.nestedSequenceId || !nest.clip.isEnabled || nest.track.muted) continue;
+    const inner = resolveNested(nest.clip);
+    if (!inner) continue;
+    const w0 = Math.round(nest.sourceInSeconds * fps);
+    const w1 = w0 + nest.durationFrames;
+    const candidates = [...inner, ...flattenNestedAudio(inner, fps, resolveNested, depth + 1)];
+    for (const a of candidates) {
+      if (a.track.kind !== "audio" || a.endFrame <= w0 || a.startFrame >= w1) continue;
+      const from = Math.max(a.startFrame, w0), to = Math.min(a.endFrame, w1);
+      const rate = (a.sourceOutSeconds - a.sourceInSeconds) / Math.max(1e-6, a.durationSeconds);
+      const sourceIn = a.sourceInSeconds + ((from - a.startFrame) / fps) * rate;
+      const durationFrames = to - from;
+      out.push({
+        ...a,
+        clip: { ...a.clip, id: `${nest.clip.id}/${a.clip.id}`, volume: (a.clip.volume ?? 1) * (nest.clip.volume ?? 1) },
+        startFrame: nest.startFrame + (from - w0),
+        endFrame: nest.startFrame + (to - w0),
+        durationFrames,
+        durationSeconds: durationFrames / fps,
+        sourceInSeconds: sourceIn,
+        sourceOutSeconds: sourceIn + (durationFrames / fps) * rate,
+      });
+    }
+  }
+  return out;
+}

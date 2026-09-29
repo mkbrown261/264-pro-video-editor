@@ -54,3 +54,21 @@ describe("speed ramps", () => {
     expect(rampSourceProgress([], 0.3)).toBe(0.3);
   });
 });
+
+import { flattenNestedAudio } from "../shared/previewLayers";
+describe("flattenNestedAudio", () => {
+  it("re-times a nest's audio onto the parent timeline, clipped to the nest trim", () => {
+    const inner = { id: "n", name: "n", clips: [{ ...createEmptyClip("a", "A1", 0) }], beatSync: null, markers: [],
+      tracks: [{ id: "A1", name: "A1", kind: "audio" as const, muted: false, locked: false, solo: false, height: 50, color: "" }],
+      settings: { width: 1920, height: 1080, fps: 30, audioSampleRate: 48000 } } as TimelineSequence;
+    const innerSegs = buildTimelineSegments(inner, [asset("a")]);            // 0–120
+    const nestAsset = { ...asset("nest"), sourcePath: "", durationSeconds: 4 };
+    const outer = { id: "s", name: "s", clips: [{ ...createEmptyClip("nest", "V1", 300), trimStartFrames: 30, nestedSequenceId: "n" }], beatSync: null, markers: [],
+      tracks: [track("V1")], settings: { width: 1920, height: 1080, fps: 30, audioSampleRate: 48000 } } as TimelineSequence;
+    const outerSegs = buildTimelineSegments(outer, [nestAsset]);            // shows nest 30–120 at 300–390
+    const [a] = flattenNestedAudio(outerSegs, 30, () => innerSegs);
+    expect(a.startFrame).toBe(300);
+    expect(a.endFrame).toBe(390);
+    expect(a.sourceInSeconds).toBeCloseTo(1);
+  });
+});

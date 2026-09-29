@@ -29,7 +29,7 @@ import { computeCssFilterFromEffects } from "./EffectsPanel";
 import { interpolateKeyframes } from "./KeyframeCurveEditor";
 import type { CurveKeyframe } from "./KeyframeCurveEditor";
 import { isWebGLTransition, renderTransitionFrame, disposeTransitionRenderer } from "../lib/transitionRenderer";
-import { computePreviewUnits, type NestedResolver, type PreviewUnit } from "../../shared/previewLayers";
+import { computePreviewUnits, flattenNestedAudio, type NestedResolver, type PreviewUnit } from "../../shared/previewLayers";
 import { ViewerCompositor } from "../lib/viewerCompositor";
 import { LayerSourcePool } from "../lib/layerSourcePool";
 import { effectsAtFrame } from "../lib/effectsAtFrame";
@@ -515,12 +515,17 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     // ── Playback controller ───────────────────────────────────────────────────
     // activeAudioSegment is kept in props for API compat but audio is now
     // managed by useMultiTrackAudio inside usePlaybackController.
+    // Nested sequences' audio plays like any other audio clip.
+    const playbackSegments = useMemo(() => {
+      const nestedAudio = flattenNestedAudio(segments, sequenceFps, resolveNestedSegments);
+      return nestedAudio.length ? [...segments, ...nestedAudio] : segments;
+    }, [segments, sequenceFps, resolveNestedSegments]);
     const { togglePlayback, pausePlayback, stopPlayback, audioEngineRef } = usePlaybackController({
       videoRef,
       audioRef,
       activeSegment: patchedActiveSegment,
       activeAudioSegment: activeAudioSegment,
-      segments,
+      segments: playbackSegments,
       isPlaying,
       playheadFrame,
       sequenceFps,
