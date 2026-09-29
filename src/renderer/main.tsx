@@ -3,10 +3,14 @@ import type { ErrorInfo, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { useEditorStore } from "./store/editorStore";
+import { exportNeedsGpu, runGpuExport } from "./lib/gpuExport";
 import "./styles.css";
 
 // Automation hook for end-to-end tests (renderer code can reach the store anyway).
-(window as unknown as { __264proStore?: typeof useEditorStore }).__264proStore = useEditorStore;
+Object.assign(window as unknown as Record<string, unknown>, {
+  __264proStore: useEditorStore,
+  __264proExport: { runGpuExport, exportNeedsGpu },
+});
 
 // ── Error Boundary ─────────────────────────────────────────────────────────────
 interface EBState { error: Error | null; info: ErrorInfo | null }

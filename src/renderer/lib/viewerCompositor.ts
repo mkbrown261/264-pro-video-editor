@@ -277,8 +277,9 @@ export class ViewerCompositor {
   /** False when frames are tainted (no CORS) — caller falls back to legacy view. */
   healthy = true;
 
-  constructor(readonly canvas: HTMLCanvasElement, onDirty: () => void) {
-    const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: false });
+  constructor(readonly canvas: HTMLCanvasElement, onDirty: () => void, options: { readback?: boolean } = {}) {
+    // readback: the GPU export reads every frame back, so keep it CPU-friendly.
+    const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: !!options.readback });
     if (!ctx) throw new Error("2D canvas unavailable");
     this.ctx = ctx;
     onLutLoaded = onDirty;

@@ -27,6 +27,7 @@ function getGroqKey(): string {
   }
 }
 import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
+import { cancelGpuExport, finishGpuExport, readGpuSourceFrame, startGpuExport, writeGpuFrame } from "./gpuExport.js";
 import {
   detectBestHWEncoder,
   exportSequence,
@@ -719,6 +720,13 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
 
   return result.canceled ? null : result.filePath ?? null;
 });
+
+// ── GPU (viewer-engine) export: renderer composites, main decodes + encodes ──
+ipcMain.handle("gpu-export:start", (_e, request: ExportRequest) => startGpuExport(request));
+ipcMain.handle("gpu-export:source-frame", (_e, jobId: string, args: Parameters<typeof readGpuSourceFrame>[1]) => readGpuSourceFrame(jobId, args));
+ipcMain.handle("gpu-export:write-frame", (_e, jobId: string, data: Uint8Array) => writeGpuFrame(jobId, data));
+ipcMain.handle("gpu-export:finish", (_e, jobId: string) => finishGpuExport(jobId));
+ipcMain.handle("gpu-export:cancel", (_e, jobId: string) => cancelGpuExport(jobId));
 
 ipcMain.handle("audio:measure-loudness", async (_event, args: { filePath: string; startSeconds: number; durationSeconds: number }) => {
   try {

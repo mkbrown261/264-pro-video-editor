@@ -121,8 +121,8 @@ interface InspectorPanelProps {
   onSetVoiceGridFrames: (gridFrames: number) => void;
 
   // Export
-  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => Promise<void>;
-  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => void;
+  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean; renderEngine?: "auto" | "ffmpeg" | "gpu" }) => Promise<void>;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean; renderEngine?: "auto" | "ffmpeg" | "gpu" }) => void;
   exportProgress?: number;
 
   // Color grade (for effects page display)
@@ -1177,8 +1177,8 @@ function ExportPresetPanel({
   exportMessage: string | null;
   exportProgress?: number;
   environment: EnvironmentStatus | null;
-  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => Promise<void>;
-  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) => void;
+  onExport: (opts?: { codec?: ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean; renderEngine?: "auto" | "ffmpeg" | "gpu" }) => Promise<void>;
+  onAddToQueue?: (opts: { codec: ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean; renderEngine?: "auto" | "ffmpeg" | "gpu" }) => void;
 }) {
   const [selectedPreset, setSelectedPreset] = useState<string>("youtube");
   const [selectedCodec, setSelectedCodec] = useState<ExportCodec>("libx264");
@@ -1186,7 +1186,9 @@ function ExportPresetPanel({
   const [burnInTimecode, setBurnInTimecode]     = useState(false);
   const [watermarkText, setWatermarkText]       = useState('');
   const [burnSubtitles, setBurnSubtitles]       = useState(false);
+  const [renderEngine, setRenderEngine]         = useState<"auto" | "ffmpeg" | "gpu">("auto");
   const renderExtras = {
+    renderEngine,
     loudnormTarget: youtubeNormalize ? (-14 as const) : undefined,
     burnIn: (burnInTimecode || watermarkText.trim())
       ? { timecode: burnInTimecode, watermarkText: watermarkText.trim() || undefined }
@@ -1447,6 +1449,21 @@ function ExportPresetPanel({
               />
               💬 Burn Subtitles
             </label>
+            <div
+              style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}
+              title="Auto uses the fast FFmpeg renderer, and switches to the GPU renderer (the viewer's engine) when the timeline uses NodeFX, speed ramps, animated masks or other features only it renders exactly."
+            >
+              <span style={{ fontSize: 11, color: "var(--text-s)", whiteSpace: "nowrap" }}>Render engine:</span>
+              <select
+                value={renderEngine}
+                onChange={e => setRenderEngine(e.target.value as "auto" | "ffmpeg" | "gpu")}
+                style={{ flex: 1, fontSize: 11, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, padding: "2px 4px", color: "var(--text-p)" }}
+              >
+                <option value="auto">Auto</option>
+                <option value="ffmpeg">FFmpeg (fastest)</option>
+                <option value="gpu">GPU (matches viewer)</option>
+              </select>
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
               <span style={{ fontSize: 11, color: "var(--text-s)", whiteSpace: "nowrap" }}>Watermark:</span>
               <input

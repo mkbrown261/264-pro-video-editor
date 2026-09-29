@@ -24,6 +24,7 @@ import { useAsyncImport } from "./hooks/useAsyncImport";
 import { useFilmstripGenerator } from "./hooks/useFilmstripGenerator";
 import { VoiceChopAI } from "./lib/VoiceChopAI";
 import { toast } from "./lib/toast";
+import { exportNeedsGpu, runGpuExport } from "./lib/gpuExport";
 import { useEditorStore } from "./store/editorStore";
 import {
   buildTimelineSegments,
@@ -1980,7 +1981,17 @@ export default function App() {
     await triggerImport();
   }
 
-  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean }) {
+  /** Render with the FFmpeg graph, or with the viewer engine (GPU) when needed/asked. */
+  async function renderExport(request: import("../shared/models").ExportRequest, engine: "auto" | "ffmpeg" | "gpu" = "auto", onProgress?: (pct: number) => void) {
+    const useGpu = engine === "gpu" || (engine === "auto" && exportNeedsGpu(request).needsGpu);
+    if (useGpu && window.editorApi?.gpuExportStart) {
+      toast.info("Rendering with the GPU engine (matches the viewer exactly)");
+      return runGpuExport({ request, onProgress });
+    }
+    return window.editorApi.exportSequence(request);
+  }
+
+  async function handleExport(opts?: { codec?: import("../shared/models").ExportCodec; outputWidth?: number; outputHeight?: number; background?: boolean; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string }; burnSubtitles?: boolean; renderEngine?: "auto" | "ffmpeg" | "gpu" }) {
     if (!window.editorApi) { setBridgeReady(false); setExportMessage("Export unavailable."); return; }
     setExportMessage(null);
     if (!segments.length) { setExportMessage("Add clips before exporting."); return; }
@@ -1996,7 +2007,10 @@ export default function App() {
       if (!outputPath) return;
 
       // ── Background export mode ───────────────────────────────────────
-      if (opts?.background) {
+      // (The GPU engine renders in this window, so it always runs in the foreground.)
+      const wantsGpu = opts?.renderEngine === "gpu" ||
+        ((opts?.renderEngine ?? "auto") === "auto" && exportNeedsGpu({ project, codec }).needsGpu);
+      if (opts?.background && !wantsGpu) {
         const jobId = `bgexport_${Date.now()}`;
         window.editorApi.onBgExportProgress?.((jid, pct) => {
           if (jid === jobId) setExportProgress(pct);
@@ -2042,7 +2056,7 @@ export default function App() {
         setExportProgress(pct);
       });
       try {
-        const result = await window.editorApi.exportSequence({
+        const result = await renderExport({
           outputPath,
           project,
           codec,
@@ -2051,7 +2065,7 @@ export default function App() {
           loudnormTarget: opts?.loudnormTarget,
           burnIn: opts?.burnIn,
           burnSubtitles: opts?.burnSubtitles,
-        });
+        }, opts?.renderEngine, (pct) => { setExportProgress(pct); });
         setExportProgress(100);
         setExportMessage(`✓ Rendered to ${result.outputPath}`);
         for (const w of result.warnings ?? []) toast.warning(w);
@@ -2077,7 +2091,7 @@ export default function App() {
   }
 
   // ── Render Queue ───────────────────────────────────────────────────────────
-  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number }; burnSubtitles?: boolean }) {
+  function handleAddToQueue(opts: { codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; label: string; loudnormTarget?: -14 | -23; burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number }; burnSubtitles?: boolean; renderEngine?: "auto" | "ffmpeg" | "gpu" }) {
     const job: RenderJob = {
       id: `rj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       label: opts.label,
@@ -2090,6 +2104,7 @@ export default function App() {
       loudnormTarget: opts.loudnormTarget,
       burnIn: opts.burnIn,
       burnSubtitles: opts.burnSubtitles,
+      renderEngine: opts.renderEngine,
     };
     setRenderJobs((prev) => [...prev, job]);
     setRenderQueueOpen(true);
@@ -2130,7 +2145,7 @@ export default function App() {
       });
 
       try {
-        const result = await window.editorApi.exportSequence({
+        const result = await renderExport({
           outputPath,
           project,
           codec: pendingJob.codec,
@@ -2139,6 +2154,8 @@ export default function App() {
           loudnormTarget: pendingJob.loudnormTarget,
           burnIn: pendingJob.burnIn,
           burnSubtitles: pendingJob.burnSubtitles,
+        }, pendingJob.renderEngine, (pct) => {
+          setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, progress: pct } : j));
         });
         for (const w of result.warnings ?? []) toast.warning(w);
         setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, status: "done" as const, progress: 100, outputPath: result.outputPath } : j));

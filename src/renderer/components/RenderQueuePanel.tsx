@@ -28,6 +28,7 @@ export interface RenderJob {
   loudnormTarget?: -14 | -23; // optional loudness normalization
   burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number };
   burnSubtitles?: boolean;
+  renderEngine?: "auto" | "ffmpeg" | "gpu";
 }
 
 // ── Batch Export Presets (GAP D) ──────────────────────────────────────────────

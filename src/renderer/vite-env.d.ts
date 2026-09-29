@@ -119,6 +119,11 @@ declare global {
       openMediaFiles: () => Promise<MediaAsset[]>;
       chooseExportFile: (suggestedName: string) => Promise<string | null>;
       exportSequence: (request: ExportRequest) => Promise<ExportResponse>;
+      gpuExportStart?: (request: ExportRequest) => Promise<{ jobId: string; width: number; height: number; fps: number; totalFrames: number }>;
+      gpuExportSourceFrame?: (jobId: string, args: { key: string; path: string; time: number; width: number; height: number; fps: number }) => Promise<Uint8Array | null>;
+      gpuExportWriteFrame?: (jobId: string, data: Uint8Array) => Promise<void>;
+      gpuExportFinish?: (jobId: string) => Promise<ExportResponse>;
+      gpuExportCancel?: (jobId: string) => Promise<void>;
       measureLoudness?: (args: { filePath: string; startSeconds: number; durationSeconds: number }) => Promise<{ integratedLufs: number | null; error?: string }>;
       getEnvironmentStatus: () => Promise<EnvironmentStatus>;
       onUpdaterStatus: (callback: (status: UpdaterStatus) => void) => () => void;

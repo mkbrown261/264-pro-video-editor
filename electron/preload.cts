@@ -35,6 +35,15 @@ const editorApi = {
     ipcRenderer.invoke("export:choose-file", suggestedName),
   exportSequence: (request: ExportRequest): Promise<ExportResponse> =>
     ipcRenderer.invoke("export:render", request),
+  /** GPU (viewer-engine) export: see electron/gpuExport.ts */
+  gpuExportStart: (request: ExportRequest): Promise<{ jobId: string; width: number; height: number; fps: number; totalFrames: number }> =>
+    ipcRenderer.invoke("gpu-export:start", request),
+  gpuExportSourceFrame: (jobId: string, args: { key: string; path: string; time: number; width: number; height: number; fps: number }): Promise<Uint8Array | null> =>
+    ipcRenderer.invoke("gpu-export:source-frame", jobId, args),
+  gpuExportWriteFrame: (jobId: string, data: Uint8Array): Promise<void> =>
+    ipcRenderer.invoke("gpu-export:write-frame", jobId, data),
+  gpuExportFinish: (jobId: string): Promise<ExportResponse> => ipcRenderer.invoke("gpu-export:finish", jobId),
+  gpuExportCancel: (jobId: string): Promise<void> => ipcRenderer.invoke("gpu-export:cancel", jobId),
   /** EBU R128 integrated loudness of a source range (LUFS), via FFmpeg ebur128. */
   measureLoudness: (args: { filePath: string; startSeconds: number; durationSeconds: number }): Promise<{ integratedLufs: number | null; error?: string }> =>
     ipcRenderer.invoke("audio:measure-loudness", args),

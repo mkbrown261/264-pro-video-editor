@@ -99,6 +99,11 @@ export interface ExportGraph {
 
 export type ExportGraphRequest = Omit<ExportRequest, "outputPath"> & {
   burnSubtitles?: boolean;
+  /**
+   * GPU render: video frames arrive as raw RGBA on stdin (input 0), rendered by
+   * the viewer engine. The graph then only adds burn-ins and the audio mix.
+   */
+  pipedVideo?: boolean;
 };
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
@@ -1075,7 +1080,14 @@ export function buildExportGraph(request: ExportGraphRequest, env: ExportGraphEn
   const totalFrames = endFrame;
   const durationSeconds = totalFrames / fps;
 
-  let video = buildVideoComposite(ctx, project.sequence, durationSeconds);
+  let video: string;
+  if (request.pipedVideo) {
+    addInput(ctx, "pipe:0", ["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${W}x${H}`, "-r", String(fps)]);
+    video = label(ctx, "piped");
+    ctx.parts.push(`[0:v]setpts=N/(${fps}*TB),scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[${video}]`);
+  } else {
+    video = buildVideoComposite(ctx, project.sequence, durationSeconds);
+  }
 
   // Burn-ins (subtitles, timecode, watermark) — one ASS document over the final picture.
   const styles: AssStyle[] = [];

@@ -10,6 +10,7 @@ import ffmpegStatic from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import type {
   EnvironmentStatus,
+  ExportCodec,
   ExportRequest,
   ExportResponse,
   MediaAsset
@@ -432,7 +433,7 @@ export async function generateProxiesInBackground(
 }
 
 // ── Active child process registry (for kill-on-quit) ─────────────────────────
-const _activeChildren = new Set<import("node:child_process").ChildProcess>();
+export const _activeChildren = new Set<import("node:child_process").ChildProcess>();
 
 /** Kill all active FFmpeg child processes — called on app will-quit. */
 export function killAllActiveProcesses(): void {
@@ -448,7 +449,7 @@ export function killAllActiveProcesses(): void {
 // graph to a script file (long graphs overflow the Windows command line) and
 // runs FFmpeg with progress reporting.
 
-function systemFontsDir(): string | null {
+export function systemFontsDir(): string | null {
   const candidates =
     process.platform === "darwin" ? ["/System/Library/Fonts", "/Library/Fonts"] :
     process.platform === "win32" ? [join(process.env.WINDIR ?? "C:\\Windows", "Fonts")] :
@@ -457,7 +458,7 @@ function systemFontsDir(): string | null {
 }
 
 /** Resolve a grade LUT path: absolute files, or bundled presets like "luts/x.cube". */
-function loadGradeLut(lutPath: string): Lut3D | null {
+export function loadGradeLut(lutPath: string): Lut3D | null {
   const candidates = isAbsolute(lutPath)
     ? [lutPath]
     : [
@@ -472,6 +473,51 @@ function loadGradeLut(lutPath: string): Lut3D | null {
   }
   return null;
 }
+
+// ── Encoder / container arguments (shared by the FFmpeg-graph and GPU exports) ─
+
+export function getVideoCodecArgs(c: ExportCodec, hwEncoder?: string | null): string[] {
+  if (c === "libx264" && hwEncoder) {
+    switch (hwEncoder) {
+      case "h264_videotoolbox":
+        return ["-c:v", "h264_videotoolbox", "-b:v", "12M", "-allow_sw", "1"];
+      case "h264_nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "18", "-b:v", "0"];
+      case "h264_amf":
+        return ["-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20"];
+      case "h264_qsv":
+        return ["-c:v", "h264_qsv", "-global_quality", "20", "-look_ahead", "1"];
+      case "h264_vaapi":
+        return ["-c:v", "h264_vaapi", "-qp", "20"];
+    }
+  }
+  switch (c) {
+    case "libx265":
+      return ["-c:v", "libx265", "-preset", "medium", "-crf", "20", "-tag:v", "hvc1", "-pix_fmt", "yuv420p"];
+    case "prores_ks":
+      return ["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-bits_per_mb", "8000", "-pix_fmt", "yuv422p10le"];
+    case "libvpx-vp9":
+      return ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "30", "-deadline", "good", "-cpu-used", "2", "-pix_fmt", "yuv420p"];
+    case "libx264":
+    default:
+      return ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"];
+  }
+}
+export function getAudioCodecArgs(c: ExportCodec): string[] {
+  switch (c) {
+    case "prores_ks": return ["-c:a", "pcm_s24le"];
+    case "libvpx-vp9": return ["-c:a", "libopus", "-b:a", "192k"];
+    default: return ["-c:a", "aac", "-b:a", "256k"];
+  }
+}
+export function getContainerArgs(c: ExportCodec): string[] {
+  switch (c) {
+    case "prores_ks": return ["-write_tmcd", "0"];
+    case "libvpx-vp9": return [];
+    default: return ["-movflags", "+faststart"];
+  }
+}
+
 
 export async function exportSequence(
   request: ExportRequest,
@@ -500,48 +546,6 @@ export async function exportSequence(
   });
   const scriptPath = join(workDir, "graph.txt");
   writeFileSync(scriptPath, graph.filterComplex, "utf8");
-
-  function getVideoCodecArgs(c: typeof codec, hwEncoder?: string | null): string[] {
-    if (c === "libx264" && hwEncoder) {
-      switch (hwEncoder) {
-        case "h264_videotoolbox":
-          return ["-c:v", "h264_videotoolbox", "-b:v", "12M", "-allow_sw", "1"];
-        case "h264_nvenc":
-          return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "18", "-b:v", "0"];
-        case "h264_amf":
-          return ["-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20"];
-        case "h264_qsv":
-          return ["-c:v", "h264_qsv", "-global_quality", "20", "-look_ahead", "1"];
-        case "h264_vaapi":
-          return ["-c:v", "h264_vaapi", "-qp", "20"];
-      }
-    }
-    switch (c) {
-      case "libx265":
-        return ["-c:v", "libx265", "-preset", "medium", "-crf", "20", "-tag:v", "hvc1", "-pix_fmt", "yuv420p"];
-      case "prores_ks":
-        return ["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-bits_per_mb", "8000", "-pix_fmt", "yuv422p10le"];
-      case "libvpx-vp9":
-        return ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "30", "-deadline", "good", "-cpu-used", "2", "-pix_fmt", "yuv420p"];
-      case "libx264":
-      default:
-        return ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"];
-    }
-  }
-  function getAudioCodecArgs(c: typeof codec): string[] {
-    switch (c) {
-      case "prores_ks": return ["-c:a", "pcm_s24le"];
-      case "libvpx-vp9": return ["-c:a", "libopus", "-b:a", "192k"];
-      default: return ["-c:a", "aac", "-b:a", "256k"];
-    }
-  }
-  function getContainerArgs(c: typeof codec): string[] {
-    switch (c) {
-      case "prores_ks": return ["-write_tmcd", "0"];
-      case "libvpx-vp9": return [];
-      default: return ["-movflags", "+faststart"];
-    }
-  }
 
   const hwEncoder = await detectBestHWEncoder();
   const args = [
