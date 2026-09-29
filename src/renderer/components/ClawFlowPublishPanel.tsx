@@ -121,15 +121,11 @@ export function ClawFlowPublishPanel({
         setDescription(result.description ?? '');
         if (Array.isArray(result.tags)) setTags(result.tags.join(', '));
       } else {
-        // Fallback mock
-        setTitle(`${projectName} — You Won't Believe This 🎬`);
-        setDescription(`An amazing video: ${projectName}. Watch till the end!`);
-        setTags('vlog, video, content, creator');
+        // Don't fill the form with made-up copy; leave what the user has.
+        toast.error(`Couldn't generate metadata${result && 'error' in result && result.error ? `: ${result.error}` : ' — check your AI key in File → AI & API Keys'}`);
       }
-    } catch {
-      setTitle(`${projectName} — You Won't Believe This 🎬`);
-      setDescription(`An amazing video: ${projectName}. Watch till the end!`);
-      setTags('vlog, video, content, creator');
+    } catch (err) {
+      toast.error(`Couldn't generate metadata: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGeneratingMeta(false);
     }

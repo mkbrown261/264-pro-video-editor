@@ -97,6 +97,27 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
     });
     return init;
   });
+  // Keep in step with the tracks (undo, other panels, newly added tracks);
+  // meter level and record-arm are panel-local.
+  useEffect(() => {
+    setTrackStates(prev => {
+      const next: Record<string, TrackState> = {};
+      for (const t of tracks) {
+        const p = prev[t.id];
+        next[t.id] = {
+          eq: t.eq ? [...t.eq] : p?.eq ?? DEFAULT_EQ_BANDS.map(b => ({ ...b, id: createId() })),
+          compressor: t.compressor ? { ...t.compressor } : p?.compressor ?? { ...DEFAULT_COMPRESSOR },
+          volume: t.volume ?? 1,
+          pan: t.pan ?? 0,
+          muted: t.muted,
+          solo: t.solo,
+          armed: p?.armed ?? false,
+          vuLevel: p?.vuLevel ?? 0,
+        };
+      }
+      return next;
+    });
+  }, [tracks]);
   const [masterLimiter, setMasterLimiter] = useState(false);
   const [masterVuL, setMasterVuL] = useState(0);
   const [masterVuR, setMasterVuR] = useState(0);
