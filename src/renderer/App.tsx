@@ -554,6 +554,7 @@ export default function App() {
   const loadProjectFromData = useEditorStore((s) => s.loadProjectFromData);
   const updateTrack = useEditorStore((s) => s.updateTrack);
   const patchClip = useEditorStore((s) => s.patchClip);
+  const addRecordedAudio = useEditorStore((s) => s.addRecordedAudio);
   const setMagneticTimeline = useEditorStore((s) => s.setMagneticTimeline);
   const addCaptionsFromTranscript = useEditorStore((s) => s.addCaptionsFromTranscript);
   const magneticTimeline = useEditorStore((s) => s.project.sequence.settings.magneticTimeline !== false);
@@ -3449,6 +3450,7 @@ export default function App() {
                 getCachedVideoPath={renderCache.getCachedPath}
                 sequenceSize={project.sequence.settings}
                 resolveNestedSegments={resolveNestedSegments}
+                onVoiceoverRecorded={(asset, frame) => { addRecordedAudio(asset, frame); toast.success(`🎙 Voiceover added: ${asset.name}`); }}
               />
               {/* Edit-page Video Scopes — toggleable via Scopes toolbar button */}
               {editScopesOpen && (

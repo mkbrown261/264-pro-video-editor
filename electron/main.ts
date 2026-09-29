@@ -7,7 +7,7 @@ import pkg from "electron-updater";
 const { autoUpdater } = pkg;
 import { createReadStream, openAsBlob, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir as mkdirAsync, readFile, stat, unlink as unlinkAsync, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -88,7 +88,11 @@ const VIDEO_FILE_EXTENSIONS = [
   "mpeg",
   "wmv",
   "3gp",
-  "flv"
+  "flv",
+  // audio
+  "mp3", "wav", "aif", "aiff", "m4a", "aac", "flac", "ogg", "opus",
+  // stills
+  "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"
 ];
 const MEDIA_CONTENT_TYPES: Record<string, string> = {
   // App assets served through media:// (fetch is blocked on file:// in the packaged app)
@@ -615,7 +619,7 @@ ipcMain.handle("media:open-files", async (event) => {
         properties: ["openFile", "multiSelections"],
         filters: [
           {
-            name: "Video Files",
+            name: "Media Files",
             extensions: VIDEO_FILE_EXTENSIONS
           },
           {
@@ -629,7 +633,7 @@ ipcMain.handle("media:open-files", async (event) => {
         properties: ["openFile", "multiSelections"],
         filters: [
           {
-            name: "Video Files",
+            name: "Media Files",
             extensions: VIDEO_FILE_EXTENSIONS
           },
           {
@@ -724,6 +728,33 @@ ipcMain.handle("export:choose-file", async (event, suggestedName: string) => {
       });
 
   return result.canceled ? null : result.filePath ?? null;
+});
+
+// ── Voiceover recording ──────────────────────────────────────────────────────
+ipcMain.handle("media:request-mic", async () => {
+  if (process.platform !== "darwin") return true;
+  const { systemPreferences } = await import("electron");
+  return systemPreferences.askForMediaAccess("microphone");
+});
+
+/** Save a MediaRecorder capture as 48 kHz WAV in the user's recordings folder and probe it. */
+ipcMain.handle("media:save-recording", async (_e, data: Uint8Array, name?: string) => {
+  const dir = join(app.getPath("documents"), "264 Pro", "Recordings");
+  await mkdirAsync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const base = `${(name || "Voiceover").replace(/[^\w -]/g, "_")} ${stamp}`;
+  const raw = join(dir, `${base}.webm`);
+  const wav = join(dir, `${base}.wav`);
+  await writeFile(raw, Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+  const { spawn } = await import("node:child_process");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(getEnvironmentStatus().ffmpegPath, ["-v", "error", "-y", "-i", raw, "-ar", "48000", "-c:a", "pcm_s24le", wav]);
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Could not convert recording (code ${code})`))));
+  });
+  await unlinkAsync(raw).catch(() => {});
+  const [asset] = await probeMediaFiles([wav]);
+  return asset;
 });
 
 // ── GPU (viewer-engine) export: renderer composites, main decodes + encodes ──

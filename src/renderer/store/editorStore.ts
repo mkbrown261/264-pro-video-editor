@@ -90,6 +90,8 @@ interface EditorStore {
   setAssetPreviewUrl: (assetId: string, previewUrl: string) => void;
   appendAssetToTimeline: (assetId: string) => void;
   dropAssetAtFrame: (assetId: string, trackId: string, startFrame: number) => void;
+  /** Add a recorded (voiceover) asset and place it on a free audio track at startFrame. */
+  addRecordedAudio: (asset: MediaAsset, startFrame: number) => void;
   selectAsset: (assetId: string | null) => void;
   selectClip: (clipId: string | null) => void;
 
@@ -617,6 +619,12 @@ function createTimelineClipsForAsset(
   asset: MediaAsset,
   startFrame: number
 ): { project: EditorProjectState; clips: TimelineClip[]; selectedClipId: string } {
+  // Audio-only assets (music, voiceover) go straight onto an audio track.
+  if (!asset.width && asset.hasAudio) {
+    const result = findOrCreateFreeAudioTrack(project, asset, startFrame);
+    const audioClip = createEmptyClip(asset.id, result.audioTrackId, startFrame);
+    return { project: result.project, clips: [audioClip], selectedClipId: audioClip.id };
+  }
   const videoTrackId = getPrimaryTrackId(project, "video");
   if (!videoTrackId) throw new Error("No video track is available.");
 
@@ -965,10 +973,28 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   selectAsset: (assetId) => set({ selectedAssetId: assetId }),
 
+  addRecordedAudio: (asset, startFrame) => {
+    set(withUndo("Record Voiceover", (state) => {
+      const withAsset = { ...state.project, assets: [...state.project.assets, asset] };
+      const { project, audioTrackId } = findOrCreateFreeAudioTrack(withAsset, asset, Math.max(0, startFrame));
+      const clip = createEmptyClip(asset.id, audioTrackId, Math.max(0, startFrame));
+      return {
+        project: { ...project, sequence: { ...project.sequence, clips: [...project.sequence.clips, clip] } },
+        selectedClipId: clip.id,
+      };
+    }));
+  },
+
   dropAssetAtFrame: (assetId, trackId, startFrame) => {
     set(withUndo("Drop Asset", (state) => {
       const asset = state.project.assets.find((a) => a.id === assetId);
       if (!asset) return state;
+      // Audio-only media dropped on a video track lands on a free audio track.
+      if (!asset.width && asset.hasAudio && state.project.sequence.tracks.find((t) => t.id === trackId)?.kind === "video") {
+        const { project, audioTrackId } = findOrCreateFreeAudioTrack(state.project, asset, Math.max(0, startFrame));
+        const clip = createEmptyClip(asset.id, audioTrackId, Math.max(0, startFrame));
+        return { ...state, project: { ...project, sequence: { ...project.sequence, clips: [...project.sequence.clips, clip] } }, selectedClipId: clip.id };
+      }
       let nextProject = withAssetSequenceDefaults(state.project, asset);
       const track = nextProject.sequence.tracks.find((t) => t.id === trackId);
       if (!track) return state;

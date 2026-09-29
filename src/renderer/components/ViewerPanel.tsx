@@ -33,6 +33,7 @@ import { computePreviewUnits, flattenNestedAudio, type NestedResolver, type Prev
 import { ViewerCompositor } from "../lib/viewerCompositor";
 import { LayerSourcePool } from "../lib/layerSourcePool";
 import { effectsAtFrame } from "../lib/effectsAtFrame";
+import { useVoiceoverRecorder } from "../hooks/useVoiceoverRecorder";
 import { loadSegmenter, onSegmenterReady } from "../lib/backgroundRemoval";
 
 export interface ViewerPanelHandle {
@@ -85,6 +86,8 @@ interface ViewerPanelProps {
   sequenceSize?: { width: number; height: number };
   /** Inner segments of a nested-sequence clip (for the compositor). */
   resolveNestedSegments?: NestedResolver;
+  /** A voiceover finished recording (place it on the timeline). */
+  onVoiceoverRecorded?: (asset: MediaAsset, startFrame: number) => void;
 }
 
 
@@ -391,7 +394,23 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     getCachedVideoPath,
     sequenceSize,
     resolveNestedSegments,
+    onVoiceoverRecorded,
   }, ref) {
+    const voiceover = useVoiceoverRecorder();
+    const toggleVoiceover = async () => {
+      try {
+        if (voiceover.recording) {
+          onSetPlaybackPlaying(false);
+          const res = await voiceover.stop();
+          if (res) onVoiceoverRecorded?.(res.asset, res.startFrame);
+        } else {
+          await voiceover.start(playheadFrame);
+          onSetPlaybackPlaying(true);
+        }
+      } catch (e) {
+        setPlaybackMessage(`Voiceover: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
 
     const panelRef       = useRef<HTMLElement | null>(null);
     const videoRef       = useRef<HTMLVideoElement | null>(null);
@@ -1234,6 +1253,22 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             </button>
             <button className="transport-btn muted" disabled={!timelineReady} onClick={() => onStepFrames(1)}  title="Next frame (→)"    type="button">⏭ <kbd>→</kbd></button>
             <button className="transport-btn muted" disabled={!timelineReady} onClick={stopPlayback}           title="Stop (K)"           type="button">⏹ <kbd>K</kbd></button>
+            {onVoiceoverRecorded && (
+              <button
+                className={`transport-btn${voiceover.recording ? " playing" : " muted"}`}
+                onClick={() => void toggleVoiceover()}
+                title={voiceover.recording ? "Stop recording voiceover" : "Record voiceover from the playhead (plays the timeline while you record)"}
+                type="button"
+                style={voiceover.recording ? { color: "#ff5f5f", borderColor: "rgba(255,95,95,0.6)" } : undefined}
+              >
+                {voiceover.recording ? "⏺ REC" : "🎙 VO"}
+                {voiceover.recording && (
+                  <span aria-label="Input level" style={{ display: "inline-block", width: 36, height: 5, marginLeft: 6, background: "rgba(255,255,255,0.12)", borderRadius: 3, overflow: "hidden", verticalAlign: "middle" }}>
+                    <span style={{ display: "block", height: "100%", width: `${Math.min(100, voiceover.level * 100)}%`, background: voiceover.level > 0.9 ? "#ff5f5f" : "#2fc77a" }} />
+                  </span>
+                )}
+              </button>
+            )}
           </div>
 
           <div className="transport-timecode">

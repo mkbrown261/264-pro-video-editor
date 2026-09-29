@@ -35,6 +35,9 @@ const editorApi = {
     ipcRenderer.invoke("export:choose-file", suggestedName),
   exportSequence: (request: ExportRequest): Promise<ExportResponse> =>
     ipcRenderer.invoke("export:render", request),
+  /** Voiceover: ask for microphone access (macOS) and save a recording as an asset. */
+  requestMicAccess: (): Promise<boolean> => ipcRenderer.invoke("media:request-mic"),
+  saveRecording: (data: Uint8Array, name?: string): Promise<MediaAsset> => ipcRenderer.invoke("media:save-recording", data, name),
   /** GPU (viewer-engine) export: see electron/gpuExport.ts */
   gpuExportStart: (request: ExportRequest): Promise<{ jobId: string; width: number; height: number; fps: number; totalFrames: number }> =>
     ipcRenderer.invoke("gpu-export:start", request),

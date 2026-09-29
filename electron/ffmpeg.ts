@@ -305,6 +305,9 @@ export function getEnvironmentStatus(): EnvironmentStatus {
   };
 }
 
+/** Default length of a still image on the timeline. */
+const STILL_IMAGE_SECONDS = 10;
+
 export async function probeMediaFile(sourcePath: string): Promise<MediaAsset> {
   const environment = getEnvironmentStatus();
 
@@ -330,15 +333,37 @@ export async function probeMediaFile(sourcePath: string): Promise<MediaAsset> {
     (stream) => stream.codec_type === "audio"
   );
 
+  if (!videoStream && !audioStream) {
+    throw new Error(`"${basename(sourcePath)}" has no video or audio stream.`);
+  }
+  const isImage = !!videoStream && /\.(png|jpe?g|webp|bmp|tiff?|gif|heic|avif)$/i.test(sourcePath) &&
+    !(Number(parsed.format?.duration) > 0.5);
+  const assetId = randomUUID();
+
+  // Audio-only files (music, voiceover): no picture, no thumbnail.
   if (!videoStream) {
-    throw new Error(`"${basename(sourcePath)}" is not a supported video file.`);
+    return {
+      id: assetId,
+      name: basename(sourcePath),
+      sourcePath,
+      previewUrl: createMediaUrl(sourcePath),
+      thumbnailUrl: null,
+      durationSeconds: Number(parsed.format?.duration || audioStream?.duration || 0),
+      nativeFps: 30,
+      width: 0,
+      height: 0,
+      hasAudio: true,
+      fileSize: Number(parsed.format?.size || 0) || undefined,
+      bitrate: parsed.format?.bit_rate ? Math.round(Number(parsed.format.bit_rate) / 1000) : undefined,
+      audioCodec: audioStream?.codec_name || undefined,
+      audioChannels: audioStream?.channels ? Number(audioStream.channels) : undefined,
+    };
   }
 
-  const durationSeconds = Number(
-    parsed.format?.duration || videoStream.duration || 0
-  );
-  const assetId = randomUUID();
-  const nativeFps = parseRate(videoStream.avg_frame_rate || videoStream.r_frame_rate);
+  const durationSeconds = isImage
+    ? STILL_IMAGE_SECONDS
+    : Number(parsed.format?.duration || videoStream.duration || 0);
+  const nativeFps = isImage ? 30 : parseRate(videoStream.avg_frame_rate || videoStream.r_frame_rate);
 
   // ── FAST PATH: thumbnail only, no proxy encode ────────────────────────────
   // generatePreviewProxy is very slow (re-encodes the full video).
@@ -414,6 +439,8 @@ export async function generateProxiesInBackground(
   if (!environment.ffmpegAvailable) return;
 
   for (const asset of assets) {
+    // Nothing to proxy for audio-only files and stills.
+    if (!asset.width || /\.(png|jpe?g|webp|bmp|tiff?|gif|heic|avif)$/i.test(asset.sourcePath)) continue;
     try {
       const nativeFps = asset.nativeFps || 30;
       const previewFps = normalizeTimelineFps(nativeFps);

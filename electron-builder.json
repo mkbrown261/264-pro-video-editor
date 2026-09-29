@@ -45,7 +45,10 @@
       {
         "target": "zip"
       }
-    ]
+    ],
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "264 Pro records voiceover from your microphone."
+    }
   },
   "win": {
     "icon": "build-assets/icon.ico",
