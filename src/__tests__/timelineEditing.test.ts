@@ -207,6 +207,25 @@ describe("timeline editing", () => {
     expect(copy.keyframes?.opacity?.keyframes.map((k) => k.frame)).toEqual([160, 190]);
   });
 
+  it("slip keeps position and duration, clamps to the media, and slips linked audio", () => {
+    load([clip("v", "V1", 0, { linkedGroupId: "g" }), clip("a", "A1", 0, { linkedGroupId: "g" })]);
+    S().slip("v", 50);
+    expect([seg("v").startFrame, seg("v").endFrame, seg("a").endFrame]).toEqual([0, 60, 60]);
+    expect(seg("v").sourceInSeconds).toBeCloseTo(80 / 30);
+    expect(seg("a").sourceInSeconds).toBeCloseTo(80 / 30);
+    S().slip("v", -500);
+    expect(seg("v").sourceInSeconds).toBeCloseTo(0);
+    expect(seg("v").endFrame).toBe(60);
+  });
+
+  it("slide moves a clip between its neighbours without changing its source range", () => {
+    load([clip("p", "V1", 0), clip("c", "V1", 60), clip("n", "V1", 120)]);
+    S().slide("c", 10);
+    expect([seg("p").endFrame, seg("c").startFrame, seg("c").endFrame, seg("n").startFrame, seg("n").endFrame]).toEqual([70, 70, 130, 130, 180]);
+    expect(seg("c").sourceInSeconds).toBeCloseTo(1);
+    expect(seg("n").sourceInSeconds).toBeCloseTo(40 / 30);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });

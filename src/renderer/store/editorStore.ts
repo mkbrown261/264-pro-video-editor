@@ -843,7 +843,7 @@ function carryKeyframes(state: EditorStore, partial: Partial<EditorStore>): Part
   let changed = false;
   const clips = nextClips.map((c) => {
     const p = prevById.get(c.id);
-    if (!p || p === c) return c;
+    if (!p || p === c || c.startFrame === p.startFrame) return c; // slips/trims don't move the clip
     // Moved minus trimmed: trims keep content in place, speed changes don't move it.
     const speed = Math.max(0.25, Math.min(4, c.speed ?? 1));
     const d = Math.round((c.startFrame - p.startFrame) - (c.trimStartFrames - p.trimStartFrames) / speed);
@@ -2767,82 +2767,60 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
 
   slip: (clipId, deltaFrames) => {
+    // Change which part of the source plays; the clip (and its linked
+    // partners) keep their position and duration.
     set(withUndo("Slip", (state) => {
-      const clip = state.project.sequence.clips.find(c => c.id === clipId);
-      if (!clip) return state;
-      const asset = state.project.assets.find(a => a.id === clip.assetId);
-      if (!asset) return state;
-      const fps = state.project.sequence.settings.fps;
-      const totalAssetFrames = Math.round(asset.durationSeconds * fps);
-
-      // Shift trimStartFrames += deltaFrames, trimEndFrames += -deltaFrames (keep duration constant)
-      const newTrimStart = Math.max(0, Math.min(clip.trimStartFrames + deltaFrames, totalAssetFrames - clip.trimEndFrames - 1));
-      const newTrimEnd   = Math.max(0, Math.min(clip.trimEndFrames + (-deltaFrames), totalAssetFrames - clip.trimStartFrames - 1));
-
-      return updateClipInState(state, clipId, (c) => ({
-        ...c,
-        trimStartFrames: newTrimStart,
-        trimEndFrames: newTrimEnd,
-      }));
+      const group = getLinkedClips(state.project, clipId);
+      if (!group.length) return state;
+      const sp = (c: TimelineClip) => Math.max(0.25, Math.min(4, c.speed ?? 1));
+      let d = deltaFrames;
+      for (const c of group) d = Math.max(-Math.floor(c.trimStartFrames / sp(c)), Math.min(Math.floor(c.trimEndFrames / sp(c)), d));
+      if (d === 0) return state;
+      const ids = new Set(group.map((c) => c.id));
+      const clips = state.project.sequence.clips.map((c) => ids.has(c.id)
+        ? { ...c, trimStartFrames: c.trimStartFrames + Math.round(d * sp(c)), trimEndFrames: Math.max(0, c.trimEndFrames - Math.round(d * sp(c))) }
+        : c);
+      return { project: { ...state.project, sequence: { ...state.project.sequence, clips } } };
     }));
   },
 
   slide: (clipId, deltaFrames) => {
+    // Move the clip (and linked partners) along its track keeping its source
+    // range: the adjacent clip before it extends/shortens its tail, the one
+    // after it shortens/extends its head. Nothing else moves.
     set(withUndo("Slide", (state) => {
-      const clip = state.project.sequence.clips.find(c => c.id === clipId);
-      if (!clip) return state;
-      const asset = state.project.assets.find(a => a.id === clip.assetId);
-      if (!asset) return state;
       const fps = state.project.sequence.settings.fps;
-
-      const newStartFrame = Math.max(0, clip.startFrame + deltaFrames);
-
-      // Find previous clip on same track
-      const prevClip = state.project.sequence.clips
-        .filter(c => c.trackId === clip.trackId && c.id !== clipId && c.startFrame < clip.startFrame)
-        .sort((a, b) => b.startFrame - a.startFrame)[0] ?? null;
-
-      // Find next clip on same track
-      const clipDur = Math.round(asset.durationSeconds * fps) - clip.trimStartFrames - clip.trimEndFrames;
-      const clipEnd = clip.startFrame + clipDur;
-      const nextClip = state.project.sequence.clips
-        .filter(c => c.trackId === clip.trackId && c.id !== clipId && c.startFrame >= clipEnd)
-        .sort((a, b) => a.startFrame - b.startFrame)[0] ?? null;
-
-      const updatedClips = state.project.sequence.clips.map(c => {
-        if (c.id === clipId) {
-          return { ...c, startFrame: newStartFrame };
-        }
-        if (prevClip && c.id === prevClip.id) {
-          const prevAsset = state.project.assets.find(a => a.id === c.assetId);
-          if (!prevAsset) return c;
-          const prevTotal = Math.round(prevAsset.durationSeconds * fps);
-          // Prev clip trims its end to fill/reduce the gap
-          const newPrevTrimEnd = Math.max(0,
-            Math.min(c.trimEndFrames - deltaFrames, prevTotal - c.trimStartFrames - 1)
-          );
-          return { ...c, trimEndFrames: newPrevTrimEnd };
-        }
-        if (nextClip && c.id === nextClip.id) {
-          const nextAsset = state.project.assets.find(a => a.id === c.assetId);
-          if (!nextAsset) return c;
-          const nextTotal = Math.round(nextAsset.durationSeconds * fps);
-          // Next clip adjusts trimStart + startFrame to maintain continuity
-          const newNextTrimStart = Math.max(0,
-            Math.min(c.trimStartFrames + deltaFrames, nextTotal - c.trimEndFrames - 1)
-          );
-          return { ...c, trimStartFrames: newNextTrimStart };
-        }
-        return c;
+      const assetsById = new Map(state.project.assets.map((a) => [a.id, a]));
+      const sp = (c: TimelineClip) => Math.max(0.25, Math.min(4, c.speed ?? 1));
+      const dur = (c: TimelineClip) => getClipDurationFrames(c, assetsById.get(c.assetId)!, fps);
+      const group = getLinkedClips(state.project, clipId).filter((c) => assetsById.has(c.assetId));
+      if (!group.length) return state;
+      const ids = new Set(group.map((c) => c.id));
+      const plans = group.map((c) => {
+        const others = state.project.sequence.clips.filter((o) => o.trackId === c.trackId && !ids.has(o.id) && assetsById.has(o.assetId));
+        const end = c.startFrame + dur(c);
+        const prev = others.find((o) => o.startFrame + dur(o) === c.startFrame) ?? null;
+        const next = others.find((o) => o.startFrame === end) ?? null;
+        const prevEnd = Math.max(0, ...others.filter((o) => o.startFrame < c.startFrame).map((o) => Math.min(c.startFrame, o.startFrame + dur(o))));
+        const nextStart = Math.min(Infinity, ...others.filter((o) => o.startFrame >= end).map((o) => o.startFrame));
+        return { c, prev, next, prevEnd, nextStart, end };
       });
-
-      return {
-        project: {
-          ...state.project,
-          sequence: { ...state.project.sequence, clips: updatedClips }
-        },
-        playback: { ...state.playback, playheadFrame: clampPlayhead({ ...state.project, sequence: { ...state.project.sequence, clips: updatedClips } }, state.playback.playheadFrame) }
-      };
+      let d = deltaFrames;
+      for (const { c, prev, next, prevEnd, nextStart, end } of plans) {
+        const maxRight = Math.min(prev ? prev.trimEndFrames / sp(prev) : Infinity, next ? dur(next) - 1 : nextStart - end);
+        const maxLeft = Math.min(prev ? dur(prev) - 1 : c.startFrame - prevEnd, next ? next.trimStartFrames / sp(next) : Infinity);
+        d = Math.max(-Math.floor(maxLeft), Math.min(Math.floor(maxRight), d));
+      }
+      if (d === 0) return state;
+      const updated = new Map<string, TimelineClip>();
+      for (const { c, prev, next } of plans) {
+        updated.set(c.id, { ...c, startFrame: c.startFrame + d });
+        if (prev) updated.set(prev.id, { ...prev, trimEndFrames: Math.max(0, prev.trimEndFrames - Math.round(d * sp(prev))) });
+        if (next) updated.set(next.id, { ...next, startFrame: next.startFrame + d, trimStartFrames: Math.max(0, next.trimStartFrames + Math.round(d * sp(next))) });
+      }
+      const clips = state.project.sequence.clips.map((c) => updated.get(c.id) ?? c);
+      const project = { ...state.project, sequence: { ...state.project.sequence, clips } };
+      return { project, playback: { ...state.playback, playheadFrame: clampPlayhead(project, state.playback.playheadFrame) } };
     }));
   },
 
