@@ -31,10 +31,11 @@ function getOpenAiKey(): string {
   const k = readAppSettings().openaiApiKey;
   return typeof k === "string" ? k : "";
 }
-import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
+import type { ColorGrade, ExportRequest, MediaAsset } from "../src/shared/models.js";
 import { estimateAudioOffset } from "../src/shared/audioSync.js";
 import { trackBeats } from "../src/shared/beatTrack.js";
 import { escapeFilterValue } from "../src/shared/exportGraph.js";
+import { bakeChainToLut, compileGrade, parseCubeLut, serializeCubeLut } from "../src/shared/colorMath.js";
 const quotePath = (p: string) => `'${escapeFilterValue(p)}'`;
 import { cancelGpuExport, finishGpuExport, readGpuSourceFrame, startGpuExport, writeGpuFrame } from "./gpuExport.js";
 import {
@@ -2128,47 +2129,26 @@ ipcMain.handle('ai:voice-isolate', async (_ev, args: { inputPath: string; output
   }
 });
 
-ipcMain.handle('lut:export', async (_ev, args: { grade: Record<string, number>; name: string }) => {
+ipcMain.handle('lut:export', async (_ev, args: { grades: ColorGrade[]; name: string }) => {
+  // Bake the clip's full grade chain with the same colour maths as preview and
+  // render (nodes, curves, wheels, colour slice, file LUTs).
   try {
-    const { dialog } = await import('electron');
-    const fsM = await import('fs');
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Export LUT',
-      defaultPath: `${((args.name ?? '') || 'grade').replace(/[^a-zA-Z0-9_-]/g,'_')}.cube`,
+      defaultPath: `${((args.name ?? '') || 'grade').replace(/[^a-zA-Z0-9_-]/g, '_')}.cube`,
       filters: [{ name: 'LUT Files', extensions: ['cube'] }],
     });
     if (canceled || !filePath) return { success: false, canceled: true };
-    const SIZE = 17;
-    const g = args.grade;
-    const exposure = g.exposure ?? 0;
-    const contrast = g.contrast ?? 0;
-    const saturation = g.saturation ?? 1;
-    const temperature = g.temperature ?? 0;
-    const tint = g.tint ?? 0;
-    const shadows = g.shadows ?? 0;
-    const highlights = g.highlights ?? 0;
-    const vibrance = g.vibrance ?? 0;
-    const lines = [`# 264 Pro LUT export`, `TITLE "${args.name}"`, `LUT_3D_SIZE ${SIZE}`, ''];
-    for (let b = 0; b < SIZE; b++) {
-      for (let g2 = 0; g2 < SIZE; g2++) {
-        for (let r = 0; r < SIZE; r++) {
-          let R = r/(SIZE-1), G = g2/(SIZE-1), B = b/(SIZE-1);
-          const em = Math.pow(2, exposure); R*=em; G*=em; B*=em;
-          const cf = 1+contrast; R=(R-.5)*cf+.5; G=(G-.5)*cf+.5; B=(B-.5)*cf+.5;
-          const tf=temperature/500; R+=tf; B-=tf;
-          const tif=tint/500; G+=tif;
-          if(shadows){const s=shadows*.1; R+=s*(1-R); G+=s*(1-G); B+=s*(1-B);}
-          if(highlights){const h=highlights*.1; R+=h*R; G+=h*G; B+=h*B;}
-          if(saturation!==1){const l=.2126*R+.7152*G+.0722*B; R=l+(R-l)*saturation; G=l+(G-l)*saturation; B=l+(B-l)*saturation;}
-          if(vibrance){const l=.2126*R+.7152*G+.0722*B; const sat=Math.max(R,G,B)-Math.min(R,G,B); const vf=1+(vibrance*.01)*(1-sat); R=l+(R-l)*vf; G=l+(G-l)*vf; B=l+(B-l)*vf;}
-          R=Math.max(0,Math.min(1,R)); G=Math.max(0,Math.min(1,G)); B=Math.max(0,Math.min(1,B));
-          lines.push(`${R.toFixed(6)} ${G.toFixed(6)} ${B.toFixed(6)}`);
-        }
+    const chain = await Promise.all((args.grades ?? []).map(async (g) => {
+      let fileLut = null;
+      if (g.lutPath) {
+        try { fileLut = parseCubeLut(await readFile(g.lutPath, 'utf8')); } catch { /* missing LUT file: skip it */ }
       }
-    }
-    fsM.writeFileSync(filePath, lines.join('\n'));
+      return compileGrade(g, fileLut);
+    }));
+    await writeFile(filePath, serializeCubeLut(bakeChainToLut(chain, 33), args.name || '264 Pro Grade'), 'utf8');
     return { success: true, filePath };
-  } catch(e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
 
 function handleDeepLink(url: string) {

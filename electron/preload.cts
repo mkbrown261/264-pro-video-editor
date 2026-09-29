@@ -158,7 +158,7 @@ const electronAPI = {
     ipcRenderer.invoke('audio:process-clip', args),
   voiceIsolate: (args: { inputPath: string; outputPath?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
     ipcRenderer.invoke('ai:voice-isolate', args),
-  exportLut: (args: { grade: Record<string, number>; name: string }) => ipcRenderer.invoke('lut:export', args),
+  exportLut: (args: { grades: unknown[]; name: string }) => ipcRenderer.invoke('lut:export', args),
   // ── Wave 1 AI Power Features ────────────────────────────────────────────────────
   /** Frame interpolation (smooth slow-mo). Multiplier: 2/4/8. quality: draft/good/best */
   frameInterpolate: (args: { inputPath: string; outputPath?: string; multiplier?: 2|4|8; quality?: 'draft'|'good'|'best' }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>

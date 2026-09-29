@@ -14,6 +14,7 @@
  *    regardless of whether the clip has a stored grade yet.
  */
 
+import { getClipGradeNodes } from "../../shared/colorMath";
 import {
   useCallback,
   useEffect,
@@ -997,9 +998,10 @@ export function ColorGradingPanel({
   // ── LUT export ──────────────────────────────────────────────────────────────
   const handleExportLut = async () => {
     if (!selectedSegment) { toast.warning('Select a clip first'); return; }
-    const gradeToExport = colorGrade ?? createDefaultColorGrade();
+    // The whole node chain, baked by the same maths as preview/render.
+    const grades = getClipGradeNodes({ colorGrade: colorGrade ?? createDefaultColorGrade(), gradeNodes });
     const assetName = selectedSegment.asset?.name ?? 'grade';
-    const result = await (window as any).electronAPI?.exportLut?.({ grade: gradeToExport as unknown as Record<string, number>, name: assetName });
+    const result = await (window as any).electronAPI?.exportLut?.({ grades, name: assetName });
     if (result?.canceled) return;
     if (result?.success) toast.success(`LUT saved: ${result.filePath}`);
     else toast.error(result?.error ?? 'Export failed');
