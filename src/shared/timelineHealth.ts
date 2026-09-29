@@ -53,6 +53,34 @@ export function analyzeTimelineHealth(project: EditorProject): string[] {
   return issues.length ? issues : ["✅ Timeline looks healthy! No obvious issues found."];
 }
 
+export interface HealthIssue { severity: "error" | "warning" | "info"; message: string; clipId?: string }
+
+/** Structured health report (Project Health panel). */
+export function projectHealthIssues(project: EditorProject): { issues: HealthIssue[]; score: number; summary: string } {
+  const { tracks, settings } = project.sequence;
+  const fps = settings.fps || 30;
+  const segs = buildTimelineSegments(project.sequence, project.assets).filter((s) => s.clip.isEnabled);
+  const issues: HealthIssue[] = [];
+  for (const s of segs) {
+    if ((s.clip.volume ?? 1) > 1.8) issues.push({ severity: "warning", message: `"${s.asset.name}" volume at ${Math.round((s.clip.volume ?? 1) * 100)}% — may peak/distort`, clipId: s.clip.id });
+  }
+  for (const t of tracks) {
+    if ((t.volume ?? 1) > 1.9) issues.push({ severity: "warning", message: `Track "${t.name}" volume very high — risk of clipping` });
+  }
+  const footage = segs.filter((s) => s.track.kind === "video" && s.asset.sourcePath && !s.clip.titleConfig && !s.clip.nestedSequenceId);
+  const ungraded = footage.filter((s) => !((s.clip.colorGrade && !s.clip.colorGrade.bypass) || (s.clip.gradeNodes?.length ?? 0) > 0)).length;
+  if (ungraded > 0 && footage.length > 2) issues.push({ severity: "info", message: `${ungraded} of ${footage.length} video clips have no color grade applied` });
+  for (const g of pictureGaps(project, Math.round(fps))) {
+    issues.push({ severity: "warning", message: `${((g.end - g.start) / fps).toFixed(1)}s of black at ${tc(g.start, fps)}` });
+  }
+  if (!tracks.some((t) => t.kind === "audio") && footage.length > 0) issues.push({ severity: "warning", message: "No audio tracks — did you forget background music or voiceover?" });
+  if (![23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60].some((f) => Math.abs(f - settings.fps) < 0.01)) issues.push({ severity: "error", message: `Unusual frame rate: ${settings.fps}fps — most platforms expect 24/30/60fps` });
+  if (settings.width % 2 !== 0 || settings.height % 2 !== 0) issues.push({ severity: "error", message: `Resolution ${settings.width}×${settings.height} has odd dimensions — H.264 requires even numbers` });
+  const errors = issues.filter((i) => i.severity === "error").length;
+  const warnings = issues.filter((i) => i.severity === "warning").length;
+  return { issues, score: Math.max(0, 100 - errors * 20 - warnings * 5), summary: `${errors} errors, ${warnings} warnings` };
+}
+
 export interface DeliveryFormat {
   label: string;
   codec: ExportCodec;

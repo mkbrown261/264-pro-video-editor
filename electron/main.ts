@@ -34,6 +34,7 @@ function getOpenAiKey(): string {
 import type { ColorGrade, ExportRequest, MediaAsset } from "../src/shared/models.js";
 import { estimateAudioOffset } from "../src/shared/audioSync.js";
 import { trackBeats } from "../src/shared/beatTrack.js";
+import { projectHealthIssues } from "../src/shared/timelineHealth.js";
 import { escapeFilterValue } from "../src/shared/exportGraph.js";
 import { bakeChainToLut, compileGrade, parseCubeLut, serializeCubeLut } from "../src/shared/colorMath.js";
 const quotePath = (p: string) => `'${escapeFilterValue(p)}'`;
@@ -2903,46 +2904,7 @@ ipcMain.handle('ai:generate-captions', async (_ev, args: { filePath: string; lan
 // mismatched fps, gaps, orphaned clips, wrong export settings.
 ipcMain.handle('project:health-check', async (_ev, args: { project: unknown }) => {
   try {
-    type Clip = { id: string; trackId: string; startFrame: number; endFrame?: number; trimStartFrames?: number; trimEndFrames?: number; volume?: number; speed?: number; colorGrade?: unknown; isEnabled?: boolean };
-    type Track = { id: string; kind: string; volume?: number; muted?: boolean };
-    type Sequence = { clips: Clip[]; tracks: Track[]; settings: { fps: number; width: number; height: number; audioSampleRate: number } };
-    type Project = { sequence: Sequence; assets: Array<{ id: string; durationSeconds: number; hasAudio?: boolean }> };
-    const proj = args.project as Project;
-    const { clips, tracks, settings } = proj.sequence;
-    const issues: Array<{ severity: 'error' | 'warning' | 'info'; message: string; clipId?: string }> = [];
-    // Audio peaking check
-    for (const clip of clips) {
-      if ((clip.volume ?? 1) > 1.8) issues.push({ severity: 'warning', message: `Clip volume at ${Math.round((clip.volume ?? 1) * 100)}% — may peak/distort`, clipId: clip.id });
-    }
-    for (const track of tracks) {
-      if ((track.volume ?? 1) > 1.9) issues.push({ severity: 'warning', message: `Track "${track.id}" volume very high — risk of clipping` });
-    }
-    // Ungraded video clips
-    const videoClips = clips.filter(c => { const t = tracks.find(t2 => t2.id === c.trackId); return t?.kind === 'video'; });
-    const ungradedCount = videoClips.filter(c => !c.colorGrade).length;
-    if (ungradedCount > 0 && videoClips.length > 2) issues.push({ severity: 'info', message: `${ungradedCount} of ${videoClips.length} video clips have no color grade applied` });
-    // Gap detection
-    const videoSegs = clips.filter(c => { const t = tracks.find(t2 => t2.id === c.trackId); return t?.kind === 'video' && c.isEnabled !== false; }).sort((a, b) => a.startFrame - b.startFrame);
-    for (let i = 1; i < videoSegs.length; i++) {
-      const prev = videoSegs[i-1]; const cur = videoSegs[i];
-      const prevEnd = prev.endFrame ?? (prev.startFrame + 100);
-      if (cur.startFrame > prevEnd + settings.fps) { // >1 second gap
-        const gapSec = ((cur.startFrame - prevEnd) / settings.fps).toFixed(1);
-        issues.push({ severity: 'warning', message: `${gapSec}s gap between clips at ${(prevEnd / settings.fps).toFixed(1)}s` });
-      }
-    }
-    // No audio tracks
-    const audioTracks = tracks.filter(t => t.kind === 'audio');
-    if (audioTracks.length === 0 && videoClips.length > 0) issues.push({ severity: 'warning', message: 'No audio tracks — did you forget background music or voiceover?' });
-    // FPS sanity
-    if (![23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60].includes(settings.fps)) issues.push({ severity: 'error', message: `Unusual frame rate: ${settings.fps}fps — most platforms expect 24/30/60fps` });
-    // Resolution sanity
-    if (settings.width % 2 !== 0 || settings.height % 2 !== 0) issues.push({ severity: 'error', message: `Resolution ${settings.width}×${settings.height} has odd dimensions — H.264 requires even numbers` });
-    // Score
-    const errorCount = issues.filter(i => i.severity === 'error').length;
-    const warnCount = issues.filter(i => i.severity === 'warning').length;
-    const score = Math.max(0, 100 - errorCount * 20 - warnCount * 5);
-    return { success: true, issues, score, summary: `${errorCount} errors, ${warnCount} warnings` };
+    return { success: true, ...projectHealthIssues(args.project as Parameters<typeof projectHealthIssues>[0]) };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }

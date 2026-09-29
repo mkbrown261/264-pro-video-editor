@@ -286,3 +286,14 @@ describe("timeline health", () => {
     expect(msgs.filter((m) => /gap/.test(m))).toHaveLength(1);
   });
 });
+
+import { projectHealthIssues } from "../shared/timelineHealth";
+describe("project health report", () => {
+  it("measures gaps from real clip lengths", () => {
+    load([clip("c1", "V1", 0), clip("c2", "V1", 150)]); // 0–60, gap 60–150
+    const r = projectHealthIssues(S().project);
+    const gaps = r.issues.filter((i) => /black/.test(i.message));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].message).toMatch(/^3\.0s of black at 0:02/);
+  });
+});
