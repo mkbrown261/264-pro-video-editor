@@ -125,3 +125,31 @@ export function cutout(src: CanvasImageSource, w: number, h: number, cfg: Backgr
   o.globalCompositeOperation = "source-over";
   return outCanvas;
 }
+
+/**
+ * Where the person is in a frame: confidence-weighted centroid (0–1) and the
+ * fraction of the frame they cover. Null when the segmenter isn't ready.
+ */
+export function personCentroid(src: CanvasImageSource): { x: number; y: number; mass: number } | null {
+  if (!segmenter) return null;
+  let result: ImageSegmenterResult;
+  try {
+    clock = Math.max(clock + 1, Math.floor(performance.now()));
+    result = segmenter.segmentForVideo(src as HTMLCanvasElement, clock);
+  } catch {
+    return null;
+  }
+  const conf = result.confidenceMasks?.[0];
+  if (!conf) { result.close?.(); return null; }
+  const w = conf.width, h = conf.height, data = conf.getAsFloat32Array();
+  let sum = 0, sx = 0, sy = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = data[y * w + x];
+      if (c < 0.5) continue;
+      sum += c; sx += c * x; sy += c * y;
+    }
+  }
+  result.close?.();
+  return sum > 0 ? { x: sx / sum / w, y: sy / sum / h, mass: sum / (w * h) } : { x: 0.5, y: 0.5, mass: 0 };
+}

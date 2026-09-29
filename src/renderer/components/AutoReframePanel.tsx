@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { toast } from "../lib/toast";
+import { trackSubject } from "../lib/subjectTracker";
 import type { MediaAsset } from "../../shared/models";
 
 interface AutoReframePanelProps {
@@ -55,20 +56,19 @@ export function AutoReframePanel({ assets, onAddAsset, onClose }: AutoReframePan
 
       setProgress("⚙️ Reframing with FFmpeg…");
 
-      // Cast to access reframeAnalyzeAndExport — declared in vite-env.d.ts
-      const api = window.electronAPI as (typeof window.electronAPI & {
-        reframeAnalyzeAndExport?: (args: {
-          sourcePath: string;
-          targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
-          outputPath: string;
-          trackingMode: 'center' | 'face' | 'motion';
-        }) => Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }>;
-      });
-      const result = await api?.reframeAnalyzeAndExport?.({
+      // Follow the subject: analyse the clip in the app, FFmpeg crops along the path.
+      let cameraPath: Array<{ t: number; x: number; y: number }> | undefined;
+      if (trackingMode !== "center") {
+        setProgress(trackingMode === "face" ? "👤 Finding the person…" : "🎯 Following motion…");
+        cameraPath = await trackSubject(asset.sourcePath, asset.durationSeconds, trackingMode, (f) => setProgress(`${trackingMode === "face" ? "👤 Tracking person" : "🎯 Tracking motion"}… ${Math.round(f * 100)}%`));
+      }
+      setProgress("⚙️ Rendering reframed clip…");
+      const result = await window.electronAPI?.reframeAnalyzeAndExport?.({
         sourcePath: asset.sourcePath,
         targetAspect,
         outputPath,
         trackingMode,
+        cameraPath,
       });
 
       if (!result?.success) {
@@ -76,20 +76,19 @@ export function AutoReframePanel({ assets, onAddAsset, onClose }: AutoReframePan
         return;
       }
 
-      // Derive a stable new asset id
-      const newId = `${asset.id}_reframe_${aspectSuffix}_${Date.now()}`;
-
-      const newAsset: MediaAsset = {
-        ...asset,
-        id:           newId,
-        name:         `${asset.name} [${targetAspect}]`,
-        sourcePath:   result.outputPath!,
-        previewUrl:   `media://${result.outputPath}`,
-        thumbnailUrl: null,
-        width:        result.cropW  ?? asset.width,
-        height:       result.cropH  ?? asset.height,
-        filmstripThumbs: undefined,
-      };
+      const newAsset: MediaAsset = result.asset
+        ? { ...result.asset, name: `${asset.name} [${targetAspect}]` }
+        : {
+          ...asset,
+          id: `${asset.id}_reframe_${aspectSuffix}_${Date.now()}`,
+          name: `${asset.name} [${targetAspect}]`,
+          sourcePath: result.outputPath!,
+          previewUrl: `media://asset?path=${encodeURIComponent(result.outputPath!)}`,
+          thumbnailUrl: null,
+          width: result.cropW ?? asset.width,
+          height: result.cropH ?? asset.height,
+          filmstripThumbs: undefined,
+        };
 
       onAddAsset(newAsset);
       toast.success(`✅ Reframed to ${targetAspect} — added to Media Pool`);

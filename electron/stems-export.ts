@@ -2,15 +2,11 @@ import type { EditorProject, TimelineTrack } from '../src/shared/models.js';
 import { spawn } from 'child_process';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
+import { getEnvironmentStatus } from './ffmpeg.js';
 
+// The app's resolver handles the packaged (asar-unpacked) binary location.
 function getFfmpegPath(): string {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const ffmpegStatic = require('ffmpeg-static');
-    const p = (ffmpegStatic as { default?: string }).default ?? (ffmpegStatic as string);
-    if (typeof p === 'string' && p) return p;
-  } catch { /* fall through */ }
-  return 'ffmpeg';
+  return getEnvironmentStatus().ffmpegPath;
 }
 
 export interface StemExportRequest {

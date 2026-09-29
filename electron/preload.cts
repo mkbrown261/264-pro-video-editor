@@ -152,6 +152,8 @@ const electronAPI = {
   transcribeAudio: (args: { filePath: string; language?: string }) =>
     ipcRenderer.invoke('ai:transcribe', args),
   // ── Voice Isolation — FFmpeg anlmdn denoiser, no model file required ─────
+  sampleFrames: (args: { filePath: string; fps: number; width: number; maxSeconds?: number }): Promise<{ width: number; height: number; fps: number; count: number; frames: Uint8Array }> =>
+    ipcRenderer.invoke('media:sample-frames', args),
   processClipAudio: (args: { filePath: string; recipe: string; strength?: number }): Promise<MediaAsset> =>
     ipcRenderer.invoke('audio:process-clip', args),
   voiceIsolate: (args: { inputPath: string; outputPath?: string }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
@@ -242,7 +244,8 @@ const electronAPI = {
     targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
     outputPath: string;
     trackingMode: 'center' | 'face' | 'motion';
-  }): Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }> =>
+    cameraPath?: Array<{ t: number; x: number; y: number }>;
+  }): Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; asset?: MediaAsset; error?: string }> =>
     ipcRenderer.invoke('reframe:analyze-and-export', args),
   // ── Publish OAuth ─────────────────────────────────────────────────────────
   connectYouTube: () => ipcRenderer.invoke('publish:connect-youtube'),

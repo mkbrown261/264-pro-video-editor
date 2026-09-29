@@ -105,7 +105,8 @@ declare global {
         targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
         outputPath: string;
         trackingMode: 'center' | 'face' | 'motion';
-      }) => Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; error?: string }>;
+        cameraPath?: Array<{ t: number; x: number; y: number }>;
+      }) => Promise<{ success: boolean; outputPath?: string; cropW?: number; cropH?: number; asset?: MediaAsset; error?: string }>;
       // ── Proxy workflow ────────────────────────────────────────────────────
       /** Generate a low-res 1280p H.264 proxy for a media asset */
       generateProxy?: (args: { assetId: string; sourcePath: string; proxyDir: string }) =>

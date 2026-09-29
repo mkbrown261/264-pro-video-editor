@@ -4,12 +4,14 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { useEditorStore } from "./store/editorStore";
 import { exportNeedsGpu, runGpuExport } from "./lib/gpuExport";
+import { trackSubject } from "./lib/subjectTracker";
 import "./styles.css";
 
 // Automation hook for end-to-end tests (renderer code can reach the store anyway).
 Object.assign(window as unknown as Record<string, unknown>, {
   __264proStore: useEditorStore,
   __264proExport: { runGpuExport, exportNeedsGpu },
+  __264proTrackSubject: trackSubject,
 });
 
 // ── Error Boundary ─────────────────────────────────────────────────────────────

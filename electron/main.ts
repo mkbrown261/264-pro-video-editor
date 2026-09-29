@@ -34,6 +34,8 @@ function getOpenAiKey(): string {
 import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
 import { estimateAudioOffset } from "../src/shared/audioSync.js";
 import { trackBeats } from "../src/shared/beatTrack.js";
+import { escapeFilterValue } from "../src/shared/exportGraph.js";
+const quotePath = (p: string) => `'${escapeFilterValue(p)}'`;
 import { cancelGpuExport, finishGpuExport, readGpuSourceFrame, startGpuExport, writeGpuFrame } from "./gpuExport.js";
 import {
   detectBestHWEncoder,
@@ -41,6 +43,7 @@ import {
   generateProxiesInBackground,
   getEnvironmentStatus,
   killAllActiveProcesses,
+  probeMediaFile,
   probeMediaFiles
 } from "./ffmpeg.js";
 
@@ -790,6 +793,24 @@ ipcMain.handle("audio:process-clip", async (_e, args: { filePath: string; recipe
   });
   const [asset] = await probeMediaFiles([out]);
   return asset;
+});
+
+// Low-res RGBA frames sampled at a fixed rate (analysis: reframe tracking).
+ipcMain.handle("media:sample-frames", async (_e, args: { filePath: string; fps: number; width: number; maxSeconds?: number }) => {
+  const probed = await probeMediaFile(args.filePath);
+  if (!probed.width || !probed.height) throw new Error("This file has no video.");
+  const w = Math.max(16, Math.round(args.width / 2) * 2);
+  const h = Math.max(2, Math.round((w * probed.height) / probed.width / 2) * 2);
+  const { spawn } = await import("node:child_process");
+  const data = await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const p = spawn(getEnvironmentStatus().ffmpegPath, ["-v", "error", "-i", args.filePath, "-t", String(args.maxSeconds ?? 600),
+      "-vf", `fps=${args.fps},scale=${w}:${h}`, "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
+    p.stdout.on("data", (d: Buffer) => chunks.push(d));
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error("Couldn't decode the clip for analysis"))));
+  });
+  return { width: w, height: h, fps: args.fps, count: Math.floor(data.byteLength / (w * h * 4)), frames: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
 });
 
 ipcMain.handle("media:save-recording", async (_e, data: Uint8Array, name?: string) => {
@@ -2076,19 +2097,7 @@ ipcMain.handle('ai:voice-isolate', async (_ev, args: { inputPath: string; output
       ? args.outputPath
       : pathM.join(dir, `${base}-voice-isolated${ext}`);
 
-    // Resolve ffmpeg binary — same logic as elsewhere in this file
-    let ffmpegBin: string;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ffmpegStaticMod: any = await import('ffmpeg-static');
-      const resolved: string | null =
-        process.env.FFMPEG_PATH ||
-        (typeof ffmpegStaticMod === 'string' ? ffmpegStaticMod : null) ||
-        (typeof ffmpegStaticMod?.default === 'string' ? ffmpegStaticMod.default : null);
-      ffmpegBin = resolved ?? 'ffmpeg';
-    } catch {
-      ffmpegBin = 'ffmpeg';
-    }
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath;
 
     const { spawn } = await import('child_process');
     // anlmdn = built-in non-local means denoising — no external model required.
@@ -2261,19 +2270,7 @@ ipcMain.handle('render-cache:render-segment', async (_ev, args: {
       filters.push(`colorchannelmixer=rr=${rBoost}:bb=${bBoost}`);
     }
 
-    // Find ffmpeg — same logic as getFfmpegPath() in ffmpeg.ts
-    let ffmpegBin: string;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ffmpegStaticMod: any = await import('ffmpeg-static');
-      const resolved: string | null =
-        process.env.FFMPEG_PATH ||
-        (typeof ffmpegStaticMod === 'string' ? ffmpegStaticMod : null) ||
-        (typeof ffmpegStaticMod?.default === 'string' ? ffmpegStaticMod.default : null);
-      ffmpegBin = resolved ?? 'ffmpeg';
-    } catch {
-      ffmpegBin = 'ffmpeg';
-    }
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath;
 
     const spawnArgs: string[] = [
       '-y',
@@ -2450,6 +2447,8 @@ ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
   targetAspect: '9:16' | '1:1' | '4:5' | '16:9' | '4:3';
   outputPath: string;
   trackingMode: 'center' | 'face' | 'motion';
+  /** Smoothed subject position over time (0–1), from the renderer's tracker. */
+  cameraPath?: Array<{ t: number; x: number; y: number }>;
 }) => {
   try {
     const { resolve: rp } = await import('path');
@@ -2461,36 +2460,11 @@ ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
   try {
     const { spawn } = await import('child_process');
 
-    // Resolve ffmpeg/ffprobe paths using the same approach as other handlers
-    let ffmpegBin = 'ffmpeg';
-    let ffprobeBin = 'ffprobe';
-    try {
-      const ffmpegStatic = require('ffmpeg-static');
-      const p = (ffmpegStatic as { default?: string }).default ?? (ffmpegStatic as string);
-      if (typeof p === 'string' && p) {
-        ffmpegBin = p;
-        ffprobeBin = p.replace(/ffmpeg([^/\\]*)$/, 'ffprobe$1');
-      }
-    } catch { /* use system ffmpeg/ffprobe */ }
-
-    // Step 1: Probe source dimensions
-    const probeResult = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-      const proc = spawn(ffprobeBin, [
-        '-v', 'quiet', '-print_format', 'json', '-show_streams', args.sourcePath
-      ]);
-      let out = '';
-      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-      proc.on('close', (code: number) => {
-        if (code !== 0) { reject(new Error('ffprobe failed')); return; }
-        try {
-          const data = JSON.parse(out);
-          const vs = data.streams?.find((s: { codec_type: string }) => s.codec_type === 'video') as { width?: number; height?: number } | undefined;
-          resolve({ width: vs?.width ?? 1920, height: vs?.height ?? 1080 });
-        } catch { reject(new Error('ffprobe parse failed')); }
-      });
-      proc.on('error', reject);
-    });
-
+    const ffmpegBin = getEnvironmentStatus().ffmpegPath;
+    // Step 1: source dimensions
+    const probed = await probeMediaFile(args.sourcePath);
+    if (!probed.width || !probed.height) throw new Error('This file has no video to reframe.');
+    const probeResult = { width: probed.width, height: probed.height };
     const { width: srcW, height: srcH } = probeResult;
 
     // Step 2: Compute crop dimensions for target aspect ratio
@@ -2511,22 +2485,33 @@ ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
     cropW = cropW % 2 === 0 ? cropW : cropW - 1;
     cropH = cropH % 2 === 0 ? cropH : cropH - 1;
 
-    // Step 3: Build crop filter for tracking mode
+    // Step 3: Crop window — follows the tracked subject when a camera path is
+    // given (sendcmd updates crop x/y each frame), else a centred crop.
+    const maxX = srcW - cropW, maxY = srcH - cropH;
+    const place = (p: { x: number; y: number }) => ({
+      x: Math.round(Math.max(0, Math.min(maxX, p.x * srcW - cropW / 2))),
+      y: Math.round(Math.max(0, Math.min(maxY, p.y * srcH - cropH / 2))),
+    });
+    const pathPts = (args.cameraPath ?? []).filter((p) => Number.isFinite(p.t) && Number.isFinite(p.x) && Number.isFinite(p.y));
     let cropFilter: string;
-    if (args.trackingMode === 'center') {
-      const x = Math.round((srcW - cropW) / 2);
-      const y = Math.round((srcH - cropH) / 2);
-      cropFilter = `crop=${cropW}:${cropH}:${x}:${y}`;
-    } else if (args.trackingMode === 'motion') {
-      // Slightly above-center bias — action tends to be in the middle third
-      const x = Math.round((srcW - cropW) / 2);
-      const y = Math.round((srcH - cropH) * 0.35);
-      cropFilter = `crop=${cropW}:${cropH}:${x}:${y}`;
+    let cmdFile: string | null = null;
+    if (args.trackingMode !== 'center' && pathPts.length > 1) {
+      const lines: string[] = [];
+      for (let i = 0; i < pathPts.length - 1; i++) {
+        const a = pathPts[i], b = pathPts[i + 1];
+        for (let t = a.t; t < b.t; t += 1 / 30) {
+          const k = (t - a.t) / Math.max(1e-6, b.t - a.t);
+          const c = place({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k });
+          lines.push(`${t.toFixed(3)} crop x ${c.x}, crop y ${c.y};`);
+        }
+      }
+      const osM = await import('os');
+      cmdFile = join(osM.tmpdir(), `264pro_reframe_${Date.now()}.cmd`);
+      await writeFile(cmdFile, lines.join('\n'), 'utf8');
+      const start = place(pathPts[0]);
+      cropFilter = `sendcmd=f=${quotePath(cmdFile)},crop=${cropW}:${cropH}:${start.x}:${start.y}`;
     } else {
-      // face mode — upper-center heuristic (faces occupy upper ~40% of frame)
-      const x = Math.round((srcW - cropW) / 2);
-      const y = Math.round((srcH - cropH) * 0.25);
-      cropFilter = `crop=${cropW}:${cropH}:${x}:${y}`;
+      cropFilter = `crop=${cropW}:${cropH}:${Math.round(maxX / 2)}:${Math.round(maxY / 2)}`;
     }
 
     // Step 4: Run FFmpeg crop + scale pass
@@ -2547,9 +2532,10 @@ ipcMain.handle('reframe:analyze-and-export', async (_ev, args: {
         else resolve();
       });
       proc.on('error', reject);
-    });
+    }).finally(() => { if (cmdFile) void unlinkAsync(cmdFile).catch(() => {}); });
 
-    return { success: true, outputPath: args.outputPath, cropW, cropH };
+    const [asset] = await probeMediaFiles([args.outputPath]);
+    return { success: true, outputPath: args.outputPath, cropW, cropH, asset };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
