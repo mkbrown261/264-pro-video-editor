@@ -1139,110 +1139,28 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Move Clip", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip) return state;
-      const asset = state.project.assets.find((a) => a.id === clip.assetId);
-      if (!asset) return state;
-
       const fps = state.project.sequence.settings.fps;
-      const dur = getClipDurationFrames(clip, asset, fps);
       const dropStart = Math.max(0, startFrame);
-      const dropEnd = dropStart + dur;
-
-      // ── Remove the dragged clip (and its linked partners) from current position ──
+      // Linked partners move by the same delta (never before frame 0).
       const linked = getLinkedClips(state.project, clipId);
       const linkedIds = new Set(linked.map((c) => c.id));
+      const delta = Math.max(dropStart - clip.startFrame, -Math.min(...linked.map((c) => c.startFrame)));
+      const moved = linked.map((c) => c.id === clipId
+        ? { ...c, trackId, startFrame: clip.startFrame + delta }
+        : { ...c, startFrame: c.startFrame + delta });
 
-      // Clips remaining on the target track after removing the dragged clip
-      const otherTrackClips = state.project.sequence.clips.filter(
-        (c) => c.trackId === trackId && !linkedIds.has(c.id)
-      );
-
-      // ── Check if drop site overlaps any other clip on the target track ──
-      const hasOverlap = otherTrackClips.some((c) => {
-        const cAsset = state.project.assets.find((a) => a.id === c.assetId);
-        if (!cAsset) return false;
-        const cDur = getClipDurationFrames(c, cAsset, fps);
-        return !(c.startFrame >= dropEnd || c.startFrame + cDur <= dropStart);
-      });
-
-      let newClips: TimelineClip[];
-
-      if (hasOverlap) {
-        // ── RIPPLE INSERT: split overlapped clips and insert the moved clip ──
-        // Step 1: carve the drop zone out of any clips on the target track
-        const rightStubs: TimelineClip[] = [];
-        const carved = state.project.sequence.clips
-          .filter((c) => !linkedIds.has(c.id)) // remove dragged clip first
-          .map((c) => {
-            if (c.trackId !== trackId) return c;
-            const cAsset = state.project.assets.find((a) => a.id === c.assetId);
-            if (!cAsset) return c;
-            const cDur = getClipDurationFrames(c, cAsset, fps);
-            const cStart = c.startFrame;
-            const cEnd = cStart + cDur;
-
-            if (cEnd <= dropStart || cStart >= dropEnd) return c; // no overlap
-
-            // Completely swallowed
-            if (cStart >= dropStart && cEnd <= dropEnd) return null as unknown as TimelineClip;
-
-            // Left edge overlap — trim end
-            if (cStart < dropStart && cEnd > dropStart && cEnd <= dropEnd) {
-              const kept = dropStart - cStart;
-              return { ...c, trimEndFrames: c.trimEndFrames + (cDur - kept) };
-            }
-
-            // Right edge overlap — trim start, shift right
-            if (cStart >= dropStart && cStart < dropEnd && cEnd > dropEnd) {
-              const lost = dropEnd - cStart;
-              return { ...c, startFrame: dropEnd, trimStartFrames: c.trimStartFrames + lost };
-            }
-
-            // Drop zone inside clip — split into left + right stubs
-            if (cStart < dropStart && cEnd > dropEnd) {
-              const leftKept = dropStart - cStart;
-              const leftClip: TimelineClip = { ...c, trimEndFrames: c.trimEndFrames + (cDur - leftKept) };
-              const rightLost = dropEnd - cStart;
-              const rightClip: TimelineClip = {
-                ...c,
-                id: createId(),
-                startFrame: dropEnd,
-                trimStartFrames: c.trimStartFrames + rightLost,
-              };
-              rightStubs.push(rightClip);
-              return leftClip;
-            }
-
-            return c;
-          })
-          .filter(Boolean);
-
-        // Add the moved clip at dropStart
-        const movedClip = { ...clip, trackId, startFrame: dropStart };
-        // BUG #5 fix: in the RIPPLE INSERT branch, linked partners were removed by
-        // the .filter((c) => !linkedIds.has(c.id)) above but only movedClip was
-        // re-added.  Re-add linked partners at their delta-adjusted positions.
-        const linkedPartners = linked.filter((c) => c.id !== clipId);
-        const partnerClips = linkedPartners.map((partner) => ({
-          ...partner,
-          startFrame: Math.max(0, partner.startFrame + (dropStart - clip.startFrame))
-        }));
-        newClips = [...carved, ...rightStubs, movedClip, ...partnerClips];
-      } else {
-        // ── FREE MOVE: no overlap — place exactly at dropStart ──
-        newClips = state.project.sequence.clips.map((c) => {
-          if (!linkedIds.has(c.id)) return c;
-          if (c.id === clipId) return { ...c, trackId, startFrame: dropStart };
-          // Linked clips (e.g. audio) keep their relative offset
-          const delta = dropStart - clip.startFrame;
-          return { ...c, startFrame: Math.max(0, c.startFrame + delta) };
-        });
+      // Overwrite at the destination: each moved clip carves its own range.
+      let project: EditorProjectState = {
+        ...state.project,
+        sequence: { ...state.project.sequence, clips: state.project.sequence.clips.filter((c) => !linkedIds.has(c.id)) },
+      };
+      for (const m of moved) {
+        const asset = project.assets.find((a) => a.id === m.assetId);
+        if (!asset) continue;
+        const end = m.startFrame + getClipDurationFrames(m, asset, fps);
+        project = { ...project, sequence: { ...project.sequence, clips: carveRange(project, new Set([m.trackId]), m.startFrame, end) } };
       }
-
-      const trackIds = [...linked.map((c) => c.trackId), trackId];
-      const nextProject = resolveTracks(
-        { ...state.project, sequence: { ...state.project.sequence, clips: newClips } },
-        trackIds
-      );
+      const nextProject = { ...project, sequence: { ...project.sequence, clips: [...project.sequence.clips, ...moved] } };
 
       return {
         project: nextProject,

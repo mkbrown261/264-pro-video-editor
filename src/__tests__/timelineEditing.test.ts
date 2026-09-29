@@ -170,6 +170,17 @@ describe("timeline editing", () => {
     expect(copies.map((c) => seg(c.id).startFrame)).toEqual([210, 210]); // V1 busy to 120, A1 busy 150–210
   });
 
+  it("moving a linked clip over others overwrites on every track and keeps sync", () => {
+    load([
+      clip("v", "V1", 0, { linkedGroupId: "g" }), clip("a", "A1", 0, { linkedGroupId: "g" }),
+      clip("v2", "V1", 100), clip("a2", "A1", 100),
+    ]);
+    S().moveClipTo("v", "V1", 130);
+    expect([seg("v").startFrame, seg("a").startFrame]).toEqual([130, 130]);
+    expect([seg("v2").startFrame, seg("v2").endFrame]).toEqual([100, 130]);
+    expect([seg("a2").startFrame, seg("a2").endFrame]).toEqual([100, 130]);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
