@@ -7,10 +7,13 @@
  * against the layers below. The viewer's GPU compositor consumes this list.
  */
 
-import type { TimelineClip } from "./models.js";
+import type { ClipMask, Keyframe, TimelineClip } from "./models.js";
 import {
   getClipTransitionDurationFrames,
+  hasSpeedRamp,
   interpolateKeyframe,
+  rampRate,
+  rampSourceProgress,
   type TimelineSegment,
 } from "./timeline.js";
 import { playable, transitionBetween, xfadeName } from "./exportGraph.js";
@@ -32,7 +35,14 @@ export interface PreviewLayer {
   /** Playback rate of the source relative to the timeline. */
   rate: number;
   transform: LayerTransform;
+  /** Timeline frame (of this layer's own sequence) the layer was evaluated at. */
+  frame: number;
+  /** For nested-sequence clips: the inner sequence's units at the matching frame. */
+  nested?: PreviewUnit[];
 }
+
+/** Resolves a nested clip to its inner sequence's segments (null if missing). */
+export type NestedResolver = (clip: TimelineClip) => TimelineSegment[] | null;
 
 export interface PreviewTransition {
   /** xfade transition name (fade, wipeleft, fadeblack, …). */
@@ -71,17 +81,34 @@ export function resolveTransform(clip: TimelineClip, frame: number): LayerTransf
   };
 }
 
-function layerAt(seg: TimelineSegment, frame: number, fps: number, tail = false): PreviewLayer {
+function layerAt(seg: TimelineSegment, frame: number, fps: number, tail = false, resolveNested?: NestedResolver, depth = 0): PreviewLayer {
   const srcDur = Math.max(1 / fps, seg.sourceOutSeconds - seg.sourceInSeconds);
-  const rate = srcDur / Math.max(1e-6, seg.durationSeconds);
-  return {
+  const avgRate = srcDur / Math.max(1e-6, seg.durationSeconds);
+  // Middle of the source frame (exact n/fps boundaries can decode the previous frame).
+  const halfFrame = 0.5 / Math.max(fps, seg.asset.nativeFps || fps);
+  const kfs = seg.clip.speedRampKeyframes;
+  let sourceTime: number;
+  let rate = avgRate;
+  if (kfs && hasSpeedRamp(seg.clip)) {
+    const p = (frame - seg.startFrame + 0.5) / Math.max(1, seg.durationFrames);
+    sourceTime = seg.sourceInSeconds + srcDur * rampSourceProgress(kfs, p);
+    rate = avgRate * rampRate(kfs, p);
+  } else {
+    sourceTime = seg.sourceInSeconds + ((frame - seg.startFrame) / fps) * avgRate + halfFrame;
+  }
+  const layer: PreviewLayer = {
     key: tail ? `${seg.clip.id}:tail` : seg.clip.id,
     segment: seg,
-    // Middle of the source frame (exact n/fps boundaries can decode the previous frame).
-    sourceTime: seg.sourceInSeconds + ((frame - seg.startFrame) / fps) * rate + 0.5 / Math.max(fps, seg.asset.nativeFps || fps),
+    sourceTime,
     rate,
     transform: resolveTransform(seg.clip, frame),
+    frame,
   };
+  if (seg.clip.nestedSequenceId && resolveNested && depth < 4) {
+    const inner = resolveNested(seg.clip);
+    if (inner) layer.nested = computePreviewUnits(inner, Math.floor(sourceTime * fps), fps, resolveNested, depth + 1);
+  }
+  return layer;
 }
 
 const unitKind = (clip: TimelineClip): PreviewUnit["kind"] =>
@@ -91,7 +118,14 @@ const unitKind = (clip: TimelineClip): PreviewUnit["kind"] =>
 /**
  * Units to composite at `frame`, ordered bottom → top.
  */
-export function computePreviewUnits(segments: TimelineSegment[], frame: number, fps: number): PreviewUnit[] {
+export function computePreviewUnits(
+  segments: TimelineSegment[],
+  frame: number,
+  fps: number,
+  resolveNested?: NestedResolver,
+  depth = 0,
+): PreviewUnit[] {
+  const at = (seg: TimelineSegment, f: number, tail = false) => layerAt(seg, f, fps, tail, resolveNested, depth);
   const video = playable(segments, "video");
   const trackIdxs = [...new Set(video.map((s) => s.trackIndex))].sort((a, b) => b - a);
   const units: PreviewUnit[] = [];
@@ -101,7 +135,7 @@ export function computePreviewUnits(segments: TimelineSegment[], frame: number, 
     // Adjustment layers first (they process what is below this track).
     for (const adj of track) {
       if (adj.clip.clipType !== "adjustment" || frame < adj.startFrame || frame >= adj.endFrame) continue;
-      units.push({ trackIndex: ti, kind: "adjustment", from: null, to: layerAt(adj, frame, fps), transition: null });
+      units.push({ trackIndex: ti, kind: "adjustment", from: null, to: at(adj, frame), transition: null });
     }
     const media = track.filter((s) => s.clip.clipType !== "adjustment");
     const i = media.findIndex((s) => frame >= s.startFrame && frame < s.endFrame);
@@ -116,8 +150,8 @@ export function computePreviewUnits(segments: TimelineSegment[], frame: number, 
     if (join && frame < cur.startFrame + join.frames) {
       units.push({
         trackIndex: ti, kind,
-        from: layerAt(prev!, frame, fps, true),
-        to: layerAt(cur, frame, fps),
+        from: at(prev!, frame, true),
+        to: at(cur, frame),
         transition: { name: join.name, progress: (frame - cur.startFrame + 0.5) / join.frames },
       });
       continue;
@@ -129,7 +163,7 @@ export function computePreviewUnits(segments: TimelineSegment[], frame: number, 
     const inFrames = inName && tin ? getClipTransitionDurationFrames(tin, cur.durationFrames) : 0;
     if (inName && inFrames > 0 && frame < cur.startFrame + inFrames) {
       units.push({
-        trackIndex: ti, kind, from: null, to: layerAt(cur, frame, fps),
+        trackIndex: ti, kind, from: null, to: at(cur, frame),
         transition: { name: inName, progress: (frame - cur.startFrame + 0.5) / inFrames },
       });
       continue;
@@ -141,12 +175,56 @@ export function computePreviewUnits(segments: TimelineSegment[], frame: number, 
     const outFrames = outName && tout ? getClipTransitionDurationFrames(tout, cur.durationFrames) : 0;
     if (outName && outFrames > 0 && frame >= cur.endFrame - outFrames) {
       units.push({
-        trackIndex: ti, kind, from: layerAt(cur, frame, fps), to: null,
+        trackIndex: ti, kind, from: at(cur, frame), to: null,
         transition: { name: outName, progress: (frame - (cur.endFrame - outFrames) + 0.5) / outFrames },
       });
       continue;
     }
-    units.push({ trackIndex: ti, kind, from: null, to: layerAt(cur, frame, fps), transition: null });
+    units.push({ trackIndex: ti, kind, from: null, to: at(cur, frame), transition: null });
   }
   return units;
+}
+
+// ── Masks at a frame (keyframes + tracking) ───────────────────────────────────
+
+function kfValue(list: Keyframe<number>[] | undefined, frame: number, fallback: number): number {
+  if (!list || list.length === 0) return fallback;
+  return interpolateKeyframe({ property: "", keyframes: list }, frame);
+}
+
+/** A mask with animated properties and tracking offsets resolved at `frame`. */
+export function maskAtFrame(mask: ClipMask, frame: number): ClipMask {
+  const k = mask.keyframes ?? {};
+  const animated = Object.values(k).some((l) => (l?.length ?? 0) > 0);
+  const track = mask.trackingEnabled && mask.trackingData?.length ? mask.trackingData : null;
+  if (!animated && !track) return mask;
+  let dx = 0, dy = 0;
+  if (track) {
+    const sorted = [...track].sort((a, b) => a.frame - b.frame);
+    dx = kfValue(sorted.map((t) => ({ frame: t.frame, value: t.dx })), frame, 0);
+    dy = kfValue(sorted.map((t) => ({ frame: t.frame, value: t.dy })), frame, 0);
+  }
+  const s = mask.shape;
+  const x = kfValue(k.x, frame, s.x) + dx;
+  const y = kfValue(k.y, frame, s.y) + dy;
+  return {
+    ...mask,
+    feather: kfValue(k.feather, frame, mask.feather),
+    opacity: kfValue(k.opacity, frame, mask.opacity),
+    expansion: kfValue(k.expansion, frame, mask.expansion),
+    shape: {
+      ...s,
+      x, y,
+      width: kfValue(k.width, frame, s.width),
+      height: kfValue(k.height, frame, s.height),
+      rotation: kfValue(k.rotation, frame, s.rotation),
+      points: (dx || dy) && s.points?.length
+        ? s.points.map((p) => ({
+            point: { x: p.point.x + dx, y: p.point.y + dy },
+            handleIn: { x: p.handleIn.x + dx, y: p.handleIn.y + dy },
+            handleOut: { x: p.handleOut.x + dx, y: p.handleOut.y + dy },
+          }))
+        : s.points,
+    },
+  };
 }

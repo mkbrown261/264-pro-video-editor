@@ -48,6 +48,20 @@ import {
   type Lut3D,
 } from "./colorMath.js";
 import { computeCssFilterFromEffects } from "./effectsCss.js";
+import type { CompGraph } from "./compositing.js";
+
+/** True when a NodeFX graph does real work (not just MediaIn → MediaOut). */
+export function compGraphActive(graph: CompGraph | null | undefined): graph is CompGraph {
+  if (!graph?.nodes?.length) return false;
+  const out = graph.nodes.find((n) => n.type === "MediaOut");
+  if (!out || !graph.wires.some((w) => w.toNodeId === out.id)) return false;
+  return graph.nodes.some((n) => n.type !== "MediaIn" && n.type !== "MediaOut" && !n.bypassed);
+}
+
+function maskIsAnimated(mask: ClipMask): boolean {
+  return Object.values(mask.keyframes ?? {}).some((l) => (l?.length ?? 0) > 1) ||
+    (!!mask.trackingEnabled && (mask.trackingData?.length ?? 0) > 0);
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -79,6 +93,8 @@ export interface ExportGraph {
   totalFrames: number;
   /** Features that could not be rendered exactly (surfaced to the user). */
   warnings: string[];
+  /** True when the GPU (viewer-engine) render would render this timeline exactly. */
+  needsGpu: boolean;
 }
 
 export type ExportGraphRequest = Omit<ExportRequest, "outputPath"> & {
@@ -352,11 +368,19 @@ interface Ctx {
   inputs: ExportInput[];
   parts: string[];
   warnings: Set<string>;
+  /** Set when a warning is something the GPU (viewer-engine) render fixes. */
+  needsGpu: boolean;
   n: number;
   lutCount: number;
 }
 
 const label = (ctx: Ctx, p: string) => `${p}${ctx.n++}`;
+
+/** A limitation of the FFmpeg graph that the GPU (viewer-engine) render handles. */
+function warnGpu(ctx: Ctx, message: string) {
+  ctx.warnings.add(message);
+  ctx.needsGpu = true;
+}
 
 function addInput(ctx: Ctx, path: string, options: string[]): number {
   ctx.inputs.push({ path, options });
@@ -419,12 +443,15 @@ function effectFilters(ctx: Ctx, clip: TimelineClip): string[] {
       continue;
     }
     if (e.keyframes && Object.values(e.keyframes).some((k) => (k?.length ?? 0) > 1)) {
-      ctx.warnings.add("Animated effect parameters export at their starting value.");
+      warnGpu(ctx, "Animated effect parameters need the GPU render.");
     }
     out.push(...effectToFfmpeg(e, ctx.pxScale));
   }
-  if (clip.compGraph && (clip.compGraph as { nodes?: unknown[] }).nodes?.length) {
-    ctx.warnings.add("Fusion node graphs are preview-only and are not included in the export.");
+  if (effects.some((e) => (e.maskIds?.length ?? 0) > 0)) {
+    warnGpu(ctx, "Effects limited to a mask need the GPU render.");
+  }
+  if (compGraphActive(clip.compGraph)) {
+    warnGpu(ctx, "NodeFX graphs need the GPU render.");
   }
   if (clip.aiBackgroundRemoval?.enabled) {
     ctx.warnings.add("AI background removal is preview-only and is not included in the export.");
@@ -510,6 +537,26 @@ function buildClipLayer(ctx: Ctx, seg: TimelineSegment, extraTail: number): stri
     `[${bg}][${withChain}]overlay=x='(main_w-overlay_w)/2+${xExpr}':y='(main_h-overlay_h)/2+${yExpr}':eval=${k.posX || k.posY ? "frame" : "init"}:format=yuv420:alpha=straight:eof_action=endall:shortest=1[${placed}]`
   );
 
+  // ── Power window: grade only inside the grade's masks ────────────────────
+  const windowIds = new Set(clip.colorGrade?.maskIds ?? []);
+  if (windowIds.size && asset.sourcePath && !clip.titleConfig) {
+    const grade = gradeFilters(ctx, clip, seg.startFrame, seg.durationFrames);
+    const win = buildMaskStream(ctx, (clip.masks ?? []).filter((m) => windowIds.has(m.id)), len);
+    if (grade.length && win) {
+      const p1 = label(ctx, "pw"), p2 = label(ctx, "pw"), g1 = label(ctx, "pw"), g2 = label(ctx, "pw"),
+        ga = label(ctx, "pw"), gm = label(ctx, "pw"), gw = label(ctx, "pw"), out = label(ctx, "pwo");
+      ctx.parts.push(
+        `[${placed}]split[${p1}][${p2}]`,
+        `[${p2}]${grade.join(",")},format=yuva420p,split[${g1}][${g2}]`,
+        `[${g2}]alphaextract[${ga}]`,
+        `[${ga}][${win}]blend=all_mode=multiply[${gm}]`,
+        `[${g1}][${gm}]alphamerge[${gw}]`,
+        `[${p1}][${gw}]overlay=x=0:y=0:format=yuv420:alpha=straight[${out}]`,
+      );
+      placed = out;
+    }
+  }
+
   // ── Clip masks (masks not used as effect/grade windows cut the clip) ─────
   const usedElsewhere = new Set<string>([
     ...(clip.colorGrade?.maskIds ?? []),
@@ -536,9 +583,9 @@ function buildMaskStream(ctx: Ctx, masks: ClipMask[], len: number): string | nul
   for (const m of masks) {
     const e = maskGeqExpr(m, ctx.W, ctx.H);
     if (e) exprs.push(e);
-    else ctx.warnings.add("Bezier/freehand masks export as rectangles are not supported yet and were skipped.");
-    if (m.keyframes && Object.values(m.keyframes).some((k) => (k?.length ?? 0) > 1)) {
-      ctx.warnings.add("Animated masks export at their starting shape.");
+    else warnGpu(ctx, "Bezier/freehand masks need the GPU render.");
+    if (maskIsAnimated(m)) {
+      warnGpu(ctx, "Animated/tracked masks need the GPU render.");
     }
   }
   if (!exprs.length) return null;
@@ -566,7 +613,7 @@ function buildMediaSource(ctx: Ctx, seg: TimelineSegment, extraTail: number): st
     : addInput(ctx, asset.sourcePath, ["-ss", f3(seg.sourceInSeconds), "-t", f3(Math.min(want, avail || want) + 0.5)]);
 
   if ((clip.speedRampKeyframes?.length ?? 0) >= 2) {
-    ctx.warnings.add("Speed ramps export at the clip's constant speed.");
+    warnGpu(ctx, "Speed ramps need the GPU render.");
   }
 
   const chain: string[] = ["setpts=PTS-STARTPTS"];
@@ -588,9 +635,9 @@ function buildMediaSource(ctx: Ctx, seg: TimelineSegment, extraTail: number): st
   chain.push(`tpad=stop_mode=clone:stop_duration=${f3(len + 1)}`, `trim=duration=${f3(len)}`, "setpts=PTS-STARTPTS");
 
   chain.push(...effectFilters(ctx, clip));
-  chain.push(...gradeFilters(ctx, clip, seg.startFrame, seg.durationFrames));
-  if ((clip.colorGrade?.maskIds?.length ?? 0) > 0) {
-    ctx.warnings.add("Power-window masks on grades export as full-frame grades.");
+  // Windowed grades are applied after placement (masks are in canvas space).
+  if (!(clip.colorGrade?.maskIds?.length)) {
+    chain.push(...gradeFilters(ctx, clip, seg.startFrame, seg.durationFrames));
   }
 
   const l = label(ctx, "src");
@@ -1018,7 +1065,7 @@ export function buildExportGraph(request: ExportGraphRequest, env: ExportGraphEn
     project, env, W, H, fps,
     sr: settings.audioSampleRate || 48000,
     pxScale: W / (env.previewReferenceWidth ?? 960),
-    inputs: [], parts: [], warnings: new Set(), n: 0, lutCount: 0,
+    inputs: [], parts: [], warnings: new Set(), needsGpu: false, n: 0, lutCount: 0,
   };
 
   const segments = buildTimelineSegments(project.sequence, project.assets);
@@ -1085,5 +1132,6 @@ export function buildExportGraph(request: ExportGraphRequest, env: ExportGraphEn
     durationSeconds,
     totalFrames,
     warnings: [...ctx.warnings],
+    needsGpu: ctx.needsGpu,
   };
 }

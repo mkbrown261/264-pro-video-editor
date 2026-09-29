@@ -24,7 +24,9 @@ import {
   type Lut3D,
 } from "../../shared/colorMath";
 import { computeCssFilterFromEffects } from "../../shared/effectsCss";
-import type { PreviewLayer, PreviewUnit } from "../../shared/previewLayers";
+import { maskAtFrame, type PreviewLayer, type PreviewUnit } from "../../shared/previewLayers";
+import { compGraphActive } from "../../shared/exportGraph";
+import { CompRenderer } from "./CompRenderer";
 
 // ─── File LUT cache (async) ───────────────────────────────────────────────────
 
@@ -211,8 +213,8 @@ export interface CompositeOptions {
   width: number;
   height: number;
   frame: number;
-  /** Effects with keyframes already resolved for this frame. */
-  effectsFor?: (clip: TimelineClip) => TimelineClip["effects"];
+  /** Effects with keyframes resolved at a frame. */
+  effectsFor?: (clip: TimelineClip, frame: number) => TimelineClip["effects"];
 }
 
 function mediaSize(src: CanvasImageSource): [number, number] {
@@ -261,16 +263,22 @@ function scaleCssPx(css: string, factor: number): string {
   return css.replace(/(-?[\d.]+)px/g, (_m, v) => `${(Number(v) * factor).toFixed(2)}px`);
 }
 
+const hexA = (hex: string, a: number) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex ?? "").trim());
+  const v = m ? parseInt(m[1], 16) : 0xffffff;
+  return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${Math.min(1, Math.max(0, a))})`;
+};
+
 export class ViewerCompositor {
   private ctx: CanvasRenderingContext2D;
   private grade = new GradePass();
-  private layerCanvases: HTMLCanvasElement[] = [];
-  private scratch = document.createElement("canvas");
+  private canvases = new Map<string, HTMLCanvasElement>();
+  private comps = new Map<string, { canvas: HTMLCanvasElement; renderer: CompRenderer }>();
   /** False when frames are tainted (no CORS) — caller falls back to legacy view. */
   healthy = true;
 
   constructor(readonly canvas: HTMLCanvasElement, onDirty: () => void) {
-    const ctx = canvas.getContext("2d", { alpha: false });
+    const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: false });
     if (!ctx) throw new Error("2D canvas unavailable");
     this.ctx = ctx;
     onLutLoaded = onDirty;
@@ -278,96 +286,253 @@ export class ViewerCompositor {
 
   dispose() {
     this.grade.dispose();
+    for (const c of this.comps.values()) c.renderer.dispose();
+    this.comps.clear();
     if (onLutLoaded) onLutLoaded = null;
   }
 
-  private layerCanvas(i: number, W: number, H: number): HTMLCanvasElement {
-    let c = this.layerCanvases[i];
-    if (!c) { c = document.createElement("canvas"); this.layerCanvases[i] = c; }
+  /** Named scratch canvas (sized W×H). Names include the nesting depth. */
+  private buf(name: string, W: number, H: number): HTMLCanvasElement {
+    let c = this.canvases.get(name);
+    if (!c) { c = document.createElement("canvas"); this.canvases.set(name, c); }
     if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
     return c;
   }
 
-  /** Draw one layer (grade → fit → transform → effects → masks) into a canvas-sized layer. */
-  private drawLayer(target: HTMLCanvasElement, layer: PreviewLayer, source: CanvasImageSource | null, opts: CompositeOptions): boolean {
-    const { width: W, height: H } = opts;
-    const lc = target.getContext("2d")!;
-    lc.setTransform(1, 0, 0, 1, 0, 0);
-    lc.globalAlpha = 1;
-    lc.filter = "none";
-    lc.globalCompositeOperation = "source-over";
-    lc.clearRect(0, 0, W, H);
-    if (!source) return false;
-    const [sw, sh] = mediaSize(source);
-    if (!sw || !sh) return false;
+  private static reset(g: CanvasRenderingContext2D, W: number, H: number) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.filter = "none";
+    g.globalCompositeOperation = "source-over";
+    g.clearRect(0, 0, W, H);
+  }
 
-    let img: CanvasImageSource = source;
-    const clip = layer.segment.clip;
-    const lut = gradeLutFor(clip, opts.frame);
-    if (lut) {
-      // Grade at no more than the layer's on-screen resolution.
-      const fit = Math.min(W / sw, H / sh, 1);
-      const graded = this.grade.run(source, Math.max(2, Math.round(sw * fit)), Math.max(2, Math.round(sh * fit)), lut);
-      if (graded) img = graded;
-      else if (!this.grade.failed) this.healthy = false;
+  /** Run a clip's NodeFX graph over its source frame. */
+  private runComp(layer: PreviewLayer, source: CanvasImageSource, sw: number, sh: number): CanvasImageSource {
+    const graph = layer.segment.clip.compGraph;
+    if (!compGraphActive(graph)) return source;
+    let entry = this.comps.get(layer.key);
+    const w = Math.max(2, Math.round(sw)), h = Math.max(2, Math.round(sh));
+    try {
+      if (!entry) {
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        entry = { canvas, renderer: new CompRenderer(canvas) };
+        this.comps.set(layer.key, entry);
+      }
+      if (entry.canvas.width !== w || entry.canvas.height !== h) {
+        entry.canvas.width = w; entry.canvas.height = h;
+        entry.renderer.resize(w, h);
+      }
+      const mediaIn = graph.nodes.find((n) => n.type === "MediaIn");
+      if (mediaIn) entry.renderer.registerVideo(mediaIn.id, source as HTMLVideoElement);
+      entry.renderer.setFrameTime(layer.frame);
+      entry.renderer.render(graph);
+      return entry.canvas;
+    } catch {
+      return source;
     }
+  }
 
-    const fit = Math.min(W / sw, H / sh);
-    const fw = sw * fit, fh = sh * fit;
+  /** Union of masks (already resolved at the frame) as a white-on-transparent canvas. */
+  private maskCanvas(name: string, masks: ClipMask[], W: number, H: number): HTMLCanvasElement | null {
+    const paths = masks.map((m) => ({ m, p: maskPath(m, W, H) })).filter((x) => x.p);
+    if (!paths.length) return null;
+    const mc = this.buf(name, W, H);
+    const m = mc.getContext("2d")!;
+    ViewerCompositor.reset(m, W, H);
+    for (const { m: mask, p } of paths) {
+      m.filter = mask.feather > 0 ? `blur(${(mask.feather * 0.4 * W) / 960}px)` : "none";
+      m.globalAlpha = Math.min(1, Math.max(0, mask.opacity ?? 1));
+      m.fillStyle = "#fff";
+      if (mask.inverted) {
+        const inv = new Path2D();
+        inv.rect(0, 0, W, H);
+        inv.addPath(p!);
+        m.fill(inv, "evenodd");
+      } else m.fill(p!);
+    }
+    m.filter = "none";
+    m.globalAlpha = 1;
+    return mc;
+  }
+
+  /** Place an image with the layer transform and a CSS filter onto `g`. */
+  private place(g: CanvasRenderingContext2D, img: CanvasImageSource, layer: PreviewLayer, fw: number, fh: number, W: number, H: number, filter: string) {
     const t = layer.transform;
     // Preview semantics (shared with export): translate(pos·canvas), then
     // scale/rotate about the anchor point of the fitted frame.
-    const ax = (W - fw) / 2 + t.anchorX * fw;
-    const ay = (H - fh) / 2 + t.anchorY * fh;
-    lc.translate(t.posX * W + ax, t.posY * H + ay);
-    lc.rotate((t.rotation * Math.PI) / 180);
-    lc.scale(t.scaleX, t.scaleY);
-    const effects = opts.effectsFor ? opts.effectsFor(clip) : clip.effects;
-    const css = effects?.length ? computeCssFilterFromEffects(effects) : "none";
-    lc.filter = css === "none" ? "none" : scaleCssPx(css, W / 960);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.translate(t.posX * W + (W - fw) / 2 + t.anchorX * fw, t.posY * H + (H - fh) / 2 + t.anchorY * fh);
+    g.rotate((t.rotation * Math.PI) / 180);
+    g.scale(t.scaleX, t.scaleY);
+    g.filter = filter;
+    g.drawImage(img, -t.anchorX * fw, -t.anchorY * fh, fw, fh);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.filter = "none";
+  }
+
+  /**
+   * Draw one layer into `target`: NodeFX → grade → fit → transform → effects,
+   * with power windows (grade/effects limited to masks) and clip masks.
+   */
+  private drawLayer(target: HTMLCanvasElement, layer: PreviewLayer, source: CanvasImageSource | null, opts: CompositeOptions, depth: number): boolean {
+    const { width: W, height: H } = opts;
+    const lc = target.getContext("2d")!;
+    ViewerCompositor.reset(lc, W, H);
+    if (!source) return false;
+    const [sw0, sh0] = mediaSize(source);
+    if (!sw0 || !sh0) return false;
+    const clip = layer.segment.clip;
+    const frame = layer.frame;
+
+    // Work at no more than on-screen resolution.
+    const fit = Math.min(W / sw0, H / sh0);
+    const fw = sw0 * fit, fh = sh0 * fit;
+    const workScale = Math.min(fit, 1);
+    const base = this.runComp(layer, source, sw0 * workScale, sh0 * workScale);
+
+    let graded: CanvasImageSource | null = null;
+    const lut = gradeLutFor(clip, frame);
+    if (lut) {
+      const g = this.grade.run(base, Math.max(2, Math.round(sw0 * workScale)), Math.max(2, Math.round(sh0 * workScale)), lut);
+      if (g) {
+        // The grade pass reuses one canvas; snapshot it before the next layer.
+        const snap = this.buf(`graded${depth}`, g.width, g.height);
+        const sg = snap.getContext("2d")!;
+        sg.clearRect(0, 0, snap.width, snap.height);
+        sg.drawImage(g, 0, 0);
+        graded = snap;
+      } else if (!this.grade.failed) this.healthy = false;
+    }
+
+    const resolved = (clip.masks ?? []).map((m) => maskAtFrame(m, frame));
+    const byId = new Map(resolved.map((m) => [m.id, m]));
+    const gradeWindow = (clip.colorGrade?.maskIds ?? []).map((id) => byId.get(id)).filter(Boolean) as ClipMask[];
+    const effects = (opts.effectsFor ? opts.effectsFor(clip, frame) : clip.effects) ?? [];
+    const globalFx = effects.filter((e) => e.enabled && !(e.maskIds?.length));
+    const windowFx = effects.filter((e) => e.enabled && (e.maskIds?.length ?? 0) > 0);
+    const css = (list: typeof effects) => {
+      const f = list.length ? computeCssFilterFromEffects(list) : "none";
+      return f === "none" ? "none" : scaleCssPx(f, W / 960);
+    };
+
     try {
-      lc.drawImage(img, -t.anchorX * fw, -t.anchorY * fh, fw, fh);
+      // Main pass: graded everywhere unless the grade is windowed.
+      this.place(lc, graded && !gradeWindow.length ? graded : base, layer, fw, fh, W, H, css(globalFx));
+      // Windowed grade / effects: draw the processed version, keep it inside the mask.
+      const windowPass = (img: CanvasImageSource, filter: string, masks: ClipMask[]) => {
+        const mask = this.maskCanvas(`wmask${depth}`, masks, W, H);
+        if (!mask) return;
+        const wc = this.buf(`window${depth}`, W, H);
+        const wg = wc.getContext("2d")!;
+        ViewerCompositor.reset(wg, W, H);
+        this.place(wg, img, layer, fw, fh, W, H, filter);
+        wg.globalCompositeOperation = "destination-in";
+        wg.drawImage(mask, 0, 0);
+        wg.globalCompositeOperation = "source-over";
+        lc.drawImage(wc, 0, 0);
+      };
+      if (graded && gradeWindow.length) windowPass(graded, css(globalFx), gradeWindow);
+      for (const e of windowFx) {
+        const masks = e.maskIds.map((id) => byId.get(id)).filter(Boolean) as ClipMask[];
+        windowPass(graded && !gradeWindow.length ? graded : base, css([...globalFx, e]), masks);
+      }
     } catch {
       this.healthy = false;
       return false;
     }
-    lc.setTransform(1, 0, 0, 1, 0, 0);
-    lc.filter = "none";
 
-    // Masks that are not effect/grade windows cut the clip (union, feathered).
-    const windows = new Set([...(clip.colorGrade?.maskIds ?? []), ...(clip.effects ?? []).flatMap((e) => e.maskIds ?? [])]);
-    const masks = (clip.masks ?? []).filter((m) => !windows.has(m.id));
-    if (masks.length) {
-      const mc = this.scratch;
-      if (mc.width !== W || mc.height !== H) { mc.width = W; mc.height = H; }
-      const m = mc.getContext("2d")!;
-      m.setTransform(1, 0, 0, 1, 0, 0);
-      m.clearRect(0, 0, W, H);
-      for (const mask of masks) {
-        const path = maskPath(mask, W, H);
-        if (!path) continue;
-        m.filter = mask.feather > 0 ? `blur(${(mask.feather * 0.4 * W) / 960}px)` : "none";
-        m.globalAlpha = Math.min(1, Math.max(0, mask.opacity ?? 1));
-        m.fillStyle = "#fff";
-        if (mask.inverted) {
-          const inv = new Path2D();
-          inv.rect(0, 0, W, H);
-          inv.addPath(path);
-          m.fill(inv, "evenodd");
-        } else m.fill(path);
-      }
-      m.filter = "none";
-      m.globalAlpha = 1;
+    // Masks that are not grade/effect windows cut the clip.
+    const windowIds = new Set([...(clip.colorGrade?.maskIds ?? []), ...effects.flatMap((e) => e.maskIds ?? [])]);
+    const cut = this.maskCanvas(`cut${depth}`, resolved.filter((m) => !windowIds.has(m.id)), W, H);
+    if (cut) {
       lc.globalCompositeOperation = "destination-in";
-      lc.drawImage(mc, 0, 0);
+      lc.drawImage(cut, 0, 0);
       lc.globalCompositeOperation = "source-over";
     }
     return true;
   }
 
-  /** Blend `from`→`to` layer canvases onto the main canvas per the xfade name. */
-  private blend(name: string, p: number, from: HTMLCanvasElement | null, to: HTMLCanvasElement | null, W: number, H: number, opFrom: number, opTo: number) {
-    const ctx = this.ctx;
+  /** Titles and captions, drawn in track order (matches the export's libass look). */
+  private drawText(target: HTMLCanvasElement, layer: PreviewLayer, W: number, H: number): boolean {
+    const g = target.getContext("2d")!;
+    ViewerCompositor.reset(g, W, H);
+    const clip = layer.segment.clip;
+    const s = W / 960;
+    const seg = layer.segment;
+    const progress = seg.durationFrames > 0 ? (layer.frame - seg.startFrame) / seg.durationFrames : 0;
+    g.textBaseline = "top";
+    if (clip.titleConfig) {
+      const tc = clip.titleConfig;
+      const size = (tc.fontSize || 48) * s;
+      let alpha = 1, dx = 0, dy = 0, text = tc.mainText ?? "";
+      if (progress < 0.2) {
+        const t = progress / 0.2;
+        if (tc.animationIn === "fade") alpha = t;
+        else if (tc.animationIn === "slide_up") { alpha = t; dy = (1 - t) * 40 * s; }
+        else if (tc.animationIn === "slide_right") { alpha = t; dx = -(1 - t) * 60 * s; }
+        else if (tc.animationIn === "typewriter") text = text.slice(0, Math.ceil(text.length * t));
+      }
+      if (progress > 0.8) {
+        const t = (progress - 0.8) / 0.2;
+        if (tc.animationOut === "fade") alpha = Math.min(alpha, 1 - t);
+        else if (tc.animationOut === "slide_down") { alpha = Math.min(alpha, 1 - t); dy = t * 40 * s; }
+        else if (tc.animationOut === "slide_left") { alpha = Math.min(alpha, 1 - t); dx = -t * 60 * s; }
+      }
+      const family = tc.fontFamily || "sans-serif";
+      const x = tc.posX * W + dx, y = tc.posY * H + dy;
+      g.globalAlpha = Math.max(0, alpha);
+      g.font = `800 ${size}px ${family}`;
+      const mainW = g.measureText(text).width;
+      g.font = `${size * 0.6}px ${family}`;
+      const subW = tc.subText ? g.measureText(tc.subText).width : 0;
+      const boxW = Math.max(mainW, subW) + 32 * s;
+      const boxH = size * 1.25 + (tc.subText ? size * 0.75 : 0) + 16 * s;
+      if (tc.bgOpacity > 0) {
+        g.fillStyle = hexA(tc.bgColor, tc.bgOpacity);
+        g.fillRect(x - boxW / 2, y, boxW, boxH);
+      }
+      g.textAlign = "center";
+      g.fillStyle = tc.color || "#fff";
+      g.font = `800 ${size}px ${family}`;
+      g.fillText(text, x, y + 8 * s);
+      if (tc.subText) {
+        g.globalAlpha = Math.max(0, alpha) * 0.85;
+        g.font = `${size * 0.6}px ${family}`;
+        g.fillText(tc.subText, x, y + 8 * s + size * 1.25);
+      }
+      g.globalAlpha = 1;
+      return true;
+    }
+    if (clip.clipType === "caption" && clip.captionText) {
+      const style = clip.captionStyle ?? "bold";
+      const size = (style === "minimal" ? 28 : 36) * s;
+      g.font = `${style === "minimal" ? 400 : 700} ${size}px sans-serif`;
+      g.textAlign = "center";
+      const w = g.measureText(clip.captionText).width;
+      const y = H - H * 0.08 - size * 1.2;
+      if (style === "bold") {
+        g.fillStyle = "rgba(0,0,0,0.6)";
+        g.fillRect(W / 2 - w / 2 - 10 * s, y - 6 * s, w + 20 * s, size * 1.2 + 12 * s);
+      }
+      if (style === "outline") {
+        g.lineWidth = Math.max(2, 3 * s) * 2;
+        g.strokeStyle = "#000";
+        g.lineJoin = "round";
+        g.strokeText(clip.captionText, W / 2, y);
+      }
+      if (style === "minimal") { g.shadowColor = "rgba(0,0,0,0.8)"; g.shadowOffsetX = g.shadowOffsetY = 2; }
+      g.fillStyle = "#fff";
+      g.fillText(clip.captionText, W / 2, y);
+      g.shadowColor = "transparent";
+      return true;
+    }
+    return false;
+  }
+
+  /** Blend `from`→`to` layer canvases onto `ctx` per the xfade name. */
+  private blend(ctx: CanvasRenderingContext2D, name: string, p: number, from: HTMLCanvasElement | null, to: HTMLCanvasElement | null, W: number, H: number, opFrom: number, opTo: number, depth: number) {
     const q = Math.min(1, Math.max(0, p));
     const draw = (c: HTMLCanvasElement | null, alpha: number, clip?: (g: CanvasRenderingContext2D) => void, dx = 0, dy = 0, scale = 1, filter = "none") => {
       if (!c || alpha <= 0) return;
@@ -399,10 +564,10 @@ export class ViewerCompositor {
       case "wipedown": draw(from, opFrom); draw(to, opTo, (g) => g.rect(0, 0, W, H * q)); return;
       case "diagtl": draw(from, opFrom); draw(to, opTo, (g) => { g.moveTo(0, 0); g.lineTo(2 * W * q, 0); g.lineTo(0, 2 * H * q); g.closePath(); }); return;
       case "diagtr": draw(from, opFrom); draw(to, opTo, (g) => { g.moveTo(W, 0); g.lineTo(W - 2 * W * q, 0); g.lineTo(W, 2 * H * q); g.closePath(); }); return;
-      case "circleopen": draw(from, opFrom); draw(to, opTo, (g) => g.arc(W / 2, H / 2, Math.hypot(W, H) / 2 * q, 0, Math.PI * 2)); return;
+      case "circleopen": draw(from, opFrom); draw(to, opTo, (g) => g.arc(W / 2, H / 2, (Math.hypot(W, H) / 2) * q, 0, Math.PI * 2)); return;
       case "radial": draw(from, opFrom); draw(to, opTo, (g) => { g.moveTo(W / 2, H / 2); g.arc(W / 2, H / 2, Math.hypot(W, H), -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * q); g.closePath(); }); return;
-      case "vertopen": draw(from, opFrom); draw(to, opTo, (g) => g.rect(W / 2 * (1 - q), 0, W * q, H)); return;
-      case "horzopen": draw(from, opFrom); draw(to, opTo, (g) => g.rect(0, H / 2 * (1 - q), W, H * q)); return;
+      case "vertopen": draw(from, opFrom); draw(to, opTo, (g) => g.rect((W / 2) * (1 - q), 0, W * q, H)); return;
+      case "horzopen": draw(from, opFrom); draw(to, opTo, (g) => g.rect(0, (H / 2) * (1 - q), W, H * q)); return;
       case "hlslice": draw(from, opFrom); draw(to, opTo, (g) => { const n = 10; for (let i = 0; i < n; i++) g.rect(0, (H / n) * i, W, (H / n) * q); }); return;
       case "slideleft": draw(from, opFrom, undefined, -W * q); draw(to, opTo, undefined, W * (1 - q)); return;
       case "slideright": draw(from, opFrom, undefined, W * q); draw(to, opTo, undefined, -W * (1 - q)); return;
@@ -414,11 +579,11 @@ export class ViewerCompositor {
       case "hblur": draw(from, opFrom * (1 - q), undefined, 0, 0, 1, `blur(${(q * 30 * W) / 960}px)`); draw(to, opTo * q, undefined, 0, 0, 1, `blur(${((1 - q) * 30 * W) / 960}px)`); return;
       case "pixelize": {
         const c = q < 0.5 ? from : to;
-        const s = Math.max(1, Math.round((1 - Math.abs(q - 0.5) * 2) * 40));
+        const sz = Math.max(1, Math.round((1 - Math.abs(q - 0.5) * 2) * 40));
         if (c) {
-          const t = this.scratch;
-          t.width = Math.max(1, Math.round(W / s)); t.height = Math.max(1, Math.round(H / s));
+          const t = this.buf(`pix${depth}`, Math.max(1, Math.round(W / sz)), Math.max(1, Math.round(H / sz)));
           const tc = t.getContext("2d")!;
+          tc.clearRect(0, 0, t.width, t.height);
           tc.drawImage(c, 0, 0, t.width, t.height);
           ctx.save(); ctx.imageSmoothingEnabled = false; ctx.globalAlpha = q < 0.5 ? opFrom : opTo;
           ctx.drawImage(t, 0, 0, W, H); ctx.restore();
@@ -431,48 +596,79 @@ export class ViewerCompositor {
     }
   }
 
-  /**
-   * Composite all units. Returns false if a source was unusable (e.g. tainted)
-   * so the caller can fall back to the legacy single-video view.
-   */
-  render(units: PreviewUnit[], sourceFor: LayerSource, opts: CompositeOptions): boolean {
+  /** Draw a layer's content (media, nested sequence or text) into `target`. */
+  private drawAny(target: HTMLCanvasElement, layer: PreviewLayer, kind: PreviewUnit["kind"], sourceFor: LayerSource, opts: CompositeOptions, depth: number): boolean {
+    if (kind === "text") return this.drawText(target, layer, opts.width, opts.height);
+    if (layer.nested) {
+      const inner = this.buf(`nest${depth}:${layer.key}`, opts.width, opts.height);
+      const ig = inner.getContext("2d")!;
+      ViewerCompositor.reset(ig, opts.width, opts.height);
+      this.renderUnits(ig, layer.nested, sourceFor, opts, depth + 1, true);
+      return this.drawLayer(target, layer, inner, opts, depth);
+    }
+    return this.drawLayer(target, layer, sourceFor(layer), opts, depth);
+  }
+
+  private renderUnits(ctx: CanvasRenderingContext2D, units: PreviewUnit[], sourceFor: LayerSource, opts: CompositeOptions, depth: number, transparent: boolean) {
     const { width: W, height: H } = opts;
-    if (this.canvas.width !== W || this.canvas.height !== H) { this.canvas.width = W; this.canvas.height = H; }
-    const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.filter = "none";
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, W, H);
-    this.healthy = true;
-
+    if (!transparent) { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); }
     for (const unit of units) {
-      if (unit.kind === "text") continue; // titles/captions are drawn by the DOM overlay
       if (unit.kind === "adjustment") {
         const layer = unit.to!;
-        const lc = this.layerCanvas(0, W, H);
-        const snap = lc.getContext("2d")!;
-        snap.setTransform(1, 0, 0, 1, 0, 0);
-        snap.clearRect(0, 0, W, H);
-        snap.drawImage(this.canvas, 0, 0);
-        const adjusted = this.layerCanvas(1, W, H);
-        const ok = this.drawLayer(adjusted, { ...layer, transform: { posX: 0, posY: 0, scaleX: 1, scaleY: 1, rotation: 0, anchorX: 0.5, anchorY: 0.5, opacity: 1 } }, lc, opts);
-        if (ok) { ctx.globalAlpha = layer.transform.opacity; ctx.drawImage(adjusted, 0, 0); ctx.globalAlpha = 1; }
+        const snap = this.buf(`adjsrc${depth}`, W, H);
+        const sg = snap.getContext("2d")!;
+        ViewerCompositor.reset(sg, W, H);
+        sg.drawImage(ctx.canvas, 0, 0);
+        const adjusted = this.buf(`adj${depth}`, W, H);
+        const identity = { posX: 0, posY: 0, scaleX: 1, scaleY: 1, rotation: 0, anchorX: 0.5, anchorY: 0.5, opacity: 1 };
+        if (this.drawLayer(adjusted, { ...layer, transform: identity }, snap, opts, depth)) {
+          ctx.globalAlpha = layer.transform.opacity;
+          ctx.drawImage(adjusted, 0, 0);
+          ctx.globalAlpha = 1;
+        }
         continue;
       }
-      const a = unit.from ? this.layerCanvas(0, W, H) : null;
-      const b = unit.to ? this.layerCanvas(1, W, H) : null;
-      const okA = a && unit.from ? this.drawLayer(a, unit.from, sourceFor(unit.from), opts) : false;
-      const okB = b && unit.to ? this.drawLayer(b, unit.to, sourceFor(unit.to), opts) : false;
+      const a = unit.from ? this.buf(`from${depth}`, W, H) : null;
+      const b = unit.to ? this.buf(`to${depth}`, W, H) : null;
+      const okA = a && unit.from ? this.drawAny(a, unit.from, unit.kind, sourceFor, opts, depth) : false;
+      const okB = b && unit.to ? this.drawAny(b, unit.to, unit.kind, sourceFor, opts, depth) : false;
       if (unit.transition) {
-        this.blend(unit.transition.name, unit.transition.progress, okA ? a : null, okB ? b : null, W, H,
-          unit.from?.transform.opacity ?? 1, unit.to?.transform.opacity ?? 1);
+        this.blend(ctx, unit.transition.name, unit.transition.progress, okA ? a : null, okB ? b : null, W, H,
+          unit.from?.transform.opacity ?? 1, unit.to?.transform.opacity ?? 1, depth);
       } else if (okB && b) {
         ctx.globalAlpha = unit.to!.transform.opacity;
         ctx.drawImage(b, 0, 0);
         ctx.globalAlpha = 1;
       }
     }
+  }
+
+  /**
+   * Composite all units onto the canvas. Returns false if a source was
+   * unusable (e.g. tainted) so the caller can fall back to the legacy view.
+   */
+  render(units: PreviewUnit[], sourceFor: LayerSource, opts: CompositeOptions): boolean {
+    const { width: W, height: H } = opts;
+    if (this.canvas.width !== W || this.canvas.height !== H) { this.canvas.width = W; this.canvas.height = H; }
+    this.healthy = true;
+    this.renderUnits(this.ctx, units, sourceFor, opts, 0, false);
+    // Free NodeFX renderers for clips that are no longer on screen.
+    const live = new Set<string>();
+    const collect = (list: PreviewUnit[]) => {
+      for (const u of list) for (const l of [u.from, u.to]) if (l) { live.add(l.key); if (l.nested) collect(l.nested); }
+    };
+    collect(units);
+    for (const [key, c] of this.comps) {
+      if (!live.has(key)) { c.renderer.dispose(); this.comps.delete(key); }
+    }
     return this.healthy;
+  }
+
+  /** Read back the current frame (for the GPU export path). */
+  readPixels(): ImageData {
+    return this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
   }
 }

@@ -173,3 +173,17 @@ describe.runIf(enabled)("export graph (real FFmpeg)", () => {
     void vol;
   }, 60000);
 });
+
+describe.runIf(enabled)("export graph power windows (real FFmpeg)", () => {
+  it("grades only inside the window mask", () => {
+    const red = solid("pwred", "red");
+    const win = { id: "w", name: "w", shape: { type: "ellipse" as const, x: 0.25, y: 0.25, width: 0.5, height: 0.5, rotation: 0, points: [] }, feather: 0, opacity: 1, inverted: false, expansion: 0, trackingEnabled: false, trackingData: [], keyframes: {} };
+    const { out, graph } = render(project([red], [
+      clip("pwred", "V1", 0, { masks: [win], colorGrade: { ...createDefaultColorGrade(), saturation: 0, maskIds: ["w"] } }),
+    ]));
+    expect(graph.needsGpu).toBe(false);
+    const inside = pixelAt(out, 1, 0.5, 0.5);
+    expect(Math.abs(inside[0] - inside[1])).toBeLessThan(15); // grey
+    near(pixelAt(out, 1, 0.05, 0.05), [254, 0, 0]);             // untouched red
+  }, 60000);
+});

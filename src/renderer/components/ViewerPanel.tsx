@@ -29,7 +29,7 @@ import { computeCssFilterFromEffects } from "./EffectsPanel";
 import { interpolateKeyframes } from "./KeyframeCurveEditor";
 import type { CurveKeyframe } from "./KeyframeCurveEditor";
 import { isWebGLTransition, renderTransitionFrame, disposeTransitionRenderer } from "../lib/transitionRenderer";
-import { computePreviewUnits, type PreviewUnit } from "../../shared/previewLayers";
+import { computePreviewUnits, type NestedResolver, type PreviewUnit } from "../../shared/previewLayers";
 import { ViewerCompositor } from "../lib/viewerCompositor";
 import { LayerSourcePool } from "../lib/layerSourcePool";
 
@@ -81,6 +81,8 @@ interface ViewerPanelProps {
   getCachedVideoPath?: (clipId: string) => string | null;
   /** Sequence resolution — the compositor renders at this aspect ratio. */
   sequenceSize?: { width: number; height: number };
+  /** Inner segments of a nested-sequence clip (for the compositor). */
+  resolveNestedSegments?: NestedResolver;
 }
 
 /** Resolve animated effect parameters for a clip at a timeline frame. */
@@ -400,6 +402,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     onOverwriteAtPlayhead,
     getCachedVideoPath,
     sequenceSize,
+    resolveNestedSegments,
   }, ref) {
 
     const panelRef       = useRef<HTMLElement | null>(null);
@@ -610,10 +613,10 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const compositorCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const [compositorFailed, setCompositorFailed] = useState(false);
     const previewUnits = useMemo<PreviewUnit[]>(
-      () => computePreviewUnits(segments, playheadFrame, sequenceFps),
-      [segments, playheadFrame, sequenceFps]
+      () => computePreviewUnits(segments, playheadFrame, sequenceFps, resolveNestedSegments),
+      [segments, playheadFrame, sequenceFps, resolveNestedSegments]
     );
-    const compositorActive = !compositorFailed && previewUnits.some((u) => u.kind !== "text");
+    const compositorActive = !compositorFailed && previewUnits.length > 0;
     const seqW = sequenceSize?.width || 1920;
     const seqH = sequenceSize?.height || 1080;
     const compositorState = useRef({
@@ -659,13 +662,13 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         const pt = primary ? primary.currentTime + primary.readyState * 1e4 : -1;
         if (pt !== lastPrimaryTime) { lastPrimaryTime = pt; compositorDirty.current = true; }
         if (!compositorDirty.current && !st.isPlaying) return;
-        if (!st.units.some((u) => u.kind !== "text")) return;
+        if (!st.units.length) return;
         compositorDirty.current = false;
         const ok = compositor.render(st.units, pool.sourceFor, {
           width: st.width,
           height: st.height,
           frame: st.frame,
-          effectsFor: (clip) => effectsAtFrame(clip.effects, st.frame),
+          effectsFor: (clip, f) => effectsAtFrame(clip.effects, f),
         });
         if (ok) badFrames = 0;
         else if (++badFrames > 30) setCompositorFailed(true);
@@ -1154,8 +1157,8 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
             </div>
           ))}
 
-          {/* Title clip overlay */}
-          {previewAsset && (() => {
+          {/* Title clip overlay (legacy view only — the compositor draws titles in track order) */}
+          {!compositorActive && previewAsset && (() => {
             const activeTitleClips = segments
               .filter(s => s.clip.titleConfig && s.startFrame <= playheadFrame && s.endFrame > playheadFrame);
             return activeTitleClips.map(s => {

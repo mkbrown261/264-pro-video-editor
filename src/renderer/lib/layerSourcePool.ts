@@ -9,6 +9,7 @@
 
 import type { MediaAsset } from "../../shared/models";
 import type { PreviewLayer, PreviewUnit } from "../../shared/previewLayers";
+import { hasSpeedRamp } from "../../shared/timeline";
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|avif)$/i;
 
@@ -63,10 +64,22 @@ export class LayerSourcePool {
   sync(units: PreviewUnit[], isPlaying: boolean, fps: number) {
     const now = performance.now();
     const seen = new Set<string>();
-    for (const u of units) {
-      if (u.kind !== "media") continue;
-      for (const layer of [u.from, u.to]) {
-        if (!layer || this.isPrimary(layer)) continue;
+    // Flatten nested sequences: their inner layers need decoders too.
+    const media: PreviewLayer[] = [];
+    const collect = (list: PreviewUnit[]) => {
+      for (const u of list) {
+        if (u.kind !== "media") continue;
+        for (const layer of [u.from, u.to]) {
+          if (!layer) continue;
+          if (layer.nested) collect(layer.nested);
+          else media.push(layer);
+        }
+      }
+    };
+    collect(units);
+    {
+      for (const layer of media) {
+        if (this.isPrimary(layer)) continue;
         const asset = layer.segment.asset;
         const url = mediaUrlFor(asset, this.useProxy);
         if (!url) continue;
@@ -106,6 +119,9 @@ export class LayerSourcePool {
 
   private isPrimary(layer: PreviewLayer): boolean {
     const p = this.primary;
+    // The playback controller drives its video at constant speed, so
+    // speed-ramped clips always use a pooled decoder positioned here.
+    if (hasSpeedRamp(layer.segment.clip)) return false;
     return !!p && layer.key === p.clipId && p.el.readyState >= 2;
   }
 

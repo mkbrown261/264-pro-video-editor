@@ -1158,6 +1158,17 @@ export default function App() {
   // findAllActiveVideoSegments returns ALL overlapping video clips sorted
   // by trackIndex desc.  The first element is the clip we show in the viewer.
   // Lower clips are hidden unless transparency/mask allows see-through.
+  // Inner segments for nested-sequence clips (the viewer compositor renders them).
+  const resolveNestedSegments = useMemo(() => {
+    const cache = new Map<string, TimelineSegment[]>();
+    return (clip: import("../shared/models").TimelineClip) => {
+      const seq = clip.nestedSequenceId ? project.nestedSequences?.[clip.nestedSequenceId] : undefined;
+      if (!seq) return null;
+      let segs = cache.get(seq.id);
+      if (!segs) { segs = buildTimelineSegments(seq, project.assets); cache.set(seq.id, segs); }
+      return segs;
+    };
+  }, [project.nestedSequences, project.assets]);
   const activeVideoSegments = findAllActiveVideoSegments(segments, playback.playheadFrame);
   // Primary active video segment — shown in the viewer
   const activeSegment = activeVideoSegments[0] ?? null;
@@ -3420,6 +3431,7 @@ export default function App() {
                 onOverwriteAtPlayhead={handleOverwriteAtPlayhead}
                 getCachedVideoPath={renderCache.getCachedPath}
                 sequenceSize={project.sequence.settings}
+                resolveNestedSegments={resolveNestedSegments}
               />
               {/* Edit-page Video Scopes — toggleable via Scopes toolbar button */}
               {editScopesOpen && (
@@ -3952,6 +3964,7 @@ export default function App() {
                 onSetPlayheadFrame={setPlayheadFrame}
                 onStepFrames={handleStepFrames}
                 sequenceSize={project.sequence.settings}
+                resolveNestedSegments={resolveNestedSegments}
               />
               {/* Professional Video Scopes — collapsible strip */}
               <div className="color-scopes-strip" style={{ position: "relative" }}>

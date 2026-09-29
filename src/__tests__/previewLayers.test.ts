@@ -39,3 +39,18 @@ describe("computePreviewUnits", () => {
     expect(u[0].to?.transform.posX).toBeCloseTo(0.5);
   });
 });
+
+import { rampSourceProgress, rampRate } from "../shared/timeline";
+describe("speed ramps", () => {
+  it("keeps in/out points and redistributes time", () => {
+    const kfs = [{ frame: 0, speed: 1 }, { frame: 300, speed: 3 }];
+    expect(rampSourceProgress(kfs, 0)).toBe(0);
+    expect(rampSourceProgress(kfs, 1)).toBeCloseTo(1);
+    // speed rises, so the first half covers less than half the source
+    expect(rampSourceProgress(kfs, 0.5)).toBeCloseTo((0.5 * (1 + 2) / 2) / 2);
+    expect(rampRate(kfs, 1) / rampRate(kfs, 0)).toBeCloseTo(3);
+  });
+  it("is linear without a ramp", () => {
+    expect(rampSourceProgress([], 0.3)).toBe(0.3);
+  });
+});

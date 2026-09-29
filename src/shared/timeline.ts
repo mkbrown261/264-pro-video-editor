@@ -437,3 +437,67 @@ export function splitClipAtFrame(
     clips: nextClips
   };
 }
+
+// ── Speed ramps (time remap) ──────────────────────────────────────────────────
+// Keyframes are {frame, speed} on a 0–SPEED_RAMP_SPAN scale spanning the whole
+// clip (the Inspector's ramp editor). The clip keeps its in/out points and
+// timeline length; the ramp redistributes source time inside it, so the speed
+// at each point is proportional to the curve.
+
+export const SPEED_RAMP_SPAN = 300;
+
+function rampPoints(kfs: Array<{ frame: number; speed: number }>): Array<[number, number]> {
+  const span = Math.max(SPEED_RAMP_SPAN, ...kfs.map((k) => k.frame));
+  const pts = [...kfs]
+    .sort((a, b) => a.frame - b.frame)
+    .map((k) => [Math.min(1, Math.max(0, k.frame / span)), Math.max(0.01, k.speed)] as [number, number]);
+  if (pts[0][0] > 0) pts.unshift([0, pts[0][1]]);
+  if (pts[pts.length - 1][0] < 1) pts.push([1, pts[pts.length - 1][1]]);
+  return pts;
+}
+
+/** ∫₀ᵖ speed(u) du for the piecewise-linear ramp. */
+function rampIntegral(pts: Array<[number, number]>, p: number): number {
+  let acc = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [u0, s0] = pts[i];
+    const [u1, s1] = pts[i + 1];
+    if (p <= u0) break;
+    const end = Math.min(p, u1);
+    const span = u1 - u0 || 1;
+    const sEnd = s0 + ((end - u0) / span) * (s1 - s0);
+    acc += ((s0 + sEnd) / 2) * (end - u0);
+  }
+  return acc;
+}
+
+export function hasSpeedRamp(clip: TimelineClip): boolean {
+  return (clip.speedRampKeyframes?.length ?? 0) >= 2;
+}
+
+/**
+ * Source progress (0–1 of the clip's source range) at clip progress p (0–1).
+ * Beyond the clip (transition tails) it continues at the end speed.
+ */
+export function rampSourceProgress(kfs: Array<{ frame: number; speed: number }>, p: number): number {
+  if (kfs.length < 2) return p;
+  const pts = rampPoints(kfs);
+  const total = rampIntegral(pts, 1) || 1;
+  if (p <= 0) return (p * pts[0][1]) / total;
+  if (p >= 1) return 1 + ((p - 1) * pts[pts.length - 1][1]) / total;
+  return rampIntegral(pts, p) / total;
+}
+
+/** Instantaneous source-rate multiplier (relative to the clip's average rate). */
+export function rampRate(kfs: Array<{ frame: number; speed: number }>, p: number): number {
+  if (kfs.length < 2) return 1;
+  const pts = rampPoints(kfs);
+  const total = rampIntegral(pts, 1) || 1;
+  const q = Math.min(1, Math.max(0, p));
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [u0, s0] = pts[i];
+    const [u1, s1] = pts[i + 1];
+    if (q >= u0 && q <= u1) return (s0 + ((q - u0) / ((u1 - u0) || 1)) * (s1 - s0)) / total;
+  }
+  return pts[pts.length - 1][1] / total;
+}
