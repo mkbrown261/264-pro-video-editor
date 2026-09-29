@@ -27,6 +27,7 @@ import { toast } from "./lib/toast";
 import { useExportController } from "./hooks/useExportController";
 import { useProjectSafety } from "./hooks/useProjectSafety";
 import { useProjectFile } from "./hooks/useProjectFile";
+import { FileMenu } from "./components/FileMenu";
 import { analyzeTimelineHealth, DELIVERY_FORMATS } from "../shared/timelineHealth";
 import { useEditorStore } from "./store/editorStore";
 import {
@@ -340,8 +341,6 @@ export default function App() {
   const sourceVideoRef = useRef<HTMLVideoElement | null>(null);
 
   // File dropdown (Imp 10)
-  const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const fileMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Timecode editing (Imp 4)
   const [timecodeEditing, setTimecodeEditing] = useState(false);
@@ -1059,18 +1058,6 @@ export default function App() {
   // ── Fix 6: Filmstrip thumbnail generation (background, per-asset) ──────────
   useFilmstripGenerator({ assets: project.assets, setAssetFilmstrip });
 
-  // ── File menu click-outside close ─────────────────────────────────────────
-  useEffect(() => {
-    if (!fileMenuOpen) return;
-    function onDown(e: MouseEvent) {
-      if (fileMenuRef.current && !fileMenuRef.current.contains(e.target as Node)) {
-        setFileMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [fileMenuOpen]);
-
   // ── VoiceChopAI init ───────────────────────────────────────────────────────
   useEffect(() => {
     const voiceChop = new VoiceChopAI({
@@ -1539,63 +1526,24 @@ export default function App() {
           <span className="brand-name">Pro</span>
         </div>
 
-        {/* Imp 10: File dropdown */}
-        <div className="file-menu-wrapper" ref={fileMenuRef}>
-          <button
-            className={`menubar-action-btn file-menu-btn${fileMenuOpen ? " active" : ""}`}
-            onClick={() => setFileMenuOpen((v) => !v)}
-            title="File"
-            type="button"
-          >
-            File ▾
-          </button>
-          {fileMenuOpen && (
-            <div className="file-menu-dropdown">
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); handleNewProject(); }} type="button">
-                <span className="fmi-icon">➕</span> New Project <span className="fmi-kbd">⌘N</span>
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setTemplateModalOpen(true); }} type="button">
-                <span className="fmi-icon">📋</span> New from Template…
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleOpenProject(); }} type="button">
-                <span className="fmi-icon">📂</span> Open… <span className="fmi-kbd">⌘O</span>
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShowRecentPanel(true); }} type="button">
-                <span className="fmi-icon">🕒</span> Open Recent…
-              </button>
-              <div className="file-menu-sep" />
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleSaveProject(); }} type="button">
-                <span className="fmi-icon">💾</span> Save{projectDirty ? " •" : ""} <span className="fmi-kbd">⌘S</span>
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleSaveProjectAs(); }} type="button">
-                <span className="fmi-icon">📎</span> Save As… <span className="fmi-kbd">⌘⇧S</span>
-              </button>
-              <div className="file-menu-sep" />
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); void handleExport(); }} type="button">
-                <span className="fmi-icon">🎥</span> Export… <span className="fmi-kbd">⌘E</span>
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setAutoResizeOpen(true); }} type="button">
-                <span className="fmi-icon">📱</span> Social Auto-Resize…
-              </button>
-              <div className="file-menu-sep" />
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setProjectNotesPanelOpen(true); }} type="button">
-                <span className="fmi-icon">📋</span> Project Notes… <span className="fmi-kbd">⌘⇧N</span>
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShowSettings(true); }} type="button">
-                <span className="fmi-icon">⚙️</span> Settings…
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setShortcutsPanelOpen(true); }} type="button">
-                <span className="fmi-icon">⌨️</span> Keyboard Shortcuts…
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); setSettingsPanelOpen(true); }} type="button">
-                <span className="fmi-icon">🤖</span> AI & API Keys… (⌘,)
-              </button>
-              <button className="file-menu-item" onClick={() => { setFileMenuOpen(false); window.dispatchEvent(new CustomEvent("264pro:show-onboarding")); }} type="button">
-                <span className="fmi-icon">❓</span> Feature Tour…
-              </button>
-            </div>
-          )}
-        </div>
+        <FileMenu entries={[
+          { icon: "➕", label: "New Project", kbd: "⌘N", onSelect: handleNewProject },
+          { icon: "📋", label: "New from Template…", onSelect: () => setTemplateModalOpen(true) },
+          { icon: "📂", label: "Open…", kbd: "⌘O", onSelect: handleOpenProject },
+          { icon: "🕒", label: "Open Recent…", onSelect: () => setShowRecentPanel(true) },
+          "sep",
+          { icon: "💾", label: `Save${projectDirty ? " •" : ""}`, kbd: "⌘S", onSelect: () => void handleSaveProject() },
+          { icon: "📎", label: "Save As…", kbd: "⌘⇧S", onSelect: () => void handleSaveProjectAs() },
+          "sep",
+          { icon: "🎥", label: "Export…", kbd: "⌘E", onSelect: () => void handleExport() },
+          { icon: "📱", label: "Social Auto-Resize…", onSelect: () => setAutoResizeOpen(true) },
+          "sep",
+          { icon: "📋", label: "Project Notes…", kbd: "⌘⇧N", onSelect: () => setProjectNotesPanelOpen(true) },
+          { icon: "⚙️", label: "Settings…", onSelect: () => setShowSettings(true) },
+          { icon: "⌨️", label: "Keyboard Shortcuts…", onSelect: () => setShortcutsPanelOpen(true) },
+          { icon: "🤖", label: "AI & API Keys…", kbd: "⌘,", onSelect: () => setSettingsPanelOpen(true) },
+          { icon: "❓", label: "Feature Tour…", onSelect: () => window.dispatchEvent(new CustomEvent("264pro:show-onboarding")) },
+        ]} />
 
         {/* Undo/Redo */}
         <div className="menubar-actions">
