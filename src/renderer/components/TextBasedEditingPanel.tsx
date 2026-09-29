@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { toast } from '../lib/toast';
 import type { Transcript, TranscriptWord, MediaAsset } from "../../shared/models";
 
 interface TextBasedEditingPanelProps {
@@ -34,24 +35,6 @@ function parseSRT(srt: string, assetId: string): Transcript {
     });
   }
   return { assetId, words, language: 'en', generatedAt: Date.now() };
-}
-
-function generateMockTranscript(assetId: string, assetName: string): Transcript {
-  const demoText = `Welcome to 264 Pro. This is the most powerful video editor you have ever seen. Let us get started by importing your footage today. The text based editing panel allows you to edit your video by selecting words. Simply click and drag to select a range of words then use the controls below to add to timeline or delete that range. This makes editing dialogue sequences incredibly fast and precise.`;
-  const words = demoText.split(/\s+/);
-  const wordDuration = 600; // ms per word avg
-  return {
-    assetId,
-    words: words.map((word, i) => ({
-      word,
-      startMs: i * wordDuration,
-      endMs: (i + 1) * wordDuration,
-      confidence: Math.random() * 0.3 + 0.7,
-      selected: false,
-    })),
-    language: 'en',
-    generatedAt: Date.now(),
-  };
 }
 
 export function TextBasedEditingPanel({
@@ -142,16 +125,15 @@ export function TextBasedEditingPanel({
         } else if (result?.error) {
           console.error('Transcription error:', result.error);
           // Surface the error to the user via a toast-like alert
-          alert(`Transcription failed: ${result.error}`);
+          toast.error(`Transcription failed: ${result.error}`);
         }
       } else {
-        // No API available — fall back to mock transcript for development/demo
-        const mock = generateMockTranscript(selectedAssetId, asset?.name ?? 'Asset');
-        onSetTranscript(selectedAssetId, mock);
+        // Never invent a transcript: edits made from it would cut the wrong content.
+        toast.error(asset?.sourcePath ? 'Transcription needs the desktop app.' : 'This clip has no source media to transcribe.');
       }
     } catch (err) {
       console.error('Transcription exception:', err);
-      alert(`Transcription error: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Transcription error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsTranscribing(false);
     }

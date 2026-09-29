@@ -12,6 +12,7 @@ interface SettingsPanelProps {
 }
 
 interface ApiKeys {
+  groq: string;
   higgsfield: string;
   replicate: string;
   openai: string;
@@ -23,20 +24,28 @@ const STORAGE_KEY = "264pro_api_keys";
 function loadKeys(): ApiKeys {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { higgsfield: "", replicate: "", openai: "", fal: "" };
+    if (!raw) return { groq: "", higgsfield: "", replicate: "", openai: "", fal: "" };
     // Simple XOR decode for storage obfuscation (not true encryption)
     const decoded = atob(raw);
     const parsed = JSON.parse(decoded) as Partial<ApiKeys>;
     return {
+      groq:       parsed.groq       ?? "",
       higgsfield: parsed.higgsfield ?? "",
       replicate:  parsed.replicate  ?? "",
       openai:     parsed.openai     ?? "",
       fal:        parsed.fal        ?? "",
     };
   } catch {
-    return { higgsfield: "", replicate: "", openai: "", fal: "" };
+    return { groq: "", higgsfield: "", replicate: "", openai: "", fal: "" };
   }
 }
+
+type KeyApi = {
+  getAiKeys?: () => Promise<{ groq: string; openai: string }>;
+  setAiKeys?: (keys: { groq?: string; openai?: string }) => Promise<{ ok: boolean }>;
+  testApiKey?: (service: string, key: string) => Promise<{ ok: boolean | null; message: string }>;
+};
+const keyApi = (): KeyApi | undefined => (window as unknown as { electronAPI?: KeyApi }).electronAPI;
 
 function saveKeys(keys: ApiKeys): void {
   try {
@@ -67,8 +76,16 @@ export function SettingsPanel({ onClose, proxyEnabled, onToggleProxy }: Settings
     setKeys(prev => ({ ...prev, [field]: value }));
   };
 
+  // Transcription keys live in the main process (it makes those API calls).
+  useEffect(() => {
+    void keyApi()?.getAiKeys?.().then((k) => {
+      setKeys((prev) => ({ ...prev, groq: k.groq || prev.groq, openai: k.openai || prev.openai }));
+    }).catch(() => {});
+  }, []);
+
   const handleSave = () => {
     saveKeys(keys);
+    void keyApi()?.setAiKeys?.({ groq: keys.groq, openai: keys.openai });
     // Persist fal.ai key to main process file so IPC handlers can read it directly
     if (keys.fal && (window as any).flowstateAPI?.setFalKey) {
       void (window as any).flowstateAPI.setFalKey(keys.fal);
@@ -81,10 +98,14 @@ export function SettingsPanel({ onClose, proxyEnabled, onToggleProxy }: Settings
       setTestStatus(prev => ({ ...prev, [service]: "⚠️ Enter a key first" }));
       return;
     }
+    const test = keyApi()?.testApiKey;
+    if (!test) {
+      setTestStatus(prev => ({ ...prev, [service]: "Keys can only be checked in the desktop app." }));
+      return;
+    }
     setTestStatus(prev => ({ ...prev, [service]: "⏳ Testing…" }));
-    // Simulate test (real implementation would call the API)
-    await new Promise(r => setTimeout(r, 800));
-    setTestStatus(prev => ({ ...prev, [service]: "✅ Key format looks valid" }));
+    const r = await test(service, key.trim()).catch((e: unknown) => ({ ok: false, message: String(e) }));
+    setTestStatus(prev => ({ ...prev, [service]: `${r.ok === true ? "✅" : r.ok === false ? "❌" : "ℹ️"} ${r.message}` }));
   };
 
   const inputStyle: React.CSSProperties = {
@@ -238,9 +259,31 @@ export function SettingsPanel({ onClose, proxyEnabled, onToggleProxy }: Settings
 
               <div style={{ height: 1, background: "rgba(255,255,255,0.07)" }} />
 
+              {/* Groq — Whisper transcription + AI revision */}
+              <div>
+                <label style={labelStyle}>Groq (transcription, subtitles, text-based editing)</label>
+                <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                  <input
+                    type={showKeys["groq"] ? "text" : "password"}
+                    placeholder="gsk_••••••••••••••••••••••••••••"
+                    value={keys.groq}
+                    onChange={e => updateKey("groq", e.target.value)}
+                    style={inputStyle}
+                  />
+                  <button type="button" onClick={() => setShowKeys(p => ({ ...p, groq: !p.groq }))} style={btnStyle}>
+                    {showKeys["groq"] ? "Hide" : "Show"}
+                  </button>
+                  <button type="button" onClick={() => handleTest("groq", keys.groq)} style={btnStyle}>Test</button>
+                </div>
+                {testStatus["groq"] && <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>{testStatus["groq"]}</div>}
+                <div style={{ fontSize: 11, color: "#475569" }}>→ Get key: console.groq.com/keys (free tier available)</div>
+              </div>
+
+              <div style={{ height: 1, background: "rgba(255,255,255,0.07)" }} />
+
               {/* OpenAI */}
               <div>
-                <label style={labelStyle}>OpenAI Whisper (transcription)</label>
+                <label style={labelStyle}>OpenAI Whisper (transcription, used when no Groq key is set)</label>
                 <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
                   <input
                     type={showKeys["openai"] ? "text" : "password"}

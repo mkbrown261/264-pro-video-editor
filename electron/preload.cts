@@ -143,6 +143,9 @@ const electronAPI = {
     ipcRenderer.invoke("publish:upload-youtube", params),
   uploadToTikTok: (params: unknown): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke("publish:upload-tiktok", params),
+  getAiKeys: (): Promise<{ groq: string; openai: string }> => ipcRenderer.invoke('settings:get-ai-keys'),
+  setAiKeys: (keys: { groq?: string; openai?: string }): Promise<{ ok: boolean }> => ipcRenderer.invoke('settings:set-ai-keys', keys),
+  testApiKey: (service: string, key: string): Promise<{ ok: boolean | null; message: string }> => ipcRenderer.invoke('settings:test-api-key', service, key),
   transcribeAudio: (args: { filePath: string; language?: string }) =>
     ipcRenderer.invoke('ai:transcribe', args),
   // ── Voice Isolation — FFmpeg anlmdn denoiser, no model file required ─────
