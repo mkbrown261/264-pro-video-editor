@@ -61,7 +61,7 @@ export class LayerSourcePool {
   }
 
   /** Keep every non-primary layer's element positioned at its source time. */
-  sync(units: PreviewUnit[], isPlaying: boolean, fps: number) {
+  sync(units: PreviewUnit[], isPlaying: boolean, fps: number, upcoming: PreviewUnit[] = []) {
     const now = performance.now();
     const seen = new Set<string>();
     // Flatten nested sequences: their inner layers need decoders too.
@@ -109,6 +109,39 @@ export class LayerSourcePool {
         }
       }
     }
+    // Look-ahead: decoders for clips starting soon are created now and parked
+    // on their first frame, so the cut doesn't wait for a load + seek.
+    const soon: PreviewLayer[] = [];
+    const collectSoon = (list: PreviewUnit[]) => {
+      for (const u of list) {
+        if (u.kind !== "media") continue;
+        for (const l of [u.from, u.to]) {
+          if (!l) continue;
+          if (l.nested) collectSoon(l.nested);
+          else if (!seen.has(l.key)) soon.push(l);
+        }
+      }
+    };
+    collectSoon(upcoming);
+    for (const layer of soon) {
+      const asset = layer.segment.asset;
+      const url = mediaUrlFor(asset, this.useProxy);
+      if (!url) continue;
+      seen.add(layer.key);
+      let e = this.entries.get(layer.key);
+      if (e && e.url !== url) { this.release(layer.key); e = undefined; }
+      if (!e) {
+        e = this.create(url, IMAGE_EXT.test(asset.sourcePath || url));
+        this.entries.set(layer.key, e);
+      }
+      e.lastUsed = now;
+      const v = e.el;
+      if (!(v instanceof HTMLVideoElement) || v.readyState < 1) continue;
+      if (!v.paused) v.pause();
+      const first = layer.segment.sourceInSeconds + 0.5 / Math.max(fps, asset.nativeFps || fps);
+      if (!v.seeking && Math.abs(v.currentTime - first) > 0.5 / fps) v.currentTime = first;
+    }
+
     // Pause layers that left the screen; free them after a while.
     for (const [key, e] of this.entries) {
       if (seen.has(key)) continue;

@@ -604,6 +604,13 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       () => computePreviewUnits(segments, playheadFrame, sequenceFps, resolveNestedSegments),
       [segments, playheadFrame, sequenceFps, resolveNestedSegments]
     );
+    // One second ahead while playing: lets the pool preload upcoming clips.
+    const upcomingUnits = useMemo<PreviewUnit[]>(
+      () => (isPlaying ? computePreviewUnits(segments, playheadFrame + Math.round(sequenceFps), sequenceFps, resolveNestedSegments) : []),
+      // Recompute every ~half second of playback, not every frame.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [isPlaying, segments, Math.floor(playheadFrame / Math.max(1, Math.round(sequenceFps / 2))), sequenceFps, resolveNestedSegments]
+    );
     const compositorActive = !compositorFailed && previewUnits.length > 0;
     const usesBgRemoval = segments.some((s) => s.clip.aiBackgroundRemoval?.enabled);
     useEffect(() => { if (usesBgRemoval) void loadSegmenter(); }, [usesBgRemoval]);
@@ -612,6 +619,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const compositorState = useRef({
       units: previewUnits, isPlaying, frame: playheadFrame, fps: sequenceFps,
       primaryClipId: null as string | null, width: 1920, height: 1080, proxy: proxyMode,
+      upcoming: [] as PreviewUnit[],
     });
     const compositorDirty = useRef(true);
     {
@@ -623,6 +631,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       compositorState.current = {
         units: previewUnits, isPlaying, frame: playheadFrame, fps: sequenceFps,
         primaryClipId: patchedActiveSegment?.clip.id ?? null, width, height, proxy: proxyMode,
+        upcoming: upcomingUnits,
       };
       compositorDirty.current = true;
     }
@@ -649,7 +658,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         const primary = videoRef.current;
         pool.setProxy(st.proxy);
         pool.setPrimary(primary, st.primaryClipId);
-        pool.sync(st.units, st.isPlaying, st.fps);
+        pool.sync(st.units, st.isPlaying, st.fps, st.upcoming);
         const pt = primary ? primary.currentTime + primary.readyState * 1e4 : -1;
         if (pt !== lastPrimaryTime) { lastPrimaryTime = pt; compositorDirty.current = true; }
         if (!compositorDirty.current && !st.isPlaying) return;
