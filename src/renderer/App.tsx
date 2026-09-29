@@ -307,6 +307,7 @@ export default function App() {
   const [timelineIndexOpen, setTimelineIndexOpen] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [shuttleSpeed, setShuttleSpeed] = useState(1); // J/K/L shuttle speed multiplier
+  useEffect(() => { if (!playback.isPlaying) setShuttleSpeed(1); }, [playback.isPlaying]);
   const [clawGuideEnabled, setClawGuideEnabled] = useState(() => {
     try { return localStorage.getItem("264pro_claw_guide") !== "false"; } catch { return true; }
   });
@@ -1176,8 +1177,17 @@ export default function App() {
     onMarkIn: () => setVoiceMarkInFrame(playback.playheadFrame),
     onMarkOut: () => setVoiceMarkOutFrame(playback.playheadFrame),
     onSlowShuttle: (direction) => {
-      // Shift+J/L = slow shuttle — for now just toggle at 0.5× speed
-      handleTogglePlayback();
+      if (direction === 1) {
+        // Shift+L — forward at half speed
+        setShuttleSpeed(0.5);
+        if (!playback.isPlaying) handleTogglePlayback();
+        toast.info("▶ 0.5×", 800);
+      } else {
+        // Shift+J — step back one frame (reverse playback isn't supported)
+        pauseViewerPlayback();
+        setShuttleSpeed(1);
+        handleStepFrames(-1);
+      }
     },
     onJumpToClipBoundary: (direction) => {
       // Jump to nearest clip start/end in the timeline
@@ -1219,43 +1229,12 @@ export default function App() {
     onOpenCommandPalette: () => setCommandPaletteOpen(v => !v),
     onToggleStoryboard: () => setStoryboardOpen(v => !v),
     onToggleViewerMaximize: toggleViewerMaximize,
+    onToggleTrimPanel: () => setTrimPanelOpen(v => !v),
+    onToggleClawbot: () => setClawbotOpen(v => !v),
+    onToggleProjectNotes: () => setProjectNotesPanelOpen(v => !v),
+    onToggleIntelligence: () => setIntelligenceOpen(v => !v),
+    onToggleSettings: () => setSettingsPanelOpen(v => !v),
   });
-
-  // Clawbot keyboard shortcut: Ctrl/Cmd+Shift+A
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "a") {
-        e.preventDefault();
-        setClawbotOpen(v => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Project Notes keyboard shortcut: Cmd/Ctrl+Shift+N
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        setProjectNotesPanelOpen(v => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Settings keyboard shortcut: Cmd/Ctrl+, (Phase 6)
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        setSettingsPanelOpen(v => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // ── Phase 9: ClawFlow Ambient Hook ────────────────────────────────────────
   // onOpenBeatSync MUST be stable (useCallback) — it's a dep inside useClawFlowAmbient's
@@ -1297,31 +1276,6 @@ export default function App() {
     addMarker: () => addMarker({ frame: playback.playheadFrame, label: 'Marker', color: '#f59e0b' }),
     setActivePage: (page: string) => setActivePage(page as AppPage),
   });
-
-  // ── Phase 9: Intelligence keyboard shortcut Cmd+Shift+I ───────────────────
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") {
-        e.preventDefault();
-        setIntelligenceOpen(v => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // ── Precision Trim: T key toggles trim panel ───────────────────────────────
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if ((e.key === 't' || e.key === 'T') && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        setTrimPanelOpen(v => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // ── Waveform peak extraction (background, per-asset) ─────────────────────
   useWaveformExtractor({ assets: project.assets, setAssetWaveform });

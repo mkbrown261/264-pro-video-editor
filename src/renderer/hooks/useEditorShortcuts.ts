@@ -54,17 +54,25 @@ export interface EditorShortcutOptions {
   onToggleStoryboard?: () => void;
   // Viewer maximize
   onToggleViewerMaximize?: () => void;
+  // Panels
+  onToggleTrimPanel?: () => void;
+  onToggleClawbot?: () => void;
+  onToggleProjectNotes?: () => void;
+  onToggleIntelligence?: () => void;
+  onToggleSettings?: () => void;
 }
+
+const NON_TEXT_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "color", "file"]);
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
-  return (
-    target.isContentEditable ||
-    tag === "input" ||
-    tag === "textarea" ||
-    tag === "select"
-  );
+  if (tag === "input") {
+    // Sliders, checkboxes, buttons etc. keep focus after a click; they must not swallow Space/J/K/L.
+    const type = (target as HTMLInputElement).type;
+    return !NON_TEXT_INPUTS.has(type);
+  }
+  return target.isContentEditable || tag === "textarea" || tag === "select";
 }
 
 export function useEditorShortcuts(options: EditorShortcutOptions) {
@@ -116,12 +124,29 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         onOpenCommandPalette,
         onToggleStoryboard,
         onToggleViewerMaximize,
+        onToggleTrimPanel,
+        onToggleClawbot,
+        onToggleProjectNotes,
+        onToggleIntelligence,
+        onToggleSettings,
       } = optionsRef.current;
 
       const key = event.key.toLowerCase();
       const isModifier = event.metaKey || event.ctrlKey;
 
       if (isModifier) {
+        // ── Panels ───────────────────────────────────────────────────────────
+        if (event.shiftKey && key === "a") { event.preventDefault(); onToggleClawbot?.(); return; }
+        if (event.shiftKey && key === "n") { event.preventDefault(); onToggleProjectNotes?.(); return; }
+        if (event.shiftKey && key === "i") { event.preventDefault(); onToggleIntelligence?.(); return; }
+        if (key === ",") { event.preventDefault(); onToggleSettings?.(); return; }
+        // Ctrl+Shift+D → detach audio (must precede Ctrl+D)
+        if (key === "d" && event.shiftKey) {
+          event.preventDefault();
+          onDetachAudio?.();
+          return;
+        }
+
         // ── Command Palette ──────────────────────────────────────────────────
         if (key === "p" && !event.shiftKey) {
           event.preventDefault();
@@ -214,18 +239,6 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
           return;
         }
 
-        // ── Editing ──────────────────────────────────────────────────────────
-        // Ctrl+Shift+D → detach audio
-        if (key === "d" && event.shiftKey) {
-          event.preventDefault();
-          onDetachAudio?.();
-          return;
-        }
-        // Ctrl+, → project settings
-        if (key === ",") {
-          event.preventDefault();
-          return;
-        }
         // Ctrl+Shift+1/2/3 → layout presets
         if (event.shiftKey) {
           if (key === "1") { event.preventDefault(); onLayoutPreset?.("edit"); return; }
@@ -235,10 +248,9 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         return;
       }
 
-      // Block playback + navigation keys when any modal is open
-      if (isModalOpen && (key === " " || key === "arrowleft" || key === "arrowright" || key === "home" || key === "end")) {
-        return;
-      }
+      // A modal owns the keyboard: no unmodified editing/playback shortcuts behind it.
+      if (isModalOpen) return;
+      if (event.altKey) return;
 
       switch (key) {
         // ── Playback ─────────────────────────────────────────────────────────
@@ -397,6 +409,12 @@ export function useEditorShortcuts(options: EditorShortcutOptions) {
         case "g":
           event.preventDefault();
           onToggleStoryboard?.();
+          break;
+
+        // T → precision trim panel
+        case "t":
+          event.preventDefault();
+          onToggleTrimPanel?.();
           break;
 
         // \ (backslash) → maximize/restore viewer (hide panels, shrink timeline)
