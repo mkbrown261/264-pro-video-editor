@@ -104,6 +104,10 @@ export type ExportGraphRequest = Omit<ExportRequest, "outputPath"> & {
    * the viewer engine. The graph then only adds burn-ins and the audio mix.
    */
   pipedVideo?: boolean;
+  /** Render exactly this many frames (chunked export: a chunk may end in a gap). */
+  durationFramesOverride?: number;
+  /** Added to burned-in timecode (chunked export). */
+  timecodeOffsetFrames?: number;
 };
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
@@ -1076,8 +1080,8 @@ export function buildExportGraph(request: ExportGraphRequest, env: ExportGraphEn
   const segments = buildTimelineSegments(project.sequence, project.assets);
   const endFrame = [...playable(segments, "video"), ...playable(segments, "audio")]
     .reduce((m, s) => Math.max(m, s.endFrame), 0);
-  if (endFrame <= 0) throw new Error("Nothing is on the timeline. Add clips before exporting.");
-  const totalFrames = endFrame;
+  if (endFrame <= 0 && !request.durationFramesOverride) throw new Error("Nothing is on the timeline. Add clips before exporting.");
+  const totalFrames = request.durationFramesOverride ?? endFrame;
   const durationSeconds = totalFrames / fps;
 
   let video: string;
@@ -1115,8 +1119,10 @@ export function buildExportGraph(request: ExportGraphRequest, env: ExportGraphEn
     const step = totalFrames > 216000 ? Math.round(fps) : 1;
     const pad = (v: number) => String(v).padStart(2, "0");
     const nominal = Math.round(fps);
+    const tcOffset = request.timecodeOffsetFrames ?? 0;
     for (let f = 0; f < totalFrames; f += step) {
-      const tcText = `${pad(Math.floor(f / (nominal * 3600)))}:${pad(Math.floor(f / (nominal * 60)) % 60)}:${pad(Math.floor(f / nominal) % 60)}:${pad(f % nominal)}`;
+      const g = f + tcOffset;
+      const tcText = `${pad(Math.floor(g / (nominal * 3600)))}:${pad(Math.floor(g / (nominal * 60)) % 60)}:${pad(Math.floor(g / nominal) % 60)}:${pad(g % nominal)}`;
       events.push(dialogue(f / fps, Math.min(totalFrames, f + step) / fps, "TC", tcText));
     }
   }

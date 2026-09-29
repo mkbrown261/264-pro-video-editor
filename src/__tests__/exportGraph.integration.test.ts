@@ -187,3 +187,29 @@ describe.runIf(enabled)("export graph power windows (real FFmpeg)", () => {
     near(pixelAt(out, 1, 0.05, 0.05), [254, 0, 0]);             // untouched red
   }, 60000);
 });
+
+import { planExportChunks, sliceProject } from "../shared/exportChunks";
+describe.runIf(enabled)("chunked export (real FFmpeg)", () => {
+  it("renders chunks that join into the same timeline", () => {
+    const a = solid("ca", "red", 1), b = solid("cb", "blue", 1);
+    // 60 one-second clips alternating red/blue
+    const clips = Array.from({ length: 60 }, (_, i) => clip(i % 2 ? "cb" : "ca", "V1", i * 30));
+    const proj = project([a, b], clips);
+    const chunks = planExportChunks(proj, 1800, 20);
+    expect(chunks.length).toBeGreaterThan(1);
+    const parts: string[] = [];
+    for (const c of chunks) {
+      const { out } = render(sliceProject(proj, c.startFrame, c.endFrame), { durationFramesOverride: c.endFrame - c.startFrame, timecodeOffsetFrames: c.startFrame });
+      parts.push(out);
+    }
+    const list = join(dir, "list.txt");
+    writeFileSync(list, parts.map((p) => `file '${p}'`).join("\n"));
+    const joined = join(dir, "joined.mp4");
+    ff(["-f", "concat", "-safe", "0", "-i", list, "-c", "copy", joined]);
+    expect(probeDuration(joined)).toBeCloseTo(60, 0);
+    const boundary = chunks[1].startFrame / 30;           // first chunk cut
+    const colorAt = (t: number) => (Math.floor(t) % 2 ? [0, 0, 254] : [254, 0, 0]);
+    near(pixelAt(joined, boundary - 0.5), colorAt(boundary - 0.5));
+    near(pixelAt(joined, boundary + 0.5), colorAt(boundary + 0.5));
+  }, 180000);
+});

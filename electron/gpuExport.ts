@@ -137,6 +137,7 @@ class FrameReader {
 interface Job {
   child: ChildProcess;
   readers: Map<string, FrameReader>;
+  readerUsed: Map<string, number>;
   workDir: string;
   outputPath: string;
   args: string[];
@@ -197,7 +198,7 @@ export async function startGpuExport(request: ExportRequest): Promise<GpuExportS
   _activeChildren.add(child);
   const jobId = randomUUID();
   const job: Job = {
-    child, readers: new Map(), workDir, outputPath: request.outputPath, args,
+    child, readers: new Map(), readerUsed: new Map(), workDir, outputPath: request.outputPath, args,
     // Informational warnings only (the GPU render fixes the rest).
     warnings: graph.warnings.filter((w) => !/GPU render/.test(w)),
     stderrTail: "", ffmpegPath: env.ffmpegPath, frameBytes: width * height * 4,
@@ -225,6 +226,17 @@ export async function readGpuSourceFrame(
   if (!reader) {
     reader = new FrameReader(job.ffmpegPath, args.path, w, h, Math.max(1, args.fps || 30));
     job.readers.set(id, reader);
+  }
+  // Close decoders for clips that have left the timeline window (long edits
+  // would otherwise keep hundreds of paused FFmpeg processes alive).
+  const now = Date.now();
+  job.readerUsed.set(id, now);
+  for (const [rid, used] of job.readerUsed) {
+    if (now - used > 4000) {
+      job.readers.get(rid)?.close();
+      job.readers.delete(rid);
+      job.readerUsed.delete(rid);
+    }
   }
   const frame = await reader.frameAt(Math.max(0, args.time));
   return frame ? new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength) : null;

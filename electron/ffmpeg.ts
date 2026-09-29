@@ -16,7 +16,8 @@ import type {
   MediaAsset
 } from "../src/shared/models.js";
 import { normalizeTimelineFps } from "../src/shared/timeline.js";
-import { buildExportGraph } from "../src/shared/exportGraph.js";
+import { buildExportGraph, sequenceDurationSeconds } from "../src/shared/exportGraph.js";
+import { planExportChunks, sliceProject } from "../src/shared/exportChunks.js";
 import { parseCubeLut, type Lut3D } from "../src/shared/colorMath.js";
 
 interface FfprobeResponse {
@@ -519,6 +520,32 @@ export function getContainerArgs(c: ExportCodec): string[] {
 }
 
 
+/** Run FFmpeg, reporting progress (0–1) from its time= stats against `durationSeconds`. */
+function runFfmpeg(ffmpegPath: string, args: string[], durationSeconds: number, onProgress?: (fraction: number) => void): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    _activeChildren.add(child);
+    let stderrTail = "";
+    child.stdout.on("data", () => { /* no-op */ });
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderrTail = (stderrTail + text).slice(-20000);
+      if (!onProgress || durationSeconds <= 0) return;
+      const m = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text);
+      if (m) onProgress(Math.min(1, (Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])) / durationSeconds));
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      _activeChildren.delete(child);
+      if (code === 0) resolve();
+      else reject(new Error(stderrTail.trim().split("\n").slice(-15).join("\n") || `ffmpeg exited with code ${String(code)}`));
+    });
+  });
+}
+
+/** Timelines with more clips than this render in chunks (see src/shared/exportChunks.ts). */
+const MAX_CLIPS_PER_GRAPH = 40;
+
 export async function exportSequence(
   request: ExportRequest,
   onProgress?: (pct: number) => void
@@ -528,76 +555,106 @@ export async function exportSequence(
     throw new Error(environment.warnings[0] || "FFmpeg is unavailable.");
   }
 
-  const { outputPath } = request;
+  const { outputPath, project } = request;
   const codec = request.codec ?? "libx264";
   await mkdir(dirname(outputPath), { recursive: true }).catch(() => {});
+  const fps = project.sequence.settings.fps || 30;
+  const hwEncoder = await detectBestHWEncoder();
+  const colorArgs = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-r", String(fps)];
 
   const workDir = await mkdtemp(join(tmpdir(), "264pro-export-"));
   let fileCount = 0;
-  const graph = buildExportGraph(request, {
+  const env = {
     fontsDir: systemFontsDir(),
     loadFileLut: loadGradeLut,
     lutSize: 65,
-    writeTempFile: (name, contents) => {
+    writeTempFile: (name: string, contents: string) => {
       const file = join(workDir, `${fileCount++}_${name.replace(/[^\w.-]/g, "_")}`);
       writeFileSync(file, contents, "utf8");
       return file;
     },
-  });
-  const scriptPath = join(workDir, "graph.txt");
-  writeFileSync(scriptPath, graph.filterComplex, "utf8");
-
-  const hwEncoder = await detectBestHWEncoder();
-  const args = [
-    ...graph.inputs.flatMap((input) => [...input.options, "-i", input.path]),
-    "-filter_complex_script", scriptPath,
-    "-map", graph.videoLabel,
-    "-map", graph.audioLabel,
-    ...getVideoCodecArgs(codec, hwEncoder),
-    ...getAudioCodecArgs(codec),
-    "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-    "-r", String(request.project.sequence.settings.fps || 30),
-    ...getContainerArgs(codec),
-    "-y",
-    outputPath
-  ];
+  };
+  const writeScript = (text: string) => {
+    const file = join(workDir, `${fileCount++}_graph.txt`);
+    writeFileSync(file, text, "utf8");
+    return file;
+  };
+  let pct = 0;
+  const report = (p: number) => {
+    const v = Math.min(99, Math.round(p * 100));
+    if (v > pct) { pct = v; onProgress?.(v); }
+  };
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(environment.ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-      _activeChildren.add(child);
-      let stderrTail = "";
-      let currentPct = 0;
-      child.stdout.on("data", () => { /* no-op */ });
-      child.stderr.on("data", (chunk: Buffer) => {
-        const text = chunk.toString();
-        stderrTail = (stderrTail + text).slice(-20000);
-        if (!onProgress || graph.durationSeconds <= 0) return;
-        const m = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text);
-        if (m) {
-          const secs = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
-          const pct = Math.min(99, Math.round((secs / graph.durationSeconds) * 100));
-          if (pct > currentPct) { currentPct = pct; onProgress(pct); }
-        }
-      });
-      child.on("error", reject);
-      child.on("close", (code) => {
-        _activeChildren.delete(child);
-        if (code === 0) {
-          onProgress?.(100);
-          resolve();
-        } else {
-          reject(new Error(stderrTail.trim().split("\n").slice(-15).join("\n") || `ffmpeg exited with code ${String(code)}`));
-        }
-      });
-    });
+    const totalFrames = Math.round(sequenceDurationSeconds(project.sequence, project.assets) * fps);
+    const chunks = planExportChunks(project, totalFrames, MAX_CLIPS_PER_GRAPH);
+
+    if (chunks.length <= 1) {
+      const graph = buildExportGraph(request, env);
+      const args = [
+        ...graph.inputs.flatMap((input) => [...input.options, "-i", input.path]),
+        "-filter_complex_script", writeScript(graph.filterComplex),
+        "-map", graph.videoLabel,
+        "-map", graph.audioLabel,
+        ...getVideoCodecArgs(codec, hwEncoder),
+        ...getAudioCodecArgs(codec),
+        ...colorArgs,
+        ...getContainerArgs(codec),
+        "-y", outputPath,
+      ];
+      await runFfmpeg(environment.ffmpegPath, args, graph.durationSeconds, report);
+      onProgress?.(100);
+      return { outputPath, commandPreview: `${environment.ffmpegPath} ${args.join(" ")}`, warnings: graph.warnings };
+    }
+
+    // ── Chunked: each range → video (final codec) + WAV, then join ─────────
+    const warnings = new Set<string>();
+    const videoList: string[] = [];
+    const audioList: string[] = [];
+    const renderShare = 0.93;
+    for (const [ci, chunk] of chunks.entries()) {
+      const frames = chunk.endFrame - chunk.startFrame;
+      const graph = buildExportGraph({
+        ...request,
+        project: sliceProject(project, chunk.startFrame, chunk.endFrame),
+        loudnormTarget: undefined, // normalized once over the whole program below
+        durationFramesOverride: frames,
+        timecodeOffsetFrames: chunk.startFrame,
+      }, env);
+      graph.warnings.forEach((w) => warnings.add(w));
+      const video = join(workDir, `chunk_${ci}.mkv`);
+      const audio = join(workDir, `chunk_${ci}.wav`);
+      const args = [
+        ...graph.inputs.flatMap((input) => [...input.options, "-i", input.path]),
+        "-filter_complex_script", writeScript(graph.filterComplex),
+        "-map", graph.videoLabel, ...getVideoCodecArgs(codec, hwEncoder), ...colorArgs, "-an", "-y", video,
+        "-map", graph.audioLabel, "-c:a", "pcm_s24le", "-vn", "-y", audio,
+      ];
+      const base = chunk.startFrame / Math.max(1, totalFrames);
+      await runFfmpeg(environment.ffmpegPath, args, graph.durationSeconds, (f) => report((base + (f * frames) / totalFrames) * renderShare));
+      videoList.push(video);
+      audioList.push(audio);
+    }
+    const listFile = (files: string[]) => writeScript(files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n");
+    const audioFilters = request.loudnormTarget
+      ? ["-af", `loudnorm=I=${request.loudnormTarget}:TP=-1.5:LRA=11,aresample=${project.sequence.settings.audioSampleRate || 48000}`]
+      : [];
+    const args = [
+      "-f", "concat", "-safe", "0", "-i", listFile(videoList),
+      "-f", "concat", "-safe", "0", "-i", listFile(audioList),
+      "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+      ...audioFilters, ...getAudioCodecArgs(codec),
+      ...getContainerArgs(codec),
+      "-y", outputPath,
+    ];
+    await runFfmpeg(environment.ffmpegPath, args, totalFrames / fps, (f) => report(renderShare + f * (1 - renderShare)));
+    onProgress?.(100);
+    return {
+      outputPath,
+      commandPreview: `${environment.ffmpegPath} ${args.join(" ")} (${chunks.length} chunks)`,
+      warnings: [...warnings],
+    };
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
-
-  return {
-    outputPath,
-    commandPreview: `${environment.ffmpegPath} ${args.join(" ")}`,
-    warnings: graph.warnings,
-  };
 }
