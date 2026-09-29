@@ -192,7 +192,7 @@ const electronAPI = {
     ipcRenderer.invoke('ai:multicam-sync', args),
   noiseReduce: (args: { inputPath: string; outputPath?: string; strength?: number }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
     ipcRenderer.invoke('ai:noise-reduce', args),
-  colorMatch: (args: { referenceClipPath: string; targetClipPath: string }): Promise<{ success: boolean; suggestedGrade?: Record<string, unknown>; error?: string }> =>
+  colorMatch: (args: { referenceClipPath: string; targetClipPath: string }): Promise<{ success: boolean; suggestedGrade?: { gain: { r: number; g: number; b: number }; offset: { r: number; g: number; b: number } }; error?: string }> =>
     ipcRenderer.invoke('ai:color-match', args),
   normalizeClip: (args: { inputPath: string; outputPath?: string; targetLufs?: number }): Promise<{ success: boolean; outputPath?: string; error?: string }> =>
     ipcRenderer.invoke('ai:normalize-clip', args),

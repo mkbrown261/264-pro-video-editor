@@ -43,6 +43,7 @@ export function AIToolsWave2Panel() {
   const project = useEditorStore(s => s.project);
   const selectedClipId = useEditorStore(s => s.selectedClipId);
   const setColorGrade = useEditorStore(s => s.setColorGrade);
+  const enableColorGrade = useEditorStore(s => s.enableColorGrade);
   const setAutomationKeyframe = useEditorStore(s => s.setAutomationKeyframe);
 
   const selectedClip = project.sequence.clips.find(c => c.id === selectedClipId);
@@ -153,10 +154,11 @@ export function AIToolsWave2Panel() {
     const res = await API?.colorMatch?.({ referenceClipPath: cmRefPath, targetClipPath: clipPath });
     setCmBusy(false);
     if (res?.success && res.suggestedGrade && selectedClipId) {
-      setColorGrade(selectedClipId, res.suggestedGrade as any);
+      enableColorGrade(selectedClipId);
+      setColorGrade(selectedClipId, res.suggestedGrade);
       setCmResult('Color grade applied to selected clip');
     } else setCmError(res?.error ?? 'Failed');
-  }, [clipPath, cmRefPath, selectedClipId, setColorGrade]);
+  }, [clipPath, cmRefPath, selectedClipId, setColorGrade, enableColorGrade]);
 
   const handleNormalize = useCallback(async () => {
     if (!clipPath) { setNormError('Select a clip first'); return; }

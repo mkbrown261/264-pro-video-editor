@@ -796,22 +796,26 @@ ipcMain.handle("audio:process-clip", async (_e, args: { filePath: string; recipe
 });
 
 // Low-res RGBA frames sampled at a fixed rate (analysis: reframe tracking).
-ipcMain.handle("media:sample-frames", async (_e, args: { filePath: string; fps: number; width: number; maxSeconds?: number }) => {
-  const probed = await probeMediaFile(args.filePath);
+async function sampleFramesRgba(filePath: string, fps: number, width: number, maxSeconds = 600) {
+  const probed = await probeMediaFile(filePath);
   if (!probed.width || !probed.height) throw new Error("This file has no video.");
-  const w = Math.max(16, Math.round(args.width / 2) * 2);
+  const w = Math.max(16, Math.round(width / 2) * 2);
   const h = Math.max(2, Math.round((w * probed.height) / probed.width / 2) * 2);
   const { spawn } = await import("node:child_process");
   const data = await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    const p = spawn(getEnvironmentStatus().ffmpegPath, ["-v", "error", "-i", args.filePath, "-t", String(args.maxSeconds ?? 600),
-      "-vf", `fps=${args.fps},scale=${w}:${h}`, "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
+    const p = spawn(getEnvironmentStatus().ffmpegPath, ["-v", "error", "-i", filePath, "-t", String(maxSeconds),
+      "-vf", `fps=${fps},scale=${w}:${h}`, "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
     p.stdout.on("data", (d: Buffer) => chunks.push(d));
     p.on("error", reject);
     p.on("close", (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error("Couldn't decode the clip for analysis"))));
   });
-  return { width: w, height: h, fps: args.fps, count: Math.floor(data.byteLength / (w * h * 4)), frames: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
-});
+  return { width: w, height: h, fps, count: Math.floor(data.byteLength / (w * h * 4)), frames: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
+}
+
+// Low-res RGBA frames sampled at a fixed rate (analysis: reframe tracking).
+ipcMain.handle("media:sample-frames", (_e, args: { filePath: string; fps: number; width: number; maxSeconds?: number }) =>
+  sampleFramesRgba(args.filePath, args.fps, args.width, args.maxSeconds));
 
 ipcMain.handle("media:save-recording", async (_e, data: Uint8Array, name?: string) => {
   const dir = join(app.getPath("documents"), "264 Pro", "Recordings");
@@ -3143,52 +3147,39 @@ ipcMain.handle('ai:noise-reduce', async (_ev, args: { inputPath: string; outputP
 // ── W3-2: Auto Color Match (match grade of clip B to clip A) ─────────────────
 // Extracts histogram stats from reference clip, builds a grade to match.
 ipcMain.handle('ai:color-match', async (_ev, args: { referenceClipPath: string; targetClipPath: string }) => {
+  // Match the target's per-channel level and spread to the reference:
+  // out = a·v + b per channel, which is the grade's gain (a − 1) and offset (b).
   try {
-    const { referenceClipPath, targetClipPath } = args;
-    const fsM = await import('fs');
-    if (!fsM.existsSync(referenceClipPath)) return { success: false, error: 'Reference file not found' };
-    if (!fsM.existsSync(targetClipPath)) return { success: false, error: 'Target file not found' };
-    const { spawn } = await import('child_process');
-    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
-    // Get signalstats for both clips (YAVG, UAVG, VAVG)
-    const getStats = (filePath: string): Promise<{ yavg: number; uavg: number; vavg: number; yrms: number }> =>
-      new Promise((res) => {
-        const out: string[] = [];
-        const p = spawn(ffmpegBin, ['-i', filePath, '-vf', 'signalstats', '-frames:v', '10', '-f', 'null', '-']);
-        p.stderr?.on('data', (d: Buffer) => out.push(d.toString()));
-        p.on('close', () => {
-          const t = out.join('');
-          const yavg = parseFloat(t.match(/YAVG:(\d+\.?\d*)/)?.[1] ?? '128');
-          const uavg = parseFloat(t.match(/UAVG:(\d+\.?\d*)/)?.[1] ?? '128');
-          const vavg = parseFloat(t.match(/VAVG:(\d+\.?\d*)/)?.[1] ?? '128');
-          const yrms = parseFloat(t.match(/YRMS:(\d+\.?\d*)/)?.[1] ?? '128');
-          res({ yavg, uavg, vavg, yrms });
-        });
-        p.on('error', () => res({ yavg: 128, uavg: 128, vavg: 128, yrms: 128 }));
-      });
-    const [refStats, tgtStats] = await Promise.all([getStats(referenceClipPath), getStats(targetClipPath)]);
-    // Calculate grade adjustments needed
-    const exposureDiff = (refStats.yavg - tgtStats.yavg) / 255; // -1 to +1
-    const tempDiff = ((refStats.uavg - tgtStats.uavg) + (refStats.vavg - tgtStats.vavg)) / 255 * 50; // rough kelvin approximation
-    const contrastFactor = tgtStats.yrms > 0 ? (refStats.yrms / tgtStats.yrms) : 1;
+    const stats = async (filePath: string) => {
+      const { frames } = await sampleFramesRgba(filePath, 1, 160, 60);
+      const sum = [0, 0, 0], sq = [0, 0, 0];
+      let n = 0;
+      for (let i = 0; i < frames.length; i += 4) {
+        for (let c = 0; c < 3; c++) { const v = frames[i + c] / 255; sum[c] += v; sq[c] += v * v; }
+        n++;
+      }
+      if (!n) throw new Error(`No frames in ${basename(filePath)}`);
+      const mean = sum.map((x) => x / n);
+      return { mean, std: sq.map((x, c) => Math.sqrt(Math.max(1e-6, x / n - mean[c] * mean[c]))) };
+    };
+    const [ref, tgt] = await Promise.all([stats(args.referenceClipPath), stats(args.targetClipPath)]);
+    const ch = (c: number) => {
+      // Flat footage carries no contrast information: match levels only.
+      const a = ref.std[c] < 0.02 || tgt.std[c] < 0.02 ? 1 : Math.max(0.5, Math.min(2, ref.std[c] / tgt.std[c]));
+      const b = Math.max(-0.6, Math.min(0.6, ref.mean[c] - a * tgt.mean[c]));
+      return { gain: a - 1, offset: b };
+    };
+    const [r, g, b] = [ch(0), ch(1), ch(2)];
+    const round = (v: number) => Math.round(v * 1000) / 1000;
     return {
       success: true,
+      // Partial grade: merge into the clip's grade.
       suggestedGrade: {
-        exposure: Math.max(-1, Math.min(1, exposureDiff)),
-        temperature: Math.max(-50, Math.min(50, tempDiff)),
-        contrast: Math.max(0.5, Math.min(2, contrastFactor)),
-        saturation: 1,
-        lift: [0, 0, 0, 0] as [number, number, number, number],
-        gamma: [1, 1, 1, 1] as [number, number, number, number],
-        gain: [1, 1, 1, 1] as [number, number, number, number],
-        offset: [0, 0, 0, 0] as [number, number, number, number],
-        hue: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
-        tint: 0, vibrance: 0, clarity: 0,
-        logInputTransform: 'none' as const,
-        customCurvePoints: null,
+        gain: { r: round(r.gain), g: round(g.gain), b: round(b.gain) },
+        offset: { r: round(r.offset), g: round(g.offset), b: round(b.offset) },
       },
-      referenceStats: refStats,
-      targetStats: tgtStats,
+      referenceStats: ref,
+      targetStats: tgt,
     };
   } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
