@@ -18,9 +18,9 @@ interface Props {
   project: EditorProject;
   currentProjectPath: string | null;
   projectDirty: boolean;
-  onSaveProject: () => void | Promise<void>;
-  onSaveProjectAs: () => void | Promise<void>;
-  onOpenProject: (skipDirtyCheck?: boolean) => void | Promise<void>;
+  onSaveProject: () => unknown;
+  onSaveProjectAs: () => unknown;
+  onOpenProject: () => unknown;
   /** New project (the caller handles the unsaved-changes prompt). */
   onNewProject: () => void;
   updateSequenceSettings: (s: Partial<SequenceSettings>) => void;

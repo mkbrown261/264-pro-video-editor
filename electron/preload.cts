@@ -87,6 +87,8 @@ const editorApi = {
     ipcRenderer.invoke("project:save", json, suggestedName),
   openProject: (): Promise<OpenProjectResult | null> =>
     ipcRenderer.invoke("project:open"),
+  openProjectPath: (filePath: string): Promise<OpenProjectResult | { success: false; error: string }> =>
+    ipcRenderer.invoke("project:open-path", filePath),
   saveProjectAs: (json: string, filePath: string): Promise<string> =>
     ipcRenderer.invoke("project:save-as", json, filePath),
   // ── Auto-save / crash recovery ────────────────────────────────────────────

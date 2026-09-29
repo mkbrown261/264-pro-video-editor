@@ -16,7 +16,7 @@ export interface ProjectSafetyOptions {
   createdAt: string;
   /** Close requested while dirty: show the save prompt. */
   onCloseWhileDirty: () => void;
-  save: () => Promise<void>;
+  save: () => Promise<unknown>;
   onAutosaved: () => void;
 }
 

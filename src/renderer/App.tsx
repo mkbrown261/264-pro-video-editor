@@ -26,6 +26,7 @@ import { VoiceChopAI } from "./lib/VoiceChopAI";
 import { toast } from "./lib/toast";
 import { useExportController } from "./hooks/useExportController";
 import { useProjectSafety } from "./hooks/useProjectSafety";
+import { useProjectFile } from "./hooks/useProjectFile";
 import { useEditorStore } from "./store/editorStore";
 import {
   buildTimelineSegments,
@@ -634,9 +635,6 @@ export default function App() {
   }
 
   // ── Save Confirmation Modal ────────────────────────────────────────────────
-  type SaveConfirmAction = "new" | "open" | "close";
-  const [saveConfirm, setSaveConfirm] = useState<{ action: SaveConfirmAction } | null>(null);
-  const pendingActionRef = useRef<SaveConfirmAction | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   // Re-sync the draft every time the settings modal opens so it always shows live values
@@ -657,17 +655,17 @@ export default function App() {
   }, []);
 
 
-  // Project file path (for Save vs Save As)
-  const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
-  const [projectDirty, setProjectDirty] = useState(false);
-  const createdAtRef = useRef<string>(new Date().toISOString());
-
-  // Open Recent
-  const [recentProjects, setRecentProjects] = useState<Array<{ name: string; path: string; date: string }>>(() => {
-    try { return JSON.parse(localStorage.getItem("264pro_recent_projects") ?? "[]"); }
-    catch { return []; }
-  });
+  // Project file: new/open/save, dirty tracking, recent list, unsaved-changes prompt
   const [showRecentPanel, setShowRecentPanel] = useState(false);
+  const projectFile = useProjectFile({
+    project, fsLinked, setExportMessage,
+    onProjectReplaced: () => setShowRecentPanel(false),
+  });
+  const {
+    currentProjectPath, projectDirty, createdAtRef, markClean, recentProjects, saveConfirm,
+    save: handleSaveProject, saveAs: handleSaveProjectAs, newProject: handleNewProject,
+    open: handleOpenProject, openRecent: handleOpenRecentProject, requestClose, resolveSaveConfirm: handleSaveConfirmChoice,
+  } = projectFile;
 
   // Masking state
   const [activeMaskTool, setActiveMaskTool] = useState<MaskTool>("none");
@@ -758,13 +756,6 @@ export default function App() {
       : selectedSegment;
   const selectedAsset =
     project.assets.find((a) => a.id === selectedAssetId) ?? inspectorSegment?.asset ?? null;
-
-  // Mark project as dirty on any change (but not on first mount)
-  const isFirstMount = useRef(true);
-  useEffect(() => {
-    if (isFirstMount.current) { isFirstMount.current = false; return; }
-    setProjectDirty(true);
-  }, [project]);
 
   // ── Keep refs in sync ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -913,174 +904,6 @@ export default function App() {
     if (!selectedClipId) return;
     updateMask(selectedClipId, maskId, updates);
   }, [selectedClipId, updateMask]);
-
-  // ── Project Save / Load ────────────────────────────────────────────────────
-
-  async function handleSaveProject() {
-    if (!window.editorApi) {
-      // Fallback: save to localStorage
-      try {
-        const json = serializeProject(project, createdAtRef.current);
-        localStorage.setItem("264pro_project_v2", json);
-        setExportMessage("✓ Project saved to local storage.");
-        setProjectDirty(false);
-      } catch {
-        setExportMessage("Failed to save project.");
-      }
-      return;
-    }
-
-    try {
-      if (currentProjectPath) {
-        // Silent save when this path came from a save/open dialog this session;
-        // otherwise the main process asks where to save.
-        const savedPath = await window.editorApi.saveProjectAs(
-          serializeProject(project, createdAtRef.current),
-          currentProjectPath
-        );
-        if (!savedPath || typeof savedPath !== "string") return; // cancelled or failed
-        setCurrentProjectPath(savedPath);
-        setExportMessage(`✓ Saved to ${savedPath}`);
-        addToRecentProjects(project.name, savedPath);
-      } else {
-        const json = serializeProject(project, createdAtRef.current);
-        const saved = await window.editorApi.saveProject(json, project.name);
-        if (!saved || typeof saved !== "string") return; // cancelled or failed
-        setCurrentProjectPath(saved);
-        setExportMessage(`✓ Saved to ${saved}`);
-        addToRecentProjects(project.name, saved);
-      }
-      setProjectDirty(false);
-      // Context sync to FlowState on save
-      if (window.flowstateAPI && fsLinked) {
-        void window.flowstateAPI.apiCall('/api/264pro/context-sync', 'POST', {
-          projectName: project.name ?? 'Untitled',
-          trackCount: project.sequence?.tracks?.length ?? 0,
-          clipCount: project.sequence.clips.length,
-          fps: project.sequence.settings.fps,
-          resolution: `${project.sequence.settings.width}×${project.sequence.settings.height}`,
-          lastModified: new Date().toISOString(),
-        });
-      }
-    } catch (err) {
-      setExportMessage(err instanceof Error ? err.message : "Save failed.");
-    }
-  }
-
-  async function handleSaveProjectAs() {
-    if (!window.editorApi) { setExportMessage("Save requires Electron."); return; }
-    try {
-      const json = serializeProject(project, createdAtRef.current);
-      const saved = await window.editorApi.saveProject(json, project.name);
-      if (saved) {
-        setCurrentProjectPath(saved);
-        setProjectDirty(false);
-        addToRecentProjects(project.name, saved);
-        setExportMessage(`✓ Saved as ${saved}`);
-      }
-    } catch (err) {
-      setExportMessage(err instanceof Error ? err.message : "Save failed.");
-    }
-  }
-
-  function addToRecentProjects(name: string, path: string) {
-    const entry = { name, path, date: new Date().toLocaleDateString() };
-    setRecentProjects((prev) => {
-      const filtered = prev.filter((r) => r.path !== path).slice(0, 9);
-      const next = [entry, ...filtered];
-      try { localStorage.setItem("264pro_recent_projects", JSON.stringify(next)); } catch { /* ignore */ }
-      // Sync to FlowState
-      if (window.flowstateAPI && fsLinked) {
-        void window.flowstateAPI.apiCall('/api/264pro/sync-projects', 'POST', {
-          projects: next.map((r, i) => ({
-            id: `local_${i}`,
-            name: r.name,
-            lastModified: new Date().toISOString(),
-          })),
-        });
-      }
-      return next;
-    });
-  }
-
-  function handleNewProject() {
-    if (projectDirty) {
-      pendingActionRef.current = "new";
-      setSaveConfirm({ action: "new" });
-      return;
-    }
-    _doNewProject();
-  }
-
-  function _doNewProject() {
-    loadProjectFromData(createEmptyProject() as ReturnType<typeof createEmptyProject>);
-    setCurrentProjectPath(null);
-    setProjectDirty(false);
-    createdAtRef.current = new Date().toISOString();
-    setExportMessage("✓ New project created.");
-    setShowRecentPanel(false);
-  }
-
-  async function handleOpenProject(skipDirtyCheck?: boolean) {
-    if (!skipDirtyCheck && projectDirty) {
-      pendingActionRef.current = "open";
-      setSaveConfirm({ action: "open" });
-      return;
-    }
-    if (!window.editorApi) {
-      // Fallback: load from localStorage
-      try {
-        const raw = localStorage.getItem("264pro_project_v2");
-        if (raw) {
-          const { project: loaded, warnings } = deserializeProject(raw);
-          loadProjectFromData(loaded);
-          createdAtRef.current = new Date().toISOString();
-          setProjectDirty(false);
-          addToRecentProjects(loaded.name, "[localStorage]");
-          setExportMessage(warnings.length ? `⚠ Loaded (${warnings[0]})` : "✓ Project loaded.");
-        } else {
-          // Try legacy format
-          const legacyRaw = localStorage.getItem("264pro_project");
-          if (legacyRaw) {
-            const saved = JSON.parse(legacyRaw) as typeof project;
-            importAssets(saved.assets);
-            setExportMessage("✓ Legacy project loaded.");
-          } else {
-            setExportMessage("No saved project found.");
-          }
-        }
-      } catch {
-        setExportMessage("Failed to load project.");
-      }
-      return;
-    }
-
-    try {
-      const result = await window.editorApi.openProject();
-      if (!result) return;
-      const { project: loaded, warnings } = deserializeProject(result.json);
-      loadProjectFromData(loaded);
-      setCurrentProjectPath(result.filePath);
-      createdAtRef.current = new Date().toISOString();
-      setProjectDirty(false);
-      addToRecentProjects(loaded.name, result.filePath);
-      setExportMessage(warnings.length ? `⚠ Loaded (${warnings.join(", ")})` : "✓ Project loaded.");
-    } catch (err) {
-      setExportMessage(err instanceof Error ? err.message : "Load failed.");
-    }
-  }
-
-  async function handleOpenRecentProject(path: string, _name: string) {
-    // Always go through handleOpenProject so dirty-check is respected
-    if (path === "[localStorage]") {
-      setShowRecentPanel(false);
-      await handleOpenProject();
-      return;
-    }
-    setShowRecentPanel(false);
-    // For real file paths, just trigger the open dialog through normal flow
-    await handleOpenProject();
-  }
 
   // ── Shortcuts ──────────────────────────────────────────────────────────────
   useEditorShortcuts({
@@ -1337,7 +1160,7 @@ export default function App() {
     projectDirty,
     currentProjectPath,
     createdAt: createdAtRef.current,
-    onCloseWhileDirty: () => { pendingActionRef.current = "close"; setSaveConfirm({ action: "close" }); },
+    onCloseWhileDirty: requestClose,
     save: handleSaveProject,
     onAutosaved: () => showToast("✓ Auto-saved"),
   });
@@ -1453,27 +1276,6 @@ export default function App() {
     await triggerImport();
   }
 
-  // ── Save Confirmation Modal handler ───────────────────────────────────────
-  async function handleSaveConfirmChoice(choice: "save" | "discard" | "cancel") {
-    const action = pendingActionRef.current;
-    setSaveConfirm(null);
-    if (choice === "cancel") { pendingActionRef.current = null; return; }
-    if (choice === "save") {
-      await handleSaveProject();
-    }
-    // After save (or discard), proceed with pending action
-    pendingActionRef.current = null;
-    if (action === "new") _doNewProject();
-    else if (action === "open") await handleOpenProject(true);
-    else if (action === "close") {
-      // Mark project as clean FIRST so the browser beforeunload handler doesn't
-      // block Electron from closing the window after confirmClose() fires.
-      setProjectDirty(false);
-      // Small tick to let React flush the state update before the window closes
-      setTimeout(() => { void window.editorApi?.confirmClose(); }, 50);
-    }
-  }
-
   function renderSaveConfirmModal() {
     if (!saveConfirm) return null;
     const actionLabel = saveConfirm.action === "close" ? "closing the app"
@@ -1560,7 +1362,7 @@ export default function App() {
           </div>
           <div className="recent-panel-actions">
             <button className="panel-action primary" onClick={handleNewProject} type="button">＋ New Project</button>
-            <button className="panel-action" onClick={() => { setShowRecentPanel(false); void handleOpenProject(); }} type="button">📂 Open File…</button>
+            <button className="panel-action" onClick={() => { setShowRecentPanel(false); handleOpenProject(); }} type="button">📂 Open File…</button>
           </div>
           {recentProjects.length === 0 ? (
             <p className="recent-empty">No recent projects yet.</p>
@@ -1570,7 +1372,7 @@ export default function App() {
                 <button
                   key={r.path}
                   className="recent-item"
-                  onClick={() => void handleOpenRecentProject(r.path, r.name)}
+                  onClick={() => handleOpenRecentProject(r.path)}
                   type="button"
                 >
                   <span className="recent-item-icon">🎬</span>
@@ -3399,7 +3201,7 @@ export default function App() {
               }
             };
             loadProjectFromData(newProject);
-            setProjectDirty(false);
+            markClean();
             toast.success(`New ${tmpl.label} project created!`);
           }}
         />

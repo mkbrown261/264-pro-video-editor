@@ -9,7 +9,7 @@ import { createReadStream, openAsBlob, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { mkdir as mkdirAsync, readFile, stat, unlink as unlinkAsync, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 
 // This file is an ES module; handlers that lazily load CommonJS packages
@@ -935,6 +935,21 @@ ipcMain.handle("project:open", async (event) => {
     const json = await readFile(result.filePaths[0], "utf-8");
     userChosenProjectPaths.add(result.filePaths[0]);
     return { json, filePath: result.filePaths[0] };
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
+  }
+});
+
+// Open Recent: re-open a project by path. Only .264proj files are readable here.
+ipcMain.handle("project:open-path", async (_event, filePath: string) => {
+  try {
+    if (typeof filePath !== "string" || !isAbsolute(filePath) || extname(filePath).toLowerCase() !== ".264proj") {
+      return { success: false, error: "Not a 264 Pro project file." };
+    }
+    const json = await readFile(filePath, "utf-8");
+    userChosenProjectPaths.add(filePath);
+    return { json, filePath };
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     return { success: false, error: message };

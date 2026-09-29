@@ -142,6 +142,8 @@ declare global {
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;
       saveProjectAs: (json: string, filePath: string) => Promise<string>;
+      /** Re-open a recent .264proj by path (no dialog). */
+      openProjectPath?: (filePath: string) => Promise<OpenProjectResult | { success: false; error: string }>;
       /** Auto-save current project to userData/autosave (silent, no dialog) */
       autosaveProject?: (json: string, projectId: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
       /** List autosave files (most-recent first) */
