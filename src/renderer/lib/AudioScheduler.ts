@@ -16,7 +16,7 @@
 
 import type { TimelineTrack } from "../../shared/models";
 import { interpolateKeyframe } from "../../shared/timeline";
-import type { EQBand, MediaAsset } from "../../shared/models";
+import type { CompressorSettings, EQBand, MediaAsset } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 
 // ── AudioScheduler (one-shot, for FlowState panel) ───────────────────────────
@@ -257,6 +257,14 @@ export class AudioEngine {
   /** Per-track EQ filter chain, keyed by track ID. Inserted between trackGain
    *  and trackAnalyser. Empty array = no EQ (trackGain connects directly). */
   private trackEQChains = new Map<string, BiquadFilterNode[]>();
+
+  /** Stored per-track processing settings and the nodes built from them. */
+  private eqSettings = new Map<string, EQBand[]>();
+  private compSettings = new Map<string, CompressorSettings>();
+  private trackChainNodes = new Map<string, AudioNode[]>();
+  /** Track EQ/compressor settings last pushed into the graph (by reference). */
+  private appliedEq = new Map<string, EQBand[] | undefined>();
+  private appliedComp = new Map<string, CompressorSettings | undefined>();
 
   /** Master analyser for the master channel VU meter. */
   private masterAnalyser: AnalyserNode | null = null;
@@ -588,6 +596,18 @@ export class AudioEngine {
    */
   applyTrackMix(tracks: TimelineTrack[], frame: number): void {
     for (const t of tracks) {
+      // EQ / compressor from the track (set by any panel or loaded with the
+      // project) — rebuilt only when the settings object changes.
+      if (this.trackGains.has(t.id)) {
+        if (this.appliedEq.get(t.id) !== t.eq) {
+          this.appliedEq.set(t.id, t.eq);
+          this.setTrackEQ(t.id, t.eq ?? []);
+        }
+        if (t.compressor && this.appliedComp.get(t.id) !== t.compressor) {
+          this.appliedComp.set(t.id, t.compressor);
+          this.setTrackCompressor?.(t.id, t.compressor);
+        }
+      }
       const tg = this.trackGains.get(t.id);
       if (tg) {
         const lane = t.automation?.find((l) => l.enabled && l.param === "volume" && l.keyframes.length);
@@ -612,110 +632,58 @@ export class AudioEngine {
    * signal path bypasses the EQ entirely.
    */
   setTrackEQ(trackId: string, bands: EQBand[]): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const trackGain = this.trackGains.get(trackId);
-    const analyser = this.trackAnalysers.get(trackId);
-    if (!trackGain || !analyser) return;
-
-    // Reuse existing filters where possible; create new ones as needed
-    const existing = this.trackEQChains.get(trackId) ?? [];
-    const activeBands = bands.filter((b) => b.enabled !== false);
-
-    // Disconnect the current routing so we can rebuild it
-    try { trackGain.disconnect(); } catch { /* ignore */ }
-    for (const f of existing) {
-      try { f.disconnect(); } catch { /* ignore */ }
-    }
-
-    // If no active EQ bands, route trackGain → analyser directly and drop the chain
-    if (activeBands.length === 0) {
-      this.trackEQChains.delete(trackId);
-      trackGain.connect(analyser);
-      return;
-    }
-
-    // Build / update filter chain
-    const chain: BiquadFilterNode[] = [];
-    for (let i = 0; i < activeBands.length; i++) {
-      const band = activeBands[i];
-      let filter = existing[i];
-      if (!filter) {
-        filter = ctx.createBiquadFilter();
-      }
-      filter.type = band.type as BiquadFilterType;
-      filter.frequency.value = Math.max(20, Math.min(20000, band.frequency));
-      filter.gain.value = Math.max(-30, Math.min(30, band.gain));
-      filter.Q.value = Math.max(0.0001, Math.min(20, band.q));
-      chain.push(filter);
-    }
-
-    // Wire: trackGain → filter[0] → filter[1] → … → analyser
-    trackGain.connect(chain[0]);
-    for (let i = 0; i < chain.length - 1; i++) {
-      chain[i].connect(chain[i + 1]);
-    }
-    chain[chain.length - 1].connect(analyser);
-
-    this.trackEQChains.set(trackId, chain);
+    this.eqSettings.set(trackId, bands);
+    this.rebuildTrackChain(trackId);
   }
 
   // ── Compressor ───────────────────────────────────────────────────────────────────
-  /**
-   * Set or update the DynamicsCompressorNode for a track.
-   * The compressor is inserted between the EQ chain tail (or trackGain) and the
-   * analyser.  If enabled=false, the compressor is bypassed (disconnected).
-   */
-  setTrackCompressor(trackId: string, settings: {
-    enabled: boolean;
-    threshold: number;  // dB  (-60 to 0)
-    ratio: number;      // 1–20
-    attack: number;     // ms
-    release: number;    // ms
-    makeupGain: number; // dB (0–24)
-    knee: number;       // dB (0–10)
-  }): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const trackGain  = this.trackGains.get(trackId);
-    const analyser   = this.trackAnalysers.get(trackId);
-    if (!trackGain || !analyser) return;
+  /** Set (or bypass, when disabled) the track's compressor + makeup gain. */
+  setTrackCompressor(trackId: string, settings: CompressorSettings): void {
+    this.compSettings.set(trackId, settings);
+    this.rebuildTrackChain(trackId);
+  }
 
-    // Tear down any existing compressor for this track
-    const old = this.trackCompressors.get(trackId);
-    if (old) {
-      try { old.disconnect(); } catch { /* ok */ }
+  /** trackGain → [EQ filters] → [compressor → makeup] → analyser, from the stored settings. */
+  private rebuildTrackChain(trackId: string): void {
+    const ctx = this.ctx;
+    const trackGain = this.trackGains.get(trackId);
+    const analyser = this.trackAnalysers.get(trackId);
+    if (!ctx || !trackGain || !analyser) return;
+    try { trackGain.disconnect(); } catch { /* ignore */ }
+    for (const n of this.trackChainNodes.get(trackId) ?? []) { try { n.disconnect(); } catch { /* ignore */ } }
+
+    const nodes: AudioNode[] = [];
+    const filters: BiquadFilterNode[] = [];
+    for (const band of (this.eqSettings.get(trackId) ?? []).filter((b) => b.enabled !== false)) {
+      const f = ctx.createBiquadFilter();
+      f.type = band.type as BiquadFilterType;
+      f.frequency.value = Math.max(20, Math.min(20000, band.frequency));
+      f.gain.value = Math.max(-30, Math.min(30, band.gain));
+      f.Q.value = Math.max(0.0001, Math.min(20, band.q));
+      filters.push(f);
+      nodes.push(f);
+    }
+    const c = this.compSettings.get(trackId);
+    if (c?.enabled) {
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = Math.max(-60, Math.min(0, c.threshold));
+      comp.ratio.value = Math.max(1, Math.min(20, c.ratio));
+      comp.attack.value = Math.max(0, Math.min(1, c.attack / 1000));
+      comp.release.value = Math.max(0, Math.min(1, c.release / 1000));
+      comp.knee.value = Math.max(0, Math.min(40, c.knee));
+      const makeup = ctx.createGain(); // DynamicsCompressor has no makeup gain
+      makeup.gain.value = Math.pow(10, (c.makeupGain ?? 0) / 20);
+      nodes.push(comp, makeup);
+      this.trackCompressors.set(trackId, comp);
+    } else {
       this.trackCompressors.delete(trackId);
     }
 
-    if (!settings.enabled) {
-      // Rebuild plain routing without compressor
-      this.setTrackEQ(trackId, []);  // re-routes trackGain → analyser
-      return;
-    }
-
-    // Create compressor node
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = Math.max(-60, Math.min(0, settings.threshold));
-    comp.ratio.value     = Math.max(1, Math.min(20, settings.ratio));
-    comp.attack.value    = Math.max(0, Math.min(1, settings.attack / 1000));   // ms → s
-    comp.release.value   = Math.max(0, Math.min(1, settings.release / 1000));  // ms → s
-    comp.knee.value      = Math.max(0, Math.min(40, settings.knee));
-
-    // Makeup gain node (DynamicsCompressor has no built-in makeup)
-    const makeup = ctx.createGain();
-    makeup.gain.value = Math.pow(10, settings.makeupGain / 20); // dB → linear
-
-    // Wire: trackGain [→ EQ chain] → comp → makeup → analyser
-    // Disconnect existing EQ tail first
-    const eqChain = this.trackEQChains.get(trackId);
-    const eqTail: AudioNode = eqChain && eqChain.length > 0 ? eqChain[eqChain.length - 1] : trackGain;
-    try { eqTail.disconnect(); } catch { /* ok */ }
-    eqTail.connect(comp);
-    comp.connect(makeup);
-    makeup.connect(analyser);
-
-    this.trackCompressors.set(trackId, comp);
+    let tail: AudioNode = trackGain;
+    for (const n of nodes) { tail.connect(n); tail = n; }
+    tail.connect(analyser);
+    this.trackChainNodes.set(trackId, nodes);
+    if (filters.length) this.trackEQChains.set(trackId, filters); else this.trackEQChains.delete(trackId);
   }
 
   // ── LUFS Metering (integrated loudness, K-weighted approximation) ─────────
@@ -771,6 +739,9 @@ export class AudioEngine {
     this.trackEQChains.clear();
     this.trackCompressors.forEach(c => { try { c.disconnect(); } catch {} });
     this.trackCompressors.clear();
+    this.trackChainNodes.clear();
+    this.appliedEq.clear();
+    this.appliedComp.clear();
     this.lufsSum = 0; this.lufsCount = 0; this.lufsValue = -Infinity;
     this.bufferCache.clear();
     this.activeSources.clear();
