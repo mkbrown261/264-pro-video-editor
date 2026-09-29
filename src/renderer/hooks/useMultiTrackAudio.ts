@@ -142,6 +142,18 @@ export function useMultiTrackAudio({
   }, [isPlaying, playheadFrame, sequenceFps]);
 
   // --------------------------------------------------------------------------
+  // Track mix: volume × automation and pan, every frame while playing (and
+  // once when paused so a seek hears the right levels on resume).
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    const segs = allSegments ?? stateRef.current.allSegments ?? [];
+    const tracks = new Map<string, TimelineSegment["track"]>();
+    for (const s of segs) if (s.track.kind === "audio") tracks.set(s.track.id, s.track);
+    getEngine().applyTrackMix([...tracks.values()], playheadFrame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, playheadFrame, allSegments]);
+
+  // --------------------------------------------------------------------------
   // Seam effect
   // Fires when the set of active audio segments changes (clip boundary crossed
   // or a parameter like volume/speed changed mid-play).

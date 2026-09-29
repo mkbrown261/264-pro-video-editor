@@ -555,6 +555,11 @@ export default function App() {
   const updateTrack = useEditorStore((s) => s.updateTrack);
   const patchClip = useEditorStore((s) => s.patchClip);
   const addRecordedAudio = useEditorStore((s) => s.addRecordedAudio);
+  const setAutomationKeyframe = useEditorStore((s) => s.setAutomationKeyframe);
+  const copyGrade = useEditorStore((s) => s.copyGrade);
+  const pasteGrade = useEditorStore((s) => s.pasteGrade);
+  const gradeClipboard = useEditorStore((s) => s.gradeClipboard);
+  const removeAutomationKeyframe = useEditorStore((s) => s.removeAutomationKeyframe);
   const setMagneticTimeline = useEditorStore((s) => s.setMagneticTimeline);
   const addCaptionsFromTranscript = useEditorStore((s) => s.addCaptionsFromTranscript);
   const magneticTimeline = useEditorStore((s) => s.project.sequence.settings.magneticTimeline !== false);
@@ -1160,6 +1165,10 @@ export default function App() {
   // findAllActiveVideoSegments returns ALL overlapping video clips sorted
   // by trackIndex desc.  The first element is the clip we show in the viewer.
   // Lower clips are hidden unless transparency/mask allows see-through.
+  const resolveAsset = useMemo(() => {
+    const byId = new Map(project.assets.map((a) => [a.id, a]));
+    return (id: string) => byId.get(id);
+  }, [project.assets]);
   const usedAssetIds = useMemo(() => new Set(project.sequence.clips.map((c) => c.assetId)), [project.sequence.clips]);
   // Inner segments for nested-sequence clips (the viewer compositor renders them).
   const resolveNestedSegments = useMemo(() => {
@@ -3452,6 +3461,7 @@ export default function App() {
                 getCachedVideoPath={renderCache.getCachedPath}
                 sequenceSize={project.sequence.settings}
                 resolveNestedSegments={resolveNestedSegments}
+                resolveAsset={resolveAsset}
                 onVoiceoverRecorded={(asset, frame) => { addRecordedAudio(asset, frame); toast.success(`🎙 Voiceover added: ${asset.name}`); }}
               />
               {/* Edit-page Video Scopes — toggleable via Scopes toolbar button */}
@@ -3814,6 +3824,8 @@ export default function App() {
 
             {/* Timeline */}
             <TimelinePanel
+              onSetAutomationKeyframe={setAutomationKeyframe}
+              onRemoveAutomationKeyframe={removeAutomationKeyframe}
               trackLayouts={trackLayouts}
               selectedClipId={selectedClipId}
               toolMode={toolMode}
@@ -3937,6 +3949,9 @@ export default function App() {
                 onCopyGradeToSlot={(from, to) => { if (selectedClipId) copyGradeToSlot(selectedClipId, from, to); }}
                 gradeNodes={inspectorSegment?.clip.gradeNodes ?? []}
                 onUpdateGradeNodes={(nodes) => { if (inspectorSegment) patchClip(inspectorSegment.clip.id, { gradeNodes: nodes }); }}
+                onCopyGrade={() => { if (inspectorSegment) { copyGrade(inspectorSegment.clip.id); toast.success("Grade copied"); } }}
+                onPasteGrade={() => { if (inspectorSegment) pasteGrade([inspectorSegment.clip.id]); }}
+                canPasteGrade={!!gradeClipboard}
               />
               {/* Open in Fusion button */}
               {selectedClipId && (
@@ -3986,6 +4001,7 @@ export default function App() {
                 onStepFrames={handleStepFrames}
                 sequenceSize={project.sequence.settings}
                 resolveNestedSegments={resolveNestedSegments}
+                resolveAsset={resolveAsset}
               />
               {/* Professional Video Scopes — collapsible strip */}
               <div className="color-scopes-strip" style={{ position: "relative" }}>

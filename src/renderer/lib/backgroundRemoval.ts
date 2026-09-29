@@ -64,7 +64,7 @@ const outCanvas = document.createElement("canvas");
  * Person cut out of `src` (w×h), composited over the configured background.
  * Returns null when the segmenter isn't ready (caller shows the original).
  */
-export function cutout(src: CanvasImageSource, w: number, h: number, cfg: BackgroundRemovalConfig): HTMLCanvasElement | null {
+export function cutout(src: CanvasImageSource, w: number, h: number, cfg: BackgroundRemovalConfig, bgSource?: CanvasImageSource | null): HTMLCanvasElement | null {
   if (!segmenter) { void loadSegmenter(); return null; }
   let result: ImageSegmenterResult;
   try {
@@ -108,6 +108,15 @@ export function cutout(src: CanvasImageSource, w: number, h: number, cfg: Backgr
   if (cfg.backgroundType === "solidColor") {
     o.fillStyle = cfg.backgroundColor || "#00ff00";
     o.fillRect(0, 0, w, h);
+  } else if ((cfg.backgroundType === "image" || cfg.backgroundType === "video") && bgSource) {
+    // Cover-fit the replacement background.
+    const [bw, bh] = bgSource instanceof HTMLVideoElement ? [bgSource.videoWidth, bgSource.videoHeight]
+      : bgSource instanceof HTMLImageElement ? [bgSource.naturalWidth, bgSource.naturalHeight]
+      : [(bgSource as HTMLCanvasElement).width, (bgSource as HTMLCanvasElement).height];
+    if (bw && bh) {
+      const s = Math.max(w / bw, h / bh);
+      o.drawImage(bgSource, (w - bw * s) / 2, (h - bh * s) / 2, bw * s, bh * s);
+    }
   } else if (cfg.backgroundType === "blur") {
     o.filter = `blur(${Math.max(w, h) / 60}px)`;
     o.drawImage(src, 0, 0, w, h);

@@ -86,6 +86,8 @@ interface ViewerPanelProps {
   sequenceSize?: { width: number; height: number };
   /** Inner segments of a nested-sequence clip (for the compositor). */
   resolveNestedSegments?: NestedResolver;
+  /** Media assets by id (background-removal replacement backgrounds). */
+  resolveAsset?: (assetId: string) => MediaAsset | undefined;
   /** A voiceover finished recording (place it on the timeline). */
   onVoiceoverRecorded?: (asset: MediaAsset, startFrame: number) => void;
 }
@@ -395,6 +397,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     sequenceSize,
     resolveNestedSegments,
     onVoiceoverRecorded,
+    resolveAsset,
   }, ref) {
     const voiceover = useVoiceoverRecorder();
     const toggleVoiceover = async () => {
@@ -625,12 +628,12 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     const compositorCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const [compositorFailed, setCompositorFailed] = useState(false);
     const previewUnits = useMemo<PreviewUnit[]>(
-      () => computePreviewUnits(segments, playheadFrame, sequenceFps, resolveNestedSegments),
-      [segments, playheadFrame, sequenceFps, resolveNestedSegments]
+      () => computePreviewUnits(segments, playheadFrame, sequenceFps, resolveNestedSegments, 0, resolveAsset),
+      [segments, playheadFrame, sequenceFps, resolveNestedSegments, resolveAsset]
     );
     // One second ahead while playing: lets the pool preload upcoming clips.
     const upcomingUnits = useMemo<PreviewUnit[]>(
-      () => (isPlaying ? computePreviewUnits(segments, playheadFrame + Math.round(sequenceFps), sequenceFps, resolveNestedSegments) : []),
+      () => (isPlaying ? computePreviewUnits(segments, playheadFrame + Math.round(sequenceFps), sequenceFps, resolveNestedSegments, 0, resolveAsset) : []),
       // Recompute every ~half second of playback, not every frame.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [isPlaying, segments, Math.floor(playheadFrame / Math.max(1, Math.round(sequenceFps / 2))), sequenceFps, resolveNestedSegments]

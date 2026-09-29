@@ -14,6 +14,8 @@
  *   scheduler.dispose();
  */
 
+import type { TimelineTrack } from "../../shared/models";
+import { interpolateKeyframe } from "../../shared/timeline";
 import type { EQBand, MediaAsset } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
 
@@ -242,6 +244,7 @@ export class AudioEngine {
 
   /** Per-track gain nodes, keyed by track ID. */
   private trackGains = new Map<string, GainNode>();
+  private trackPanners = new Map<string, StereoPannerNode>();
   private trackCompressors = new Map<string, DynamicsCompressorNode>();
   private lufsProcessor: ScriptProcessorNode | null = null;
   private lufsSum = 0;
@@ -297,7 +300,11 @@ export class AudioEngine {
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.8;
       tg.connect(analyser);
-      analyser.connect(this.getMasterGain(ctx));
+      // Equal-power pan (same law as the export's pan filter).
+      const panner = ctx.createStereoPanner();
+      analyser.connect(panner);
+      panner.connect(this.getMasterGain(ctx));
+      this.trackPanners.set(trackId, panner);
       this.trackGains.set(trackId, tg);
       this.trackAnalysers.set(trackId, analyser);
     }
@@ -567,6 +574,30 @@ export class AudioEngine {
   setTrackVolume(trackId: string, vol: number): void {
     const tg = this.trackGains.get(trackId);
     if (tg) tg.gain.value = Math.max(0, Math.min(2, vol));
+  }
+
+  setTrackPan(trackId: string, pan: number): void {
+    const p = this.trackPanners.get(trackId);
+    if (p) p.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), p.context.currentTime, 0.01);
+  }
+
+  /**
+   * Track volume × volume automation and pan (automation overrides the static
+   * pan) at `frame` — matches the export's track bus. Called every frame
+   * while playing.
+   */
+  applyTrackMix(tracks: TimelineTrack[], frame: number): void {
+    for (const t of tracks) {
+      const tg = this.trackGains.get(t.id);
+      if (tg) {
+        const lane = t.automation?.find((l) => l.enabled && l.param === "volume" && l.keyframes.length);
+        const auto = lane ? interpolateKeyframe({ property: "volume", keyframes: lane.keyframes }, frame) : 1;
+        const vol = t.muted ? 0 : Math.max(0, Math.min(4, (t.volume ?? 1) * auto));
+        tg.gain.setTargetAtTime(vol, tg.context.currentTime, 0.01);
+      }
+      const panLane = t.automation?.find((l) => l.enabled && l.param === "pan" && l.keyframes.length);
+      this.setTrackPan(t.id, panLane ? interpolateKeyframe({ property: "pan", keyframes: panLane.keyframes }, frame) : (t.pan ?? 0));
+    }
   }
 
   setMasterVolume(vol: number): void {

@@ -38,6 +38,7 @@ function flattenMedia(units: PreviewUnit[], out: PreviewLayer[] = []): PreviewLa
     if (u.kind !== "media" && u.kind !== "adjustment") continue;
     for (const l of [u.from, u.to]) {
       if (!l) continue;
+      if (l.background) out.push(l.background);
       if (l.nested) flattenMedia(l.nested, out);
       else if (u.kind === "media") out.push(l);
     }
@@ -73,6 +74,8 @@ export async function runGpuExport({ request, onProgress, isCancelled }: GpuExpo
     await api.gpuExportCancel?.(jobId);
     throw new Error("AI background removal model failed to load.");
   }
+  const assetsById = new Map(project.assets.map((a) => [a.id, a]));
+  const resolveAsset = (id: string) => assetsById.get(id);
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const compositor = new ViewerCompositor(canvas, () => {}, { readback: true });
@@ -119,7 +122,7 @@ export async function runGpuExport({ request, onProgress, isCancelled }: GpuExpo
   try {
     for (let f = 0; f < totalFrames; f++) {
       if (isCancelled?.()) throw new Error("Export cancelled.");
-      const units = computePreviewUnits(segments, f, fps, resolveNested);
+      const units = computePreviewUnits(segments, f, fps, resolveNested, 0, resolveAsset);
       const layers = flattenMedia(units);
       sources.clear();
       await Promise.all(layers.map(fetchSource));

@@ -153,6 +153,10 @@ interface EditorStore {
   switchGradeSlot: (clipId: string, slot: 'A' | 'B' | 'C') => void;
   /** Copy the grade from slot A to slot B for quick comparison */
   copyGradeToSlot: (clipId: string, fromSlot: 'A' | 'B' | 'C', toSlot: 'A' | 'B' | 'C') => void;
+  /** Grade clipboard: the whole serial chain (node 1 + extra nodes). */
+  gradeClipboard: { colorGrade: ColorGrade; gradeNodes: import("../../shared/models").GradeNode[] } | null;
+  copyGrade: (clipId: string) => void;
+  pasteGrade: (clipIds: string[]) => void;
 
 // ── Background Removal ──
   setBackgroundRemoval: (clipId: string, config: Partial<BackgroundRemovalConfig>) => void;
@@ -805,6 +809,7 @@ function withUndo(
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
   project: createEmptyProject(),
+  gradeClipboard: null,
   selectedAssetId: null,
   selectedClipId: null,
   toolMode: "select",
@@ -1748,23 +1753,50 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   // ── Grade Versioning (A/B/C) ────────────────────────────────────────
 
+  // Versions store the whole serial chain: node 1 (colorGrade) + gradeNodes.
   switchGradeSlot: (clipId, slot) => {
-    set((state) => updateClipInState(state, clipId, (c) => {
+    set(withUndo("Switch Grade Version", (state) => updateClipInState(state, clipId, (c) => {
       const currentSlot = c.activeGradeSlot ?? 'A';
       const versions = { ...(c.gradeVersions ?? {}) };
+      const nodeVersions = { ...(c.gradeNodeVersions ?? {}) };
       if (c.colorGrade) versions[currentSlot] = { ...c.colorGrade };
+      nodeVersions[currentSlot] = c.gradeNodes ?? [];
       const targetGrade = versions[slot] ?? createDefaultColorGrade();
-      return { ...c, gradeVersions: versions, activeGradeSlot: slot, colorGrade: targetGrade };
-    }));
+      return { ...c, gradeVersions: versions, gradeNodeVersions: nodeVersions, activeGradeSlot: slot, colorGrade: targetGrade, gradeNodes: nodeVersions[slot] ?? [] };
+    })));
   },
 
   copyGradeToSlot: (clipId, fromSlot, toSlot) => {
-    set((state) => updateClipInState(state, clipId, (c) => {
+    set(withUndo("Copy Grade Version", (state) => updateClipInState(state, clipId, (c) => {
       const versions = { ...(c.gradeVersions ?? {}) };
+      const nodeVersions = { ...(c.gradeNodeVersions ?? {}) };
       const currentSlot = c.activeGradeSlot ?? 'A';
-      const src = fromSlot === currentSlot ? (c.colorGrade ?? createDefaultColorGrade()) : (versions[fromSlot] ?? createDefaultColorGrade());
-      versions[toSlot] = { ...src };
-      return { ...c, gradeVersions: versions };
+      const live = fromSlot === currentSlot;
+      versions[toSlot] = { ...(live ? (c.colorGrade ?? createDefaultColorGrade()) : (versions[fromSlot] ?? createDefaultColorGrade())) };
+      nodeVersions[toSlot] = (live ? c.gradeNodes : nodeVersions[fromSlot]) ?? [];
+      return { ...c, gradeVersions: versions, gradeNodeVersions: nodeVersions };
+    })));
+  },
+
+  copyGrade: (clipId) => {
+    const clip = get().project.sequence.clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    set({ gradeClipboard: { colorGrade: clip.colorGrade ?? createDefaultColorGrade(), gradeNodes: clip.gradeNodes ?? [] } });
+  },
+
+  pasteGrade: (clipIds) => {
+    const clip = get().gradeClipboard;
+    if (!clip || !clipIds.length) return;
+    set(withUndo("Paste Grade", (state) => {
+      let next: Partial<EditorStore> | EditorStore = state;
+      for (const id of clipIds) {
+        next = updateClipInState(next as EditorStore, id, (c) => ({
+          ...c,
+          colorGrade: JSON.parse(JSON.stringify(clip.colorGrade)),
+          gradeNodes: clip.gradeNodes.map((n) => ({ ...JSON.parse(JSON.stringify(n)), id: createId() })),
+        }));
+      }
+      return next;
     }));
   },
 
@@ -1969,7 +2001,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   setAutomationKeyframe: (trackId, param, frame, value) => {
-    set((state) => ({
+    set(withUndo("Set Automation Point", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -1992,11 +2024,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           }),
         },
       },
-    }));
+    })));
   },
 
   removeAutomationKeyframe: (trackId, param, frame) => {
-    set((state) => ({
+    set(withUndo("Remove Automation Point", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -2010,11 +2042,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           }),
         },
       },
-    }));
+    })));
   },
 
   toggleAutomationLane: (trackId, param) => {
-    set((state) => ({
+    set(withUndo("Toggle Automation Lane", (state) => ({
       project: {
         ...state.project,
         sequence: {
@@ -2032,7 +2064,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           }),
         },
       },
-    }));
+    })));
   },
 
   toggleTrackLock: (trackId) => {

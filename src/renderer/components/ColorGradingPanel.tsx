@@ -49,6 +49,10 @@ export interface ColorGradingPanelProps {
   gradeVersions?: Partial<Record<'A' | 'B' | 'C', ColorGrade>>;
   onSwitchGradeSlot?: (slot: 'A' | 'B' | 'C') => void;
   onCopyGradeToSlot?: (from: 'A' | 'B' | 'C', to: 'A' | 'B' | 'C') => void;
+  /** Copy this clip's whole grade chain / paste the copied chain onto it */
+  onCopyGrade?: () => void;
+  onPasteGrade?: () => void;
+  canPasteGrade?: boolean;
   /** Serial nodes 2+ of the clip's grade chain */
   gradeNodes?: GradeNode[];
   onUpdateGradeNodes?: (nodes: GradeNode[]) => void;
@@ -942,6 +946,9 @@ export function ColorGradingPanel({
   onCopyGradeToSlot,
   gradeNodes = [],
   onUpdateGradeNodes,
+  onCopyGrade,
+  onPasteGrade,
+  canPasteGrade,
 }: ColorGradingPanelProps) {
 
   const [activePanel, setActivePanel] = useState<ActivePanel>("primary");
@@ -1055,6 +1062,12 @@ export function ColorGradingPanel({
           />
           {clipName}
         </span>
+        {(onCopyGrade || onPasteGrade) && (
+          <div style={{ display: 'flex', gap: 3 }}>
+            <button type="button" className="cgp-btn muted" style={{ fontSize: 10, padding: '2px 6px' }} title="Copy this clip's grade (all nodes)" onClick={onCopyGrade}>Copy Grade</button>
+            <button type="button" className="cgp-btn muted" style={{ fontSize: 10, padding: '2px 6px' }} disabled={!canPasteGrade} title="Paste the copied grade (all nodes) onto this clip" onClick={onPasteGrade}>Paste Grade</button>
+          </div>
+        )}
         {/* A/B/C grade version slots */}
         {onSwitchGradeSlot && (
           <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
@@ -1500,7 +1513,8 @@ export function ColorGradingPanel({
                       id: createId(),
                       label: `Still ${(colorStills?.length ?? 0) + 1}`,
                       thumbnail,
-                      grade: JSON.parse(JSON.stringify(currentGrade)) as ColorGrade,
+                      grade: JSON.parse(JSON.stringify(colorGrade ?? currentGrade)) as ColorGrade,
+                      gradeNodes: JSON.parse(JSON.stringify(gradeNodes)),
                       capturedAt: Date.now(),
                       clipId: selectedClipId ?? '',
                     };
@@ -1511,7 +1525,8 @@ export function ColorGradingPanel({
                       id: createId(),
                       label: `Still ${(colorStills?.length ?? 0) + 1}`,
                       thumbnail: '',
-                      grade: JSON.parse(JSON.stringify(grade)) as ColorGrade,
+                      grade: JSON.parse(JSON.stringify(colorGrade ?? grade)) as ColorGrade,
+                      gradeNodes: JSON.parse(JSON.stringify(gradeNodes)),
                       capturedAt: Date.now(),
                       clipId: selectedClipId ?? '',
                     };
@@ -1534,8 +1549,11 @@ export function ColorGradingPanel({
                   key={still.id}
                   style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer' }}
                   onClick={() => {
-                    // Apply stored grade to current clip
-                    handleUpdate(still.grade);
+                    // Apply the stored chain (node 1 + extra nodes) to the current clip
+                    if (!colorGrade) onEnableGrade();
+                    onUpdateGrade(still.grade);
+                    onUpdateGradeNodes?.((still.gradeNodes ?? []).map((n) => ({ ...n, id: createId() })));
+                    setActiveNodeId("node-1");
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();

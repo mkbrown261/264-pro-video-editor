@@ -284,7 +284,9 @@ export interface ColorStill {
   id: string;
   label: string;
   thumbnail: string;       // base64 data URL of viewer frame
-  grade: ColorGrade;       // the full grade at time of capture
+  grade: ColorGrade;       // the full grade at time of capture (node 1)
+  /** Serial nodes 2+ at capture time. */
+  gradeNodes?: GradeNode[];
   capturedAt: number;
   clipId: string;
 }
@@ -487,6 +489,8 @@ export interface TimelineClip {
   colorGrade: ColorGrade | null;
   /** Grade versions: A/B/C alternates per clip (DaVinci-style). Key = 'A'|'B'|'C' */
   gradeVersions?: Partial<Record<'A' | 'B' | 'C', ColorGrade>>;
+  /** Serial nodes 2+ stored with each grade version. */
+  gradeNodeVersions?: Partial<Record<'A' | 'B' | 'C', GradeNode[]>>;
   /** Active grade slot: 'A' (default), 'B', or 'C' */
   activeGradeSlot?: 'A' | 'B' | 'C';
   /** Extra serial color nodes applied after `colorGrade` (node 1), in order. */

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { AutomationLaneOverlay } from "./AutomationLaneOverlay";
 import type { EditorTool, MediaAsset, TimelineMarker, TimelineTrack, TimelineTrackKind } from "../../shared/models";
 import { getDraggedAssetId } from "../lib/mediaDragContext";
 import {
@@ -114,6 +115,9 @@ interface GhostInfo {
 }
 
 interface TimelinePanelProps {
+  /** Automation lanes (audio tracks) */
+  onSetAutomationKeyframe?: (trackId: string, param: "volume" | "pan", frame: number, value: number) => void;
+  onRemoveAutomationKeyframe?: (trackId: string, param: "volume" | "pan", frame: number) => void;
   trackLayouts: TimelineTrackLayout[];
   selectedClipId: string | null;
   toolMode: EditorTool;
@@ -208,6 +212,8 @@ function snapFrame(frame: number, snapEnabled: boolean, fps: number, snapDivFact
 }
 
 export function TimelinePanel({
+  onSetAutomationKeyframe,
+  onRemoveAutomationKeyframe,
   trackLayouts,
   selectedClipId,
   toolMode,
@@ -292,6 +298,7 @@ export function TimelinePanel({
     };
   });
 
+  const [automationView, setAutomationView] = useState<Record<string, "volume" | "pan" | undefined>>({});
   const [pixelsPerFrame, setPpf] = useState(() => {
     try { return Number(localStorage.getItem("264pro_timeline_ppf") ?? "6") || 6; } catch { return 6; }
   });
@@ -1881,6 +1888,15 @@ export function TimelinePanel({
                       onClick={() => onUpdateTrack(layout.track.id, { locked: !isLocked })}
                       type="button"
                     >{isLocked ? "🔒" : "🔓"}</button>
+                    {/* Automation lane: off → volume → pan */}
+                    {layout.track.kind === "audio" && onSetAutomationKeyframe && (
+                      <button
+                        className={`track-ctrl-btn${automationView[layout.track.id] ? " active-solo" : ""}`}
+                        title={`Automation: ${automationView[layout.track.id] ?? "off"} (click to cycle volume → pan → off)`}
+                        onClick={() => setAutomationView((v) => ({ ...v, [layout.track.id]: v[layout.track.id] === "volume" ? "pan" : v[layout.track.id] === "pan" ? undefined : "volume" }))}
+                        type="button"
+                      >A</button>
+                    )}
                     {/* Solo (video tracks: hide/show) */}
                     <button
                       className={`track-ctrl-btn${layout.track.solo ? " active-solo" : ""}`}
@@ -1987,6 +2003,17 @@ export function TimelinePanel({
                     setLassoSelectedIds(new Set());
                   }}
                 >
+                  {layout.track.kind === "audio" && automationView[layout.track.id] && onSetAutomationKeyframe && (
+                    <AutomationLaneOverlay
+                      track={layout.track}
+                      param={automationView[layout.track.id]!}
+                      pixelsPerFrame={pixelsPerFrame}
+                      width={canvasWidth}
+                      height={trackH}
+                      onSet={(f, v) => onSetAutomationKeyframe!(layout.track.id, automationView[layout.track.id]!, f, v)}
+                      onRemove={(f) => onRemoveAutomationKeyframe?.(layout.track.id, automationView[layout.track.id]!, f)}
+                    />
+                  )}
                   {/* Guide lines */}
                   {markInFrame !== null && <div className="timeline-guide-line mark-in" style={{ left: markInFrame * pixelsPerFrame }} />}
                   {markOutFrame !== null && <div className="timeline-guide-line mark-out" style={{ left: markOutFrame * pixelsPerFrame }} />}

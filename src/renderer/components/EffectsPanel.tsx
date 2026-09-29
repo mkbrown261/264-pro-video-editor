@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { BackgroundRemovalConfig, ClipEffect, EffectType } from "../../shared/models";
 import { createId } from "../../shared/models";
+import { assetKind } from "../../shared/mediaKinds";
+import { useEditorStore } from "../store/editorStore";
 import type { TimelineSegment } from "../../shared/timeline";
 import { KeyframeCurveEditor, interpolateKeyframes } from "./KeyframeCurveEditor";
 import type { CurveKeyframe } from "./KeyframeCurveEditor";
@@ -1351,6 +1353,11 @@ interface BGRemovalCardProps {
 
 function BGRemovalCard({ config, onToggle, onUpdate }: BGRemovalCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const assets = useEditorStore((s) => s.project.assets);
+  const bgChoices = assets.filter((a) => {
+    const k = assetKind(a);
+    return config?.backgroundType === "image" ? k === "image" : k === "video";
+  });
 
   return (
     <div className={`effect-card ai-card${config?.enabled ? " ai-active" : ""}`}>
@@ -1424,9 +1431,26 @@ function BGRemovalCard({ config, onToggle, onUpdate }: BGRemovalCardProps) {
                 <option value="transparent">Transparent</option>
                 <option value="solidColor">Solid Color</option>
                 <option value="blur">Blur Background</option>
+                <option value="image">Image</option>
+                <option value="video">Video</option>
               </select>
             </div>
           </div>
+          {(config.backgroundType === "image" || config.backgroundType === "video") && (
+            <div className="effect-param-row">
+              <label className="effect-param-label">{config.backgroundType === "image" ? "BG Image" : "BG Video"}</label>
+              <div className="effect-param-control">
+                <select
+                  className="field-select effect-select"
+                  value={config.backgroundAssetId ?? ""}
+                  onChange={(e) => onUpdate({ backgroundAssetId: e.target.value || null })}
+                >
+                  <option value="">{bgChoices.length ? "Choose from media pool…" : "Import one first"}</option>
+                  {bgChoices.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
           {config.backgroundType === "solidColor" && (
             <div className="effect-param-row">
               <label className="effect-param-label">BG Color</label>

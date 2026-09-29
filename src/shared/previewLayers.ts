@@ -7,7 +7,7 @@
  * against the layers below. The viewer's GPU compositor consumes this list.
  */
 
-import type { ClipMask, Keyframe, TimelineClip } from "./models.js";
+import type { ClipMask, Keyframe, MediaAsset, TimelineClip } from "./models.js";
 import {
   getClipTransitionDurationFrames,
   hasSpeedRamp,
@@ -39,7 +39,12 @@ export interface PreviewLayer {
   frame: number;
   /** For nested-sequence clips: the inner sequence's units at the matching frame. */
   nested?: PreviewUnit[];
+  /** Image/video shown behind a background-removed subject. */
+  background?: PreviewLayer;
 }
+
+/** Looks up media assets by id (background-removal replacement backgrounds). */
+export type AssetResolver = (assetId: string) => MediaAsset | undefined;
 
 /** Resolves a nested clip to its inner sequence's segments (null if missing). */
 export type NestedResolver = (clip: TimelineClip) => TimelineSegment[] | null;
@@ -81,7 +86,7 @@ export function resolveTransform(clip: TimelineClip, frame: number): LayerTransf
   };
 }
 
-function layerAt(seg: TimelineSegment, frame: number, fps: number, tail = false, resolveNested?: NestedResolver, depth = 0): PreviewLayer {
+function layerAt(seg: TimelineSegment, frame: number, fps: number, tail = false, resolveNested?: NestedResolver, depth = 0, resolveAsset?: AssetResolver): PreviewLayer {
   const srcDur = Math.max(1 / fps, seg.sourceOutSeconds - seg.sourceInSeconds);
   const avgRate = srcDur / Math.max(1e-6, seg.durationSeconds);
   // Middle of the source frame (exact n/fps boundaries can decode the previous frame).
@@ -106,7 +111,21 @@ function layerAt(seg: TimelineSegment, frame: number, fps: number, tail = false,
   };
   if (seg.clip.nestedSequenceId && resolveNested && depth < 4) {
     const inner = resolveNested(seg.clip);
-    if (inner) layer.nested = computePreviewUnits(inner, Math.floor(sourceTime * fps), fps, resolveNested, depth + 1);
+    if (inner) layer.nested = computePreviewUnits(inner, Math.floor(sourceTime * fps), fps, resolveNested, depth + 1, resolveAsset);
+  }
+  const bg = seg.clip.aiBackgroundRemoval;
+  if (bg?.enabled && (bg.backgroundType === "image" || bg.backgroundType === "video") && bg.backgroundAssetId && resolveAsset) {
+    const asset = resolveAsset(bg.backgroundAssetId);
+    if (asset) {
+      // The replacement plays from its start with the clip, looping if shorter.
+      const t = (frame - seg.startFrame) / fps;
+      const dur = asset.durationSeconds > 0 ? asset.durationSeconds : Infinity;
+      const bgSeg: TimelineSegment = { ...seg, asset, clip: { ...seg.clip, id: `${seg.clip.id}:bg`, assetId: asset.id }, sourceInSeconds: 0, sourceOutSeconds: dur };
+      layer.background = {
+        key: `${seg.clip.id}:bg`, segment: bgSeg, sourceTime: (t % dur) + 0.5 / fps, rate: 1,
+        transform: layer.transform, frame,
+      };
+    }
   }
   return layer;
 }
@@ -124,8 +143,9 @@ export function computePreviewUnits(
   fps: number,
   resolveNested?: NestedResolver,
   depth = 0,
+  resolveAsset?: AssetResolver,
 ): PreviewUnit[] {
-  const at = (seg: TimelineSegment, f: number, tail = false) => layerAt(seg, f, fps, tail, resolveNested, depth);
+  const at = (seg: TimelineSegment, f: number, tail = false) => layerAt(seg, f, fps, tail, resolveNested, depth, resolveAsset);
   const video = playable(segments, "video");
   const trackIdxs = [...new Set(video.map((s) => s.trackIndex))].sort((a, b) => b - a);
   const units: PreviewUnit[] = [];

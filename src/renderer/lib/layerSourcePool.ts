@@ -71,6 +71,7 @@ export class LayerSourcePool {
         if (u.kind !== "media") continue;
         for (const layer of [u.from, u.to]) {
           if (!layer) continue;
+          if (layer.background) media.push(layer.background);
           if (layer.nested) collect(layer.nested);
           else media.push(layer);
         }

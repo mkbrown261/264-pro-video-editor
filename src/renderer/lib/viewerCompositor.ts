@@ -398,7 +398,8 @@ export class ViewerCompositor {
     const bg = clip.aiBackgroundRemoval;
     if (bg?.enabled) {
       const bw = Math.max(2, Math.round(sw0 * workScale)), bh = Math.max(2, Math.round(sh0 * workScale));
-      const cut = cutout(base, bw, bh, bg);
+      const bgSource = layer.background ? this.currentSourceFor?.(layer.background) ?? null : null;
+      const cut = cutout(base, bw, bh, bg, bgSource);
       if (cut) {
         const snap = this.buf(`bgcut${depth}`, bw, bh);
         const g = snap.getContext("2d")!;
@@ -625,7 +626,11 @@ export class ViewerCompositor {
     return this.drawLayer(target, layer, sourceFor(layer), opts, depth);
   }
 
+  /** The source lookup of the render in progress (background-removal backgrounds). */
+  private currentSourceFor: LayerSource | null = null;
+
   private renderUnits(ctx: CanvasRenderingContext2D, units: PreviewUnit[], sourceFor: LayerSource, opts: CompositeOptions, depth: number, transparent: boolean) {
+    this.currentSourceFor = sourceFor;
     const { width: W, height: H } = opts;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
