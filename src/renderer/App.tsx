@@ -1160,6 +1160,7 @@ export default function App() {
   // findAllActiveVideoSegments returns ALL overlapping video clips sorted
   // by trackIndex desc.  The first element is the clip we show in the viewer.
   // Lower clips are hidden unless transparency/mask allows see-through.
+  const usedAssetIds = useMemo(() => new Set(project.sequence.clips.map((c) => c.assetId)), [project.sequence.clips]);
   // Inner segments for nested-sequence clips (the viewer compositor renders them).
   const resolveNestedSegments = useMemo(() => {
     const cache = new Map<string, TimelineSegment[]>();
@@ -3338,6 +3339,7 @@ export default function App() {
                 bins={project.bins}
                 assetBins={project.assetBins}
                 onCreateBin={createBin}
+                usedAssetIds={usedAssetIds}
                 onRenameBin={renameBin}
                 onDeleteBin={deleteBin}
                 onMoveAssetToBin={moveAssetToBin}

@@ -883,11 +883,25 @@ export type EditorSequence = TimelineSequence;
 // ── EditorProject ─────────────────────────────────────────────────────────────
 
 /** Media Pool bin (folder) for organizing assets */
+/** A smart bin shows every asset matching its rule (see shared/mediaKinds.ts). */
+export interface SmartBinRule {
+  kind?: "any" | "video" | "audio" | "image";
+  nameContains?: string;
+  minSeconds?: number;
+  maxSeconds?: number;
+  /** Minimum picture height (e.g. 2160 for 4K). */
+  minHeight?: number;
+  codec?: string;
+  usage?: "any" | "used" | "unused";
+}
+
 export interface MediaBin {
   id: string;
   name: string;
   parentId?: string; // undefined = root level
   color?: string;    // optional color tag
+  /** When set, this is a smart bin: membership is computed from the rule. */
+  smart?: SmartBinRule;
 }
 
 export interface EditorProject {

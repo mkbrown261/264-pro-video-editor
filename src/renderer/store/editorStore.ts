@@ -306,7 +306,7 @@ interface EditorStore {
   /** Measure clip loudness (EBU R128) and set gains to hit the target LUFS. */
   normalizeAudioLevels: (targetDb: -14 | -23) => Promise<void>;
   // ── Media Bins ───────────────────────────────────────────────────────────────
-  createBin: (name: string, parentId?: string) => string;
+  createBin: (name: string, parentId?: string, smart?: import("../../shared/models").SmartBinRule) => string;
   renameBin: (binId: string, name: string) => void;
   deleteBin: (binId: string) => void;
   moveAssetToBin: (assetId: string, binId: string | null) => void;
@@ -3276,12 +3276,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   // ── Media Bins ───────────────────────────────────────────────────────────────
-  createBin: (name, parentId) => {
+  createBin: (name, parentId, smart) => {
     const id = `bin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     set((state) => ({
       project: {
         ...state.project,
-        bins: [...(state.project.bins ?? []), { id, name, parentId }],
+        bins: [...(state.project.bins ?? []), { id, name, parentId, ...(smart ? { smart } : {}) }],
       },
     }));
     return id;

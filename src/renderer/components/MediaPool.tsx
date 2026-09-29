@@ -7,6 +7,7 @@ import { memo, useState, useRef, useCallback, useEffect } from "react";
 import ReactDOM from "react-dom";
 import type { ClipTransitionType, MediaAsset, MediaBin } from "../../shared/models";
 import type { TimelineSegment } from "../../shared/timeline";
+import { assetKind, matchesSmartBin } from "../../shared/mediaKinds";
 import { formatDuration, formatFileSize } from "../lib/format";
 import { TransitionsPanel } from "./TransitionsPanel";
 import { setDraggedAssetId } from "../lib/mediaDragContext";
@@ -34,7 +35,9 @@ interface MediaPoolProps {
   bins?: MediaBin[];
   /** assetId → binId mapping */
   assetBins?: Record<string, string>;
-  onCreateBin?: (name: string) => void;
+  onCreateBin?: (name: string, parentId?: string, smart?: import("../../shared/models").SmartBinRule) => void;
+  /** Assets used on the timeline (smart-bin "used/unused" rules). */
+  usedAssetIds?: Set<string>;
   onRenameBin?: (binId: string, name: string) => void;
   onDeleteBin?: (binId: string) => void;
   onMoveAssetToBin?: (assetId: string, binId: string | null) => void;
@@ -407,6 +410,7 @@ function MediaPoolImpl({
   bins = [],
   assetBins = {},
   onCreateBin,
+  usedAssetIds,
   onRenameBin,
   onDeleteBin,
   onMoveAssetToBin,
@@ -427,6 +431,8 @@ function MediaPoolImpl({
   const [renamingBinValue, setRenamingBinValue] = useState("");
   const [newBinName, setNewBinName] = useState("");
   const [showNewBinInput, setShowNewBinInput] = useState(false);
+  const [newBinSmart, setNewBinSmart] = useState(false);
+  const [newBinRule, setNewBinRule] = useState<import("../../shared/models").SmartBinRule>({ kind: "any", usage: "any" });
   const [dragOverBinId, setDragOverBinId] = useState<string | null>(null);
 
   const toggleViewMode = () => {
@@ -456,20 +462,25 @@ function MediaPoolImpl({
     }
   };
 
+  // "Recent": the last 10 imported (assets are appended in import order).
+  const recentIds = new Set(assets.slice(-10).map((a) => a.id));
   // Filter + search + sort + active bin
   const filtered = sortAssets(
     assets.filter((a) => {
       const matchesSearch = a.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const kind = assetKind(a);
       const matchesType =
         filterType === "all" ? true :
-        filterType === "audio" ? a.hasAudio && a.durationSeconds < 1 :
-        true; // video — show everything for now
-      // Bin filter: null = all, smart bins (__ prefix), or manual bin id
+        filterType === "audio" ? kind === "audio" :
+        kind !== "audio";
+      // Bin filter: null = all, built-in smart bins (__ prefix), user smart bins, or manual bin id
       let matchesBin = true;
-      if (activeBinId === '__smart_video') matchesBin = !a.hasAudio || a.durationSeconds >= 1;
-      else if (activeBinId === '__smart_audio') matchesBin = a.hasAudio && a.durationSeconds > 0 && !(a.sourcePath?.match(/\.(mp4|mov|avi|mkv|webm|hevc)$/i));
-      else if (activeBinId === '__smart_short') matchesBin = a.durationSeconds > 0 && a.durationSeconds < 30;
-      else if (activeBinId === '__smart_recent') matchesBin = true; // date sort handled by sortAssets
+      const userBin = bins.find((b) => b.id === activeBinId);
+      if (activeBinId === '__smart_video') matchesBin = kind === "video";
+      else if (activeBinId === '__smart_audio') matchesBin = kind === "audio";
+      else if (activeBinId === '__smart_short') matchesBin = kind !== "image" && a.durationSeconds > 0 && a.durationSeconds < 30;
+      else if (activeBinId === '__smart_recent') matchesBin = recentIds.has(a.id);
+      else if (userBin?.smart) matchesBin = matchesSmartBin(a, userBin.smart, usedAssetIds);
       else if (activeBinId !== null) matchesBin = assetBins[a.id] === activeBinId;
       return matchesSearch && matchesType && matchesBin;
     }),
@@ -548,7 +559,7 @@ function MediaPoolImpl({
               {showNewBinInput && (
                 <form
                   style={{ display: 'flex', gap: 4, padding: '2px 8px 4px' }}
-                  onSubmit={e => { e.preventDefault(); if (newBinName.trim()) { onCreateBin?.(newBinName.trim()); setNewBinName(''); setShowNewBinInput(false); } }}
+                  onSubmit={e => { e.preventDefault(); if (newBinName.trim()) { onCreateBin?.(newBinName.trim(), undefined, newBinSmart ? newBinRule : undefined); setNewBinName(''); setShowNewBinInput(false); setNewBinSmart(false); } }}
                 >
                   <input
                     autoFocus
@@ -557,11 +568,34 @@ function MediaPoolImpl({
                     onChange={e => setNewBinName(e.target.value)}
                     placeholder="Bin name"
                     style={{ flex: 1, fontSize: 11, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '2px 6px', color: 'var(--text-p)' }}
-                    onBlur={() => { if (!newBinName.trim()) setShowNewBinInput(false); }}
                   />
+                  <label title="Smart bin: shows every asset matching rules" style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--text-s)' }}>
+                    <input type="checkbox" checked={newBinSmart} onChange={e => setNewBinSmart(e.target.checked)} /> Smart
+                  </label>
                   <button type="submit" style={{ fontSize: 11, padding: '2px 7px', background: 'rgba(168,85,247,0.2)', border: '1px solid rgba(168,85,247,0.4)', borderRadius: 4, color: '#c084fc', cursor: 'pointer' }}>Add</button>
                 </form>
               )}
+              {showNewBinInput && newBinSmart && (() => {
+                const field = { fontSize: 10, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '1px 4px', color: 'var(--text-p)', minWidth: 0 } as const;
+                const num = (v: string) => (v.trim() === '' ? undefined : Number(v));
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, padding: '0 8px 6px', fontSize: 10, color: 'var(--text-s)' }}>
+                    <select style={field} value={newBinRule.kind ?? 'any'} onChange={e => setNewBinRule(r => ({ ...r, kind: e.target.value as 'any' }))}>
+                      <option value="any">Any type</option><option value="video">Video</option><option value="audio">Audio</option><option value="image">Stills</option>
+                    </select>
+                    <select style={field} value={newBinRule.usage ?? 'any'} onChange={e => setNewBinRule(r => ({ ...r, usage: e.target.value as 'any' }))}>
+                      <option value="any">Used or not</option><option value="used">On timeline</option><option value="unused">Not on timeline</option>
+                    </select>
+                    <input style={field} placeholder="Name contains" value={newBinRule.nameContains ?? ''} onChange={e => setNewBinRule(r => ({ ...r, nameContains: e.target.value || undefined }))} />
+                    <input style={field} placeholder="Codec (e.g. prores)" value={newBinRule.codec ?? ''} onChange={e => setNewBinRule(r => ({ ...r, codec: e.target.value || undefined }))} />
+                    <input style={field} type="number" min={0} placeholder="Min sec" value={newBinRule.minSeconds ?? ''} onChange={e => setNewBinRule(r => ({ ...r, minSeconds: num(e.target.value) }))} />
+                    <input style={field} type="number" min={0} placeholder="Max sec" value={newBinRule.maxSeconds ?? ''} onChange={e => setNewBinRule(r => ({ ...r, maxSeconds: num(e.target.value) }))} />
+                    <select style={field} value={newBinRule.minHeight ?? ''} onChange={e => setNewBinRule(r => ({ ...r, minHeight: num(e.target.value) }))}>
+                      <option value="">Any resolution</option><option value="720">720p+</option><option value="1080">1080p+</option><option value="2160">4K+</option>
+                    </select>
+                  </div>
+                );
+              })()}
               {/* All assets row */}
               <button
                 type="button"
@@ -572,9 +606,9 @@ function MediaPoolImpl({
               </button>
               {/* Smart Bins — auto-filter virtual bins */}
               {[{
-                id: '__smart_video', label: '🎥 Video', filter: (a: import('../../shared/models').MediaAsset) => !a.hasAudio || a.durationSeconds >= 1,
+                id: '__smart_video', label: '🎥 Video', filter: (a: import('../../shared/models').MediaAsset) => assetKind(a) === "video",
               }, {
-                id: '__smart_audio', label: '🎵 Audio', filter: (a: import('../../shared/models').MediaAsset) => a.hasAudio && a.durationSeconds > 0 && !a.sourcePath?.match(/\.(mp4|mov|avi|mkv|webm|hevc)$/i),
+                id: '__smart_audio', label: '🎵 Audio', filter: (a: import('../../shared/models').MediaAsset) => assetKind(a) === "audio",
               }, {
                 id: '__smart_short', label: '⚡ Shorts (<30s)', filter: (a: import('../../shared/models').MediaAsset) => a.durationSeconds > 0 && a.durationSeconds < 30,
               }, {
@@ -594,7 +628,9 @@ function MediaPoolImpl({
                 );
               })}
               {bins.filter(b => !b.parentId).map(bin => {
-                const count = Object.values(assetBins).filter(bid => bid === bin.id).length;
+                const count = bin.smart
+                  ? assets.filter((a) => matchesSmartBin(a, bin.smart!, usedAssetIds)).length
+                  : Object.values(assetBins).filter(bid => bid === bin.id).length;
                 return (
                   <div
                     key={bin.id}
@@ -603,7 +639,7 @@ function MediaPoolImpl({
                     onDrop={e => {
                       e.preventDefault(); setDragOverBinId(null);
                       const assetId = e.dataTransfer.getData('asset-id');
-                      if (assetId) onMoveAssetToBin?.(assetId, bin.id);
+                      if (assetId && !bin.smart) onMoveAssetToBin?.(assetId, bin.id);
                     }}
                     style={{ background: dragOverBinId === bin.id ? 'rgba(168,85,247,0.18)' : 'none', borderRadius: 4 }}
                   >
@@ -629,7 +665,7 @@ function MediaPoolImpl({
                           onClick={e => { e.stopPropagation(); setCollapsedBins(p => { const n = new Set(p); n.has(bin.id) ? n.delete(bin.id) : n.add(bin.id); return n; }); }}
                           style={{ marginRight: 2 }}
                         />
-                        &#128193; {bin.name}
+                        {bin.smart ? '🔎' : '\u{1F4C1}'} {bin.name}
                         <span style={{ marginLeft: 'auto', opacity: 0.4 }}>{count}</span>
                         <button
                           type="button"
