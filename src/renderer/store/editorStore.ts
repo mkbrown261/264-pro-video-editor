@@ -2885,62 +2885,17 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   // ── Timeline Auto-Layout (UX 2) ──────────────────────────────────────────
   autoLayoutTimeline: () => {
-    set(withUndo("Auto-Layout Timeline", (state) => {
-      const { sequence } = state.project;
-      const videoTracks = sequence.tracks.filter(t => t.kind === "video");
-      const audioTracks = sequence.tracks.filter(t => t.kind === "audio");
-
-      // Separate clips by track kind
-      const videoClips = sequence.clips
-        .filter(c => videoTracks.some(t => t.id === c.trackId))
-        .sort((a, b) => a.startFrame - b.startFrame);
-      const audioClips = sequence.clips
-        .filter(c => audioTracks.some(t => t.id === c.trackId))
-        .sort((a, b) => a.startFrame - b.startFrame);
-
-      // Ensure at least one video and one audio track
-      const vTrack = videoTracks[0] ?? { id: createId(), name: "V1", kind: "video" as const, muted: false, locked: false, solo: false, height: 56, color: "#4f8ef7" };
-      const aTrack = audioTracks[0] ?? { id: createId(), name: "A1", kind: "audio" as const, muted: false, locked: false, solo: false, height: 44, color: "#2fc77a" };
-
-      // Re-pack video clips sequentially (sort + compact)
-      const fps = sequence.settings.fps;
-      const assetsById = new Map(state.project.assets.map((a) => [a.id, a]));
-      const clipFrames = (c: TimelineClip) => {
-        const a = assetsById.get(c.assetId);
-        return a ? getClipDurationFrames(c, a, fps) : 1;
-      };
-      let vFrame = 0;
-      const repackedVideo = videoClips.map((c) => {
-        const cloned = { ...c, trackId: vTrack.id, startFrame: vFrame };
-        vFrame += clipFrames(c);
-        return cloned;
-      });
-
-      let aFrame = 0;
-      const repackedAudio = audioClips.map((c) => {
-        const cloned = { ...c, trackId: aTrack.id, startFrame: aFrame };
-        aFrame += clipFrames(c);
-        return cloned;
-      });
-
-      const newTracks = [
-        vTrack,
-        ...videoTracks.slice(1),
-        aTrack,
-        ...audioTracks.slice(1),
-      ];
-
-      return {
-        ...state,
-        project: {
-          ...state.project,
-          sequence: {
-            ...sequence,
-            tracks: newTracks,
-            clips: [...repackedVideo, ...repackedAudio],
-          }
-        }
-      };
+    // Tidy without breaking the edit: close time that's empty on every track
+    // (sync-safe) and drop extra tracks that hold no clips.
+    get().closeAllGaps();
+    set(withUndo("Close All Gaps", (state) => {
+      const seq = state.project.sequence;
+      const used = new Set(seq.clips.map((c) => c.trackId));
+      const firstV = seq.tracks.find((t) => t.kind === "video")?.id;
+      const firstA = seq.tracks.find((t) => t.kind === "audio")?.id;
+      const tracks = seq.tracks.filter((t) => used.has(t.id) || t.id === firstV || t.id === firstA);
+      if (tracks.length === seq.tracks.length) return state;
+      return { project: { ...state.project, sequence: { ...seq, tracks } } };
     }));
   },
 
@@ -3414,10 +3369,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       // Normalize so the earliest clip doesn't go negative
       const minOffset = offsetsSeconds.length > 0 ? Math.min(...offsetsSeconds) : 0;
       const normalizedOffsets = offsetsSeconds.map(o => o - minOffset);
+      // Each angle's linked partners (its audio) move with it.
+      const deltaById = new Map<string, number>();
+      clipIds.forEach((id, idx) => {
+        const d = Math.round((normalizedOffsets[idx] ?? 0) * fps);
+        for (const c of getLinkedClips(state.project, id)) if (!deltaById.has(c.id) || c.id === id) deltaById.set(c.id, d);
+      });
       const newClips = state.project.sequence.clips.map(c => {
-        const idx = clipIds.indexOf(c.id);
-        if (idx === -1) return c;
-        const deltaFrames = Math.round(normalizedOffsets[idx] * fps);
+        const deltaFrames = deltaById.get(c.id);
+        if (deltaFrames === undefined) return c;
         return { ...c, startFrame: Math.max(0, c.startFrame + deltaFrames) };
       });
       return {

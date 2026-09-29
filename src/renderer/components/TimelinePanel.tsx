@@ -1592,7 +1592,7 @@ export function TimelinePanel({
             <button
               className="tl-add-track-btn"
               onClick={onAutoLayout}
-              title="Auto-Layout: remove gaps and group clips by type (UX 2)"
+              title="Auto-Layout: close empty gaps (keeps sync) and remove empty tracks"
               type="button"
               style={{ color: "#f7c948", borderColor: "rgba(247,201,72,0.3)" }}
             >⊞ Layout</button>

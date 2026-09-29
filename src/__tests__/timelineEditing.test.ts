@@ -226,6 +226,19 @@ describe("timeline editing", () => {
     expect(seg("n").sourceInSeconds).toBeCloseTo(40 / 30);
   });
 
+  it("auto-layout keeps layering and sync, drops empty tracks, one undo step", () => {
+    load([clip("v1", "V1", 30, { linkedGroupId: "g" }), clip("a1", "A1", 30, { linkedGroupId: "g" })]);
+    S().addTrack("video"); S().addTrack("audio");
+    useEditorStore.setState({ undoStack: [] });
+    S().autoLayoutTimeline();
+    expect(S().project.sequence.tracks.map((t) => t.id)).toEqual(["V1", "A1"]);
+    expect([seg("v1").startFrame, seg("a1").startFrame]).toEqual([0, 0]);
+    expect(S().undoStack).toHaveLength(1);
+    S().undo();
+    expect(S().project.sequence.tracks).toHaveLength(4);
+    expect(seg("v1").startFrame).toBe(30);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
