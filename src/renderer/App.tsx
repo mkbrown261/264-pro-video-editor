@@ -1121,11 +1121,12 @@ export default function App() {
         pauseViewerPlayback();
         setShuttleSpeed(1);
       } else if (direction === 1) {
-        // L — play forward, each press doubles speed (1x → 2x → 4x → 8x)
+        // L — play forward, each press doubles the shuttle rate (1× → 2× → 4× → 8×).
+        // (This used to set the selected clip's speed — a destructive edit.)
         if (playback.isPlaying && shuttleSpeed > 0) {
           const next = Math.min(8, shuttleSpeed * 2);
           setShuttleSpeed(next);
-          if (selectedClipId) patchClip(selectedClipId, { speed: next });
+          toast.info(`▶▶ ${next}×`, 800);
         } else {
           setShuttleSpeed(1);
           handleTogglePlayback();
@@ -2496,6 +2497,7 @@ export default function App() {
                 sequenceSize={project.sequence.settings}
                 resolveNestedSegments={resolveNestedSegments}
                 resolveAsset={resolveAsset}
+                shuttleRate={shuttleSpeed}
                 onVoiceoverRecorded={(asset, frame) => { addRecordedAudio(asset, frame); toast.success(`🎙 Voiceover added: ${asset.name}`); }}
               />
               {/* Edit-page Video Scopes — toggleable via Scopes toolbar button */}
@@ -3036,6 +3038,7 @@ export default function App() {
                 sequenceSize={project.sequence.settings}
                 resolveNestedSegments={resolveNestedSegments}
                 resolveAsset={resolveAsset}
+                shuttleRate={shuttleSpeed}
               />
               {/* Professional Video Scopes — collapsible strip */}
               <div className="color-scopes-strip" style={{ position: "relative" }}>

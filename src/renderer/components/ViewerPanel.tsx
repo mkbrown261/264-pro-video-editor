@@ -88,6 +88,8 @@ interface ViewerPanelProps {
   resolveNestedSegments?: NestedResolver;
   /** Media assets by id (background-removal replacement backgrounds). */
   resolveAsset?: (assetId: string) => MediaAsset | undefined;
+  /** J/K/L shuttle multiplier (1 = normal speed). */
+  shuttleRate?: number;
   /** A voiceover finished recording (place it on the timeline). */
   onVoiceoverRecorded?: (asset: MediaAsset, startFrame: number) => void;
 }
@@ -398,6 +400,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
     resolveNestedSegments,
     onVoiceoverRecorded,
     resolveAsset,
+    shuttleRate,
   }, ref) {
     const voiceover = useVoiceoverRecorder();
     const toggleVoiceover = async () => {
@@ -555,6 +558,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       setPlayheadFrame:    onSetPlayheadFrame,
       setPlaybackPlaying:  onSetPlaybackPlaying,
       onPlaybackMessage:   setPlaybackMessage,
+      shuttleRate,
     });
 
     // Expose audioEngineRef to parent (for AudioMixerPanel volume control)

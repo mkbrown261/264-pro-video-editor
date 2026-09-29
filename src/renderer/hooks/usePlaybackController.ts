@@ -47,6 +47,8 @@ interface PlaybackControllerOptions {
   setPlayheadFrame: (frame: number) => void;
   setPlaybackPlaying: (isPlaying: boolean) => void;
   onPlaybackMessage?: (message: string | null) => void;
+  /** J/K/L shuttle multiplier (1 = normal). Audio is muted while ≠ 1. */
+  shuttleRate?: number;
 }
 
 interface PlaybackControllerResult {
@@ -207,6 +209,7 @@ async function seekMediaElement(
 // ── Main hook ─────────────────────────────────────────────────────────────────
 
 export function usePlaybackController({
+  shuttleRate: shuttleRateOption,
   videoRef,
   // audioRef is kept for API compatibility but audio is now handled by
   // useMultiTrackAudio internally
@@ -247,7 +250,8 @@ export function usePlaybackController({
     onPlaybackMessage,
     playbackAnchorFrame: playheadFrame,
     playbackStartedAt: null as number | null,
-    lastLoadedVideoUrl: null as string | null
+    lastLoadedVideoUrl: null as string | null,
+    shuttleRate: 1,
   });
 
   // Keep stateRef in sync with latest props
@@ -473,7 +477,7 @@ export function usePlaybackController({
 
       if (shouldPlay) {
         const clipSpeed = Math.max(0.25, Math.min(4, segment.clip.speed ?? 1));
-        media.playbackRate = clipSpeed;
+        media.playbackRate = Math.min(16, clipSpeed * (stateRef.current.shuttleRate || 1));
         // Video element is muted — audio is handled by useMultiTrackAudio
         media.muted = true;
         media.volume = 1;
@@ -686,7 +690,7 @@ export function usePlaybackController({
       // Re-read playbackStartedAt in case stall detection adjusted it above
       const startedAt = stateRef.current.playbackStartedAt ?? playbackStartedAt;
 
-      const elapsedFrames = ((timestamp - startedAt) / 1000) * fps;
+      const elapsedFrames = ((timestamp - startedAt) / 1000) * fps * (stateRef.current.shuttleRate || 1);
       const nextFrame = Math.min(total - 1, Math.round(playbackAnchorFrame + elapsedFrames));
 
       if (nextFrame !== stateRef.current.playheadFrame) {
@@ -786,6 +790,25 @@ export function usePlaybackController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSegment?.clip.id, activeSegment?.asset.previewUrl, activeSegment?.sourceInSeconds, activeSegment?.sourceOutSeconds, isPlaying, playheadFrame]);
 
+  // ── Shuttle (J/K/L): re-anchor the clock at the new rate; mute audio while
+  //    shuttling faster than 1× and restart it in sync on return to 1×. ─────
+  const shuttleRate = Math.max(1, Math.min(8, shuttleRateOption ?? 1));
+  useEffect(() => {
+    const st = stateRef.current;
+    const prev = st.shuttleRate;
+    if (prev === shuttleRate) return;
+    st.shuttleRate = shuttleRate;
+    if (!st.isPlaying) return;
+    st.playbackAnchorFrame = st.playheadFrame;
+    st.playbackStartedAt = performance.now();
+    const video = videoRef.current;
+    const clipSpeed = Math.max(0.25, Math.min(4, st.activeSegment?.clip.speed ?? 1));
+    if (video) video.playbackRate = Math.min(16, clipSpeed * shuttleRate);
+    if (shuttleRate !== 1) pauseAudio();
+    else void startAudio(st.playheadFrame);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shuttleRate]);
+
   // ── FIX 4: Immediately apply playback speed change to video element ────────
   // When clip speed changes while playing, update playbackRate in-place
   // without seeking (no stutter, instant feedback).
@@ -793,7 +816,7 @@ export function usePlaybackController({
     const video = videoRef.current;
     const seg = activeSegment;
     if (!video || !seg) return;
-    const newRate = Math.max(0.25, Math.min(4, seg.clip.speed ?? 1));
+    const newRate = Math.min(16, Math.max(0.25, Math.min(4, seg.clip.speed ?? 1)) * (stateRef.current.shuttleRate || 1));
     if (Math.abs(video.playbackRate - newRate) > 0.001) {
       video.playbackRate = newRate;
     }
