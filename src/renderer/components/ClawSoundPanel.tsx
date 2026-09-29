@@ -17,6 +17,8 @@ interface ClawSoundPanelProps {
   project?: EditorProject;
   /** Callback to add a new audio track when panel is empty */
   onAddAudioTrack?: () => void;
+  /** Preview audio engine — source of the real VU levels */
+  audioEngineRef?: React.MutableRefObject<import("../lib/AudioScheduler").AudioEngine | null>;
 }
 
 const DEFAULT_EQ_BANDS: EQBand[] = [
@@ -74,8 +76,10 @@ interface TrackState {
   vuLevel: number;
 }
 
-export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project, onAddAudioTrack }: ClawSoundPanelProps) {
+export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSetMasterVolume, selectedClipId, onNormalizeAudio, duckingSettings, onSetDuckingSettings, project, onAddAudioTrack, audioEngineRef }: ClawSoundPanelProps) {
   const audioTracks = tracks.filter(t => t.kind === "audio");
+  const tracksRef = useRef(audioTracks);
+  tracksRef.current = audioTracks;
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(audioTracks[0]?.id ?? null);
   const [trackStates, setTrackStates] = useState<Record<string, TrackState>>(() => {
     const init: Record<string, TrackState> = {};
@@ -210,27 +214,34 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
   const selectedState = selectedTrackId ? trackStates[selectedTrackId] : null;
   const selectedTrack = audioTracks.find(t => t.id === selectedTrackId);
 
-  // Simulate VU meters
+  // VU meters: real levels from the preview audio engine (silent when stopped).
   useEffect(() => {
     let frame = 0;
+    let last = "";
     const animate = () => {
       frame++;
-      if (frame % 4 === 0) {
-        setMasterVuL(Math.random() * 0.6 + 0.1);
-        setMasterVuR(Math.random() * 0.6 + 0.1);
-        setTrackStates(prev => {
-          const next = { ...prev };
-          Object.keys(next).forEach(id => {
-            next[id] = { ...next[id], vuLevel: Math.random() * 0.5 + 0.05 };
+      if (frame % 3 === 0) {
+        const engine = audioEngineRef?.current ?? null;
+        const master = engine ? engine.getMasterLevel() : 0;
+        const levels: Record<string, number> = {};
+        for (const t of tracksRef.current) levels[t.id] = engine ? engine.getTrackLevel(t.id) : 0;
+        const key = `${master.toFixed(3)}|${Object.values(levels).map((v) => v.toFixed(3)).join(",")}`;
+        if (key !== last) {
+          last = key;
+          setMasterVuL(master);
+          setMasterVuR(master);
+          setTrackStates(prev => {
+            const next = { ...prev };
+            Object.keys(next).forEach(id => { next[id] = { ...next[id], vuLevel: levels[id] ?? 0 }; });
+            return next;
           });
-          return next;
-        });
+        }
       }
       animFrameRef.current = requestAnimationFrame(animate);
     };
     animFrameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, []);
+  }, [audioEngineRef]);
 
   // Draw EQ curve
   useEffect(() => {

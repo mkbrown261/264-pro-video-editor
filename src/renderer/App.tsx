@@ -2661,6 +2661,7 @@ export default function App() {
             <div className="color-page-viewer">
               <ViewerPanel
                 ref={viewerPanelRef}
+                onAudioEngineRef={(engine) => { audioEngineRef.current = engine; }}
                 activeSegment={inspectorSegment ?? activeSegment}
                 activeAudioSegment={activeAudioSegment}
                 segments={segments}
@@ -2823,8 +2824,45 @@ export default function App() {
         {/* ── AUDIO PAGE (ClawSound) ── */}
         {activePage === "audio" && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            {/* Compact viewer: transport + the preview audio engine the meters read */}
+            <div style={{ height: 260, flexShrink: 0, display: "flex", justifyContent: "center", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ width: 460, display: "flex", flexDirection: "column" }}>
+                <ViewerPanel
+                  ref={viewerPanelRef}
+                  activeSegment={activeSegment}
+                  activeAudioSegment={activeAudioSegment}
+                  segments={segments}
+                  selectedAsset={selectedAsset}
+                  playheadFrame={playback.playheadFrame}
+                  totalFrames={totalFrames}
+                  sequenceFps={project.sequence.settings.fps}
+                  isPlaying={playback.isPlaying}
+                  toolMode={toolMode}
+                  colorGrade={activeSegment?.clip.colorGrade ?? null}
+                  clipEffects={activeSegment?.clip.effects ?? null}
+                  activeMaskTool="none"
+                  selectedMaskId={null}
+                  onAddMask={handleAddMask}
+                  onUpdateMask={handleUpdateMask}
+                  onSelectMask={setSelectedMaskId}
+                  onSetPlaybackPlaying={setPlaybackPlaying}
+                  onSetToolMode={setToolMode}
+                  onToggleBladeTool={toggleBladeTool}
+                  onSplitAtPlayhead={splitSelectedClipAtPlayhead}
+                  onSetPlayheadFrame={setPlayheadFrame}
+                  onStepFrames={handleStepFrames}
+                  onAudioEngineRef={(engine) => { audioEngineRef.current = engine; }}
+                  sequenceSize={project.sequence.settings}
+                  resolveNestedSegments={resolveNestedSegments}
+                  resolveAsset={resolveAsset}
+                  shuttleRate={shuttleSpeed}
+                  onVoiceoverRecorded={(asset, frame) => { addRecordedAudio(asset, frame); toast.success(`🎙 Voiceover added: ${asset.name}`); }}
+                />
+              </div>
+            </div>
             <ClawSoundPanel
               tracks={project.sequence.tracks}
+              audioEngineRef={audioEngineRef}
               fps={project.sequence.settings.fps}
               onUpdateTrack={(trackId, updates) => updateTrack(trackId, updates)}
               masterVolume={project.sequence.settings.masterVolume ?? 1}
