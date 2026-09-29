@@ -117,17 +117,27 @@ function migrateV1toV2(project: EditorProject, warnings: string[]): EditorProjec
  * Ensure every required field exists so the app never crashes on a partial file.
  * Non-destructive: only fills in missing values.
  */
+/**
+ * Fill in defaults for required fields while KEEPING every other field.
+ * (It used to rebuild clips/projects from a fixed field list, which silently
+ * dropped keyframes, titles, captions, colour nodes, speed ramps, nested
+ * sequences, bins, stills, subtitles, … on every open.)
+ */
 function sanitizeProject(project: EditorProject, _warnings: string[]): EditorProject {
+  const seq = project.sequence ?? ({} as EditorProject["sequence"]);
   return {
+    ...project,
     id: project.id ?? generateId(),
     name: project.name ?? "Untitled Project",
     assets: Array.isArray(project.assets) ? project.assets : [],
     sequence: {
-      id: project.sequence?.id ?? generateId(),
-      name: project.sequence?.name ?? "Main Timeline",
-      tracks: Array.isArray(project.sequence?.tracks) ? project.sequence.tracks : [],
-      clips: Array.isArray(project.sequence?.clips)
-        ? project.sequence.clips.map((clip: TimelineClip) => ({
+      ...seq,
+      id: seq.id ?? generateId(),
+      name: seq.name ?? "Main Timeline",
+      tracks: Array.isArray(seq.tracks) ? seq.tracks : [],
+      clips: Array.isArray(seq.clips)
+        ? seq.clips.map((clip: TimelineClip) => ({
+            ...clip,
             id: clip.id ?? generateId(),
             assetId: clip.assetId ?? "",
             trackId: clip.trackId ?? "",
@@ -150,13 +160,14 @@ function sanitizeProject(project: EditorProject, _warnings: string[]): EditorPro
           }))
         : [],
       settings: {
-        width: project.sequence?.settings?.width ?? 1920,
-        height: project.sequence?.settings?.height ?? 1080,
-        fps: project.sequence?.settings?.fps ?? 30,
-        audioSampleRate: project.sequence?.settings?.audioSampleRate ?? 48000
+        ...seq.settings,
+        width: seq.settings?.width ?? 1920,
+        height: seq.settings?.height ?? 1080,
+        fps: seq.settings?.fps ?? 30,
+        audioSampleRate: seq.settings?.audioSampleRate ?? 48000
       },
-      beatSync: project.sequence?.beatSync ?? null,
-      markers: Array.isArray(project.sequence?.markers) ? project.sequence.markers : []
+      beatSync: seq.beatSync ?? null,
+      markers: Array.isArray(seq.markers) ? seq.markers : []
     }
   };
 }

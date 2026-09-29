@@ -987,6 +987,8 @@ export interface ExportRequest {
   };
   /** Burn the project's subtitle cues into the picture. */
   burnSubtitles?: boolean;
+  /** Export only the audio mix (AAC in .m4a). */
+  audioOnly?: boolean;
 }
 
 export interface ExportResponse {

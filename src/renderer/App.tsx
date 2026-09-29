@@ -86,6 +86,8 @@ type LayoutPreset = "edit" | "color" | "audio";
 
 
 
+const NO_CUES: SubtitleCue[] = [];
+
 export default function App() {
   const viewerPanelRef = useRef<ViewerPanelHandle | null>(null);
   // Stable video ref passed to ColorGradingPanel — must never be re-created
@@ -405,15 +407,14 @@ export default function App() {
   // ── One-Click Delivery Package ─────────────────────────────────────────────
   const handleDeliveryPackage = useCallback(() => {
     const baseName = project.name || "output";
-    type DeliveryFormat = { label: string; codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; suffix: string };
+    type DeliveryFormat = { label: string; codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; suffix: string; audioOnly?: boolean };
     const deliveryFormats: DeliveryFormat[] = [
       { label: "YouTube 1080p", codec: "libx264", outputWidth: 1920, outputHeight: 1080, suffix: "_youtube" },
       { label: "Instagram Reel (9:16)", codec: "libx264", outputWidth: 1080, outputHeight: 1920, suffix: "_instagram_reel" },
       { label: "TikTok (9:16)", codec: "libx264", outputWidth: 1080, outputHeight: 1920, suffix: "_tiktok" },
       { label: "Twitter/X (720p)", codec: "libx264", outputWidth: 1280, outputHeight: 720, suffix: "_twitter" },
       { label: "ProRes Master", codec: "prores_ks", outputWidth: 1920, outputHeight: 1080, suffix: "_master" },
-      // Audio only — uses VP9 as codec placeholder since AAC is not in ExportCodec; actual audio-only export handled by FFmpeg flags
-      { label: "Audio Only (AAC)", codec: "libvpx-vp9", outputWidth: 0, outputHeight: 0, suffix: "_audio" },
+      { label: "Audio Only (AAC)", codec: "libx264", outputWidth: 0, outputHeight: 0, suffix: "_audio", audioOnly: true },
     ];
     const newJobs: RenderJob[] = deliveryFormats.map(fmt => ({
       id: createId(),
@@ -421,6 +422,7 @@ export default function App() {
       codec: fmt.codec,
       outputWidth: fmt.outputWidth,
       outputHeight: fmt.outputHeight,
+      audioOnly: fmt.audioOnly,
       status: "queued" as const,
       progress: 0,
       createdAt: Date.now(),
@@ -431,16 +433,11 @@ export default function App() {
   }, [project.name]);
 
   // Subtitle cues state
-  const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>(() => []);
-  const handleAddSubtitleCue = useCallback((cue: SubtitleCue) => {
-    setSubtitleCues(prev => [...prev, cue]);
-  }, []);
-  const handleUpdateSubtitleCue = useCallback((id: string, updates: Partial<SubtitleCue>) => {
-    setSubtitleCues(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
-  }, []);
-  const handleRemoveSubtitleCue = useCallback((id: string) => {
-    setSubtitleCues(prev => prev.filter(c => c.id !== id));
-  }, []);
+  // Subtitle cues are part of the project (saved with it and used by export).
+  const subtitleCues = useEditorStore((s) => s.project.subtitleCues) ?? NO_CUES;
+  const handleAddSubtitleCue = useEditorStore((s) => s.addSubtitleCue);
+  const handleUpdateSubtitleCue = useEditorStore((s) => s.updateSubtitleCue);
+  const handleRemoveSubtitleCue = useEditorStore((s) => s.removeSubtitleCue);
 
   // Clawbot state
   const [clawbotOpen, setClawbotOpen] = useState(false);
@@ -469,7 +466,7 @@ export default function App() {
     }
     // Check for ungraded clips
     const vSegs = segs.filter(s => s.track.kind === "video");
-    const ungraded = vSegs.filter(s => !s.clip.colorGrade || s.clip.colorGrade.bypass !== false).length;
+    const ungraded = vSegs.filter(s => !s.clip.colorGrade || s.clip.colorGrade.bypass).length;
     if (ungraded > 0 && vSegs.length > 2) issues.push(`🎨 ${ungraded} clips have no color grade applied`);
     // Check for very short clips
     const shortClips = vSegs.filter(s => s.durationFrames < 15);

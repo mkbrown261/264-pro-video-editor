@@ -213,3 +213,24 @@ describe.runIf(enabled)("chunked export (real FFmpeg)", () => {
     near(pixelAt(joined, boundary + 0.5), colorAt(boundary + 0.5));
   }, 180000);
 });
+
+describe.runIf(enabled)("audio-only export (real FFmpeg)", () => {
+  it("produces an audio file with no video stream", () => {
+    const a = solid("ao", "red", 2);
+    const proj = project([a], [clip("ao", "V1", 0), clip("ao", "A1", 0)]);
+    let n = 0;
+    const graph = buildExportGraph({ project: proj, audioOnly: true }, {
+      fontsDir: null,
+      writeTempFile: (name, contents) => { const p = join(dir, `ao${n++}_${name}`); writeFileSync(p, contents); return p; },
+    });
+    expect(graph.videoLabel).toBe("");
+    const script = join(dir, "ao_graph.txt");
+    writeFileSync(script, graph.filterComplex);
+    const out = join(dir, "audio_only.m4a");
+    ff([...graph.inputs.flatMap((i) => [...i.options, "-i", i.path]), "-filter_complex_script", script, "-map", graph.audioLabel, "-vn", "-c:a", "aac", out]);
+    let info = "";
+    try { execFileSync(FFMPEG, ["-i", out], { stdio: "pipe" }); } catch (e) { info = String((e as { stderr?: Buffer }).stderr); }
+    expect(info).toMatch(/Audio: aac/);
+    expect(info).not.toMatch(/Video:/);
+  }, 60000);
+});

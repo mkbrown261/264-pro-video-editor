@@ -1085,6 +1085,13 @@ export function buildExportGraph(request: ExportGraphRequest, env: ExportGraphEn
   const durationSeconds = totalFrames / fps;
 
   let video: string;
+  if (request.audioOnly) {
+    const audio = buildAudioMix(ctx, request, durationSeconds);
+    return {
+      inputs: ctx.inputs, filterComplex: ctx.parts.join(";\n"), videoLabel: "", audioLabel: `[${audio}]`,
+      durationSeconds, totalFrames, warnings: [...ctx.warnings], needsGpu: false,
+    };
+  }
   if (request.pipedVideo) {
     addInput(ctx, "pipe:0", ["-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${W}x${H}`, "-r", String(fps)]);
     video = label(ctx, "piped");

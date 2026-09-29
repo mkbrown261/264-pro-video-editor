@@ -616,6 +616,19 @@ export async function exportSequence(
     const totalFrames = Math.round(sequenceDurationSeconds(project.sequence, project.assets) * fps);
     const chunks = planExportChunks(project, totalFrames, MAX_CLIPS_PER_GRAPH);
 
+    if (request.audioOnly) {
+      const graph = buildExportGraph(request, env);
+      const args = [
+        ...graph.inputs.flatMap((input) => [...input.options, "-i", input.path]),
+        "-filter_complex_script", writeScript(graph.filterComplex),
+        "-map", graph.audioLabel, "-vn", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
+        "-y", outputPath,
+      ];
+      await runFfmpeg(environment.ffmpegPath, args, graph.durationSeconds, report);
+      onProgress?.(100);
+      return { outputPath, commandPreview: `${environment.ffmpegPath} ${args.join(" ")}`, warnings: graph.warnings };
+    }
+
     if (chunks.length <= 1) {
       const graph = buildExportGraph(request, env);
       const args = [

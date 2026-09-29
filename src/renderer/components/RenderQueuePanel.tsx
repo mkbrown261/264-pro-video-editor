@@ -29,6 +29,8 @@ export interface RenderJob {
   burnIn?: { timecode?: boolean; watermarkText?: string; watermarkOpacity?: number };
   burnSubtitles?: boolean;
   renderEngine?: "auto" | "ffmpeg" | "gpu";
+  /** Audio-only deliverable (.m4a). */
+  audioOnly?: boolean;
 }
 
 // ── Batch Export Presets (GAP D) ──────────────────────────────────────────────

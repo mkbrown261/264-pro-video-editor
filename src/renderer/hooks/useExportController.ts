@@ -29,7 +29,7 @@ export function useExportController(getContext: () => ExportContext) {
 
   /** Render with the FFmpeg graph, or with the viewer engine (GPU) when needed/asked. */
   async function renderExport(request: import("../../shared/models").ExportRequest, engine: "auto" | "ffmpeg" | "gpu" = "auto", onProgress?: (pct: number) => void) {
-    const useGpu = engine === "gpu" || (engine === "auto" && exportNeedsGpu(request).needsGpu);
+    const useGpu = !request.audioOnly && (engine === "gpu" || (engine === "auto" && exportNeedsGpu(request).needsGpu));
     if (useGpu && window.editorApi?.gpuExportStart) {
       toast.info("Rendering with the GPU engine (matches the viewer exactly)");
       return runGpuExport({ request, onProgress });
@@ -169,7 +169,7 @@ export function useExportController(getContext: () => ExportContext) {
       renderQueueProcessingRef.current = true;
 
       // Prompt for output path
-      const ext = pendingJob.codec === "libvpx-vp9" ? "webm" : pendingJob.codec === "prores_ks" ? "mov" : "mp4";
+      const ext = pendingJob.audioOnly ? "m4a" : pendingJob.codec === "libvpx-vp9" ? "webm" : pendingJob.codec === "prores_ks" ? "mov" : "mp4";
       let outputPath: string | null = null;
       try {
         outputPath = await window.editorApi.chooseExportFile(`${project.sequence.name}.${ext}`);
@@ -202,6 +202,7 @@ export function useExportController(getContext: () => ExportContext) {
           loudnormTarget: pendingJob.loudnormTarget,
           burnIn: pendingJob.burnIn,
           burnSubtitles: pendingJob.burnSubtitles,
+          audioOnly: pendingJob.audioOnly,
         }, pendingJob.renderEngine, (pct) => {
           setRenderJobs((prev) => prev.map((j) => j.id === pendingJob.id ? { ...j, progress: pct } : j));
         });

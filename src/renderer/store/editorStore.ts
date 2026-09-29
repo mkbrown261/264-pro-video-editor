@@ -95,6 +95,10 @@ interface EditorStore {
   setAssetPreviewUrl: (assetId: string, previewUrl: string) => void;
   appendAssetToTimeline: (assetId: string) => void;
   dropAssetAtFrame: (assetId: string, trackId: string, startFrame: number) => void;
+  /** Subtitle cues live in the project (saved, exported, burnable). */
+  addSubtitleCue: (cue: import("../../shared/models").SubtitleCue) => void;
+  updateSubtitleCue: (id: string, updates: Partial<import("../../shared/models").SubtitleCue>) => void;
+  removeSubtitleCue: (id: string) => void;
   /** Add a recorded (voiceover) asset and place it on a free audio track at startFrame. */
   addRecordedAudio: (asset: MediaAsset, startFrame: number) => void;
   selectAsset: (assetId: string | null) => void;
@@ -985,6 +989,22 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   selectAsset: (assetId) => set({ selectedAssetId: assetId }),
+
+  addSubtitleCue: (cue) => {
+    set(withUndo("Add Subtitle", (state) => ({
+      project: { ...state.project, subtitleCues: [...(state.project.subtitleCues ?? []), cue] },
+    })));
+  },
+  updateSubtitleCue: (id, updates) => {
+    set(withUndo("Edit Subtitle", (state) => ({
+      project: { ...state.project, subtitleCues: (state.project.subtitleCues ?? []).map((c) => (c.id === id ? { ...c, ...updates } : c)) },
+    })));
+  },
+  removeSubtitleCue: (id) => {
+    set(withUndo("Remove Subtitle", (state) => ({
+      project: { ...state.project, subtitleCues: (state.project.subtitleCues ?? []).filter((c) => c.id !== id) },
+    })));
+  },
 
   addRecordedAudio: (asset, startFrame) => {
     set(withUndo("Record Voiceover", (state) => {
