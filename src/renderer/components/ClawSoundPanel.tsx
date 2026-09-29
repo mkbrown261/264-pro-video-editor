@@ -189,7 +189,7 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
       // Cast to access exportStems — declared in vite-env.d.ts
       const api = window.electronAPI as (typeof window.electronAPI & {
         exportStems?: (args: { project: unknown; format: string; sampleRate: number; stems: string[] }) => Promise<{
-          success: boolean; files?: Array<{ stem: string; path: string }>; canceled?: boolean; error?: string;
+          success: boolean; files?: Array<{ stem: string; path: string }>; skipped?: Array<{ stem: string; reason: string }>; canceled?: boolean; error?: string;
         }>;
       });
       const result = await api?.exportStems?.({
@@ -200,7 +200,9 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
       });
       if (!result || result.canceled) return;
       if (result.success) {
-        showStemsToast('success', `✅ ${result.files?.length ?? 0} stem${(result.files?.length ?? 0) !== 1 ? 's' : ''} exported`);
+        const n = result.files?.length ?? 0;
+        const skipped = result.skipped?.length ? ` — skipped: ${result.skipped.map((x) => x.reason).join('; ')}` : '';
+        showStemsToast(result.skipped?.length ? 'error' : 'success', `✅ ${n} stem${n !== 1 ? 's' : ''} exported${skipped}`);
       } else {
         showStemsToast('error', result.error ?? 'Stems export failed');
       }

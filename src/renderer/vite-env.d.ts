@@ -90,6 +90,7 @@ declare global {
       }) => Promise<{
         success: boolean;
         files?: Array<{ stem: string; path: string }>;
+        skipped?: Array<{ stem: string; reason: string }>;
         canceled?: boolean;
         error?: string;
       }>;

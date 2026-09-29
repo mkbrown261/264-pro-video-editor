@@ -573,6 +573,47 @@ function runFfmpeg(ffmpegPath: string, args: string[], durationSeconds: number, 
 /** Timelines with more clips than this render in chunks (see src/shared/exportChunks.ts). */
 const MAX_CLIPS_PER_GRAPH = 40;
 
+/**
+ * Render the timeline's audio mix (the same graph the video export uses:
+ * speed, fades, keyframes, track volume/pan/automation, EQ, compressor,
+ * ducking, mute/solo, nested sequences) to an audio file.
+ */
+export async function renderAudioMix(
+  project: ExportRequest["project"], outputPath: string,
+  format: "wav" | "aiff" | "mp3" | "aac", sampleRate = 48000,
+): Promise<void> {
+  const environment = getEnvironmentStatus();
+  if (!environment.ffmpegAvailable) throw new Error(environment.warnings[0] || "FFmpeg is unavailable.");
+  await mkdir(dirname(outputPath), { recursive: true }).catch(() => {});
+  const workDir = await mkdtemp(join(tmpdir(), "264pro-audio-"));
+  let fileCount = 0;
+  const env = {
+    fontsDir: null,
+    loadFileLut: loadGradeLut,
+    writeTempFile: (name: string, contents: string) => {
+      const file = join(workDir, `${fileCount++}_${name.replace(/[^\w.-]/g, "_")}`);
+      writeFileSync(file, contents, "utf8");
+      return file;
+    },
+  };
+  try {
+    const graph = buildExportGraph({ project, outputPath, audioOnly: true } as ExportRequest, env);
+    const script = env.writeTempFile("graph.txt", graph.filterComplex);
+    const codecArgs = format === "wav" ? ["-c:a", "pcm_s24le"]
+      : format === "aiff" ? ["-c:a", "pcm_s24be", "-f", "aiff"]
+      : format === "mp3" ? ["-c:a", "libmp3lame", "-b:a", "320k"]
+      : ["-c:a", "aac", "-b:a", "256k"];
+    await runFfmpeg(environment.ffmpegPath, [
+      ...graph.inputs.flatMap((input) => [...input.options, "-i", input.path]),
+      "-filter_complex_script", script,
+      "-map", graph.audioLabel, "-vn", "-ar", String(sampleRate), ...codecArgs,
+      "-y", outputPath,
+    ], graph.durationSeconds, () => {});
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function exportSequence(
   request: ExportRequest,
   onProgress?: (pct: number) => void
