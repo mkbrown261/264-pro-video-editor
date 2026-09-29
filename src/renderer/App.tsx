@@ -279,7 +279,17 @@ export default function App() {
     renderJobs, setRenderJobs, renderQueueOpen, setRenderQueueOpen,
     handleExport, handleAddToQueue,
   } = useExportController(() => ({ project, segments, fsLinked, setExportMessage, setBridgeReady }));
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportMessage, setExportMessageState] = useState<string | null>(null);
+  // Toast every message as it's posted (an effect keyed on the text would
+  // swallow repeats, e.g. a second "✓ Saved to …" for the same file).
+  const setExportMessage = useCallback((msg: string | null) => {
+    setExportMessageState(msg);
+    if (!msg) return;
+    const lower = msg.toLowerCase();
+    if (msg.startsWith("✗") || lower.includes("fail") || lower.includes("error")) toast.error(msg, 5000);
+    else if (msg.startsWith("⚠")) toast.warning(msg, 4000);
+    else toast.success(msg, 3000);
+  }, []);
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null);
   const [bridgeReady, setBridgeReady] = useState(
     typeof window !== "undefined" && Boolean(window.editorApi)
@@ -1175,15 +1185,6 @@ export default function App() {
 
   useEffect(() => { setTransitionMessage(null); }, [selectedClipId]);
 
-  // ── Bridge exportMessage/transitionMessage → toast notifications ────────────
-  useEffect(() => {
-    if (!exportMessage) return;
-    const isError = exportMessage.startsWith("✗") || exportMessage.toLowerCase().includes("fail") || exportMessage.toLowerCase().includes("error");
-    const isWarning = exportMessage.startsWith("⚠");
-    if (isError)        toast.error(exportMessage, 5000);
-    else if (isWarning) toast.warning(exportMessage, 4000);
-    else                toast.success(exportMessage, 3000);
-  }, [exportMessage]);
 
   useEffect(() => {
     if (!transitionMessage) return;

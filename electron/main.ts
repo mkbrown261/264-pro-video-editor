@@ -54,6 +54,13 @@ let gateWindow: BrowserWindow | null = null;
 // ── Close-confirmation state (module-scoped so the IPC handler can set it) ───
 let mainWindow: BrowserWindow | null = null;
 let closeConfirmedGlobal = false;
+// Set when the user chose "Restart & Install": the close guard may first ask
+// the renderer to save; once it confirms, install instead of just closing.
+let installUpdateOnClose = false;
+function requestUpdateInstall() {
+  installUpdateOnClose = true;
+  autoUpdater.quitAndInstall(false, true);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -575,12 +582,12 @@ function initAutoUpdater(): void {
       type: "info",
       title: "264 Pro Ready to Update",
       message: `v${info.version} downloaded and ready`,
-      detail: "Restart 264 Pro now to apply the update. Your project will be saved automatically before restarting.",
+      detail: "Restart 264 Pro now to apply the update. If you have unsaved changes you'll be asked to save them first.",
       buttons: ["Restart & Install", "Install on Next Launch"],
       defaultId: 0,
       cancelId: 1,
     });
-    if (response === 0) autoUpdater.quitAndInstall(false, true);
+    if (response === 0) requestUpdateInstall();
   });
 
   autoUpdater.on("error", (err) =>
@@ -984,6 +991,7 @@ ipcMain.handle("project:save-as", async (_event, json: string, filePath: string)
 // in createMainWindow() sees it and lets the close through.
 ipcMain.handle("app:confirm-close", () => {
   closeConfirmedGlobal = true;
+  if (installUpdateOnClose) { autoUpdater.quitAndInstall(false, true); return; }
   const win = mainWindow ?? BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
   if (win && !win.isDestroyed()) {
     win.close();
@@ -991,7 +999,7 @@ ipcMain.handle("app:confirm-close", () => {
 });
 
 ipcMain.handle("updater:install-now", () => {
-  autoUpdater.quitAndInstall(false, true);
+  requestUpdateInstall();
 });
 
 ipcMain.handle("app:open-external", (_event, url: string) => {
