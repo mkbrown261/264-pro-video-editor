@@ -24,6 +24,7 @@ import {
 } from "../../shared/models";
 import {
   buildTimelineSegments,
+  shiftClipKeyframes,
   clampTrimEnd,
   clampTrimStart,
   findPlayableSegmentAtFrame,
@@ -757,13 +758,16 @@ function splitStateAtFrame(
       const seg = segsById.get(clip.id);
       if (!seg || frame <= seg.startFrame || frame >= seg.endFrame) return [clip];
       const splitOffset = frame - seg.startFrame;
-      const leftDur = splitOffset;
-      const rightDur = seg.durationFrames - splitOffset;
-      if (leftDur <= 0 || rightDur <= 0) return [clip];
+      if (splitOffset <= 0 || splitOffset >= seg.durationFrames) return [clip];
+      // Trims are in source frames: scale the timeline offset by the clip's speed.
+      const speed = Math.max(0.25, Math.min(4, clip.speed ?? 1));
+      const fps = state.project.sequence.settings.fps;
+      const sourceFrames = Math.max(1, Math.round((seg.sourceOutSeconds - seg.sourceInSeconds) * fps));
+      const leftSrc = Math.min(sourceFrames - 1, Math.max(1, Math.round(splitOffset * speed)));
       splitOccurred = true;
       return [
-        { ...clip, trimEndFrames: clip.trimEndFrames + rightDur, linkedGroupId: leftGroupId, transitionOut: null },
-        { ...clip, id: createId(), startFrame: frame, trimStartFrames: clip.trimStartFrames + leftDur, linkedGroupId: rightGroupId, transitionIn: null }
+        { ...clip, trimEndFrames: clip.trimEndFrames + (sourceFrames - leftSrc), linkedGroupId: leftGroupId, transitionOut: null },
+        { ...clip, id: createId(), startFrame: frame, trimStartFrames: clip.trimStartFrames + leftSrc, linkedGroupId: rightGroupId, transitionIn: null }
       ];
     })
   };
@@ -830,15 +834,36 @@ function applySnapshot(state: EditorStore, snap: UndoableSnapshot): Partial<Edit
  * push to undoStack, and clear redoStack.
  * Returns a Zustand set-compatible function.
  */
+/** Clips whose content moved in time take their (timeline-absolute) keyframes along. */
+function carryKeyframes(state: EditorStore, partial: Partial<EditorStore>): Partial<EditorStore> {
+  const nextClips = partial.project?.sequence?.clips;
+  const prevClips = state.project.sequence.clips;
+  if (!partial.project || !nextClips || nextClips === prevClips) return partial;
+  const prevById = new Map(prevClips.map((c) => [c.id, c]));
+  let changed = false;
+  const clips = nextClips.map((c) => {
+    const p = prevById.get(c.id);
+    if (!p || p === c) return c;
+    // Moved minus trimmed: trims keep content in place, speed changes don't move it.
+    const speed = Math.max(0.25, Math.min(4, c.speed ?? 1));
+    const d = Math.round((c.startFrame - p.startFrame) - (c.trimStartFrames - p.trimStartFrames) / speed);
+    if (!d) return c;
+    changed = true;
+    return shiftClipKeyframes(c, d, p);
+  });
+  return changed ? { ...partial, project: { ...partial.project, sequence: { ...partial.project.sequence, clips } } } : partial;
+}
+
 function withUndo(
   label: string,
   mutate: (state: EditorStore) => Partial<EditorStore> | EditorStore
 ) {
   return (state: EditorStore): Partial<EditorStore> => {
     const before = snapshot(state);
-    const partial = mutate(state) as Partial<EditorStore>;
+    let partial = mutate(state) as Partial<EditorStore>;
     // If nothing changed, skip recording
     if (partial === state) return {};
+    partial = carryKeyframes(state, partial);
 
     const merged: EditorStore = { ...state, ...partial };
     const after = snapshot(merged);
@@ -1183,7 +1208,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return applyClipMutation(state, clipId, (clip, asset) => {
         const nc = clampTrimStart(clip, asset, fps, clip.trimStartFrames + delta);
         const nd = nc - clip.trimStartFrames;
-        return { ...clip, startFrame: Math.max(0, clip.startFrame + nd), trimStartFrames: nc };
+        // Trims are source frames; the start moves by timeline frames so the out point stays put.
+        const speed = Math.max(0.25, Math.min(4, clip.speed ?? 1));
+        return { ...clip, startFrame: Math.max(0, clip.startFrame + Math.round(nd / speed)), trimStartFrames: nc };
       });
     }));
   },
@@ -1341,12 +1368,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         if (g.startFrame >= newStartFrame + dur) break;
         newStartFrame = g.endFrame;
       }
-      const newClips = linked.map((lc) => ({
+      const newClips = linked.map((lc) => shiftClipKeyframes({
         ...lc,
         id: createId(),
         startFrame: newStartFrame,
         linkedGroupId: newLinkedGroupId
-      }));
+      }, newStartFrame - lc.startFrame));
       return {
         project: {
           ...state.project,
@@ -2972,7 +2999,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           trackMap.set(t.id, id);
           return { ...t, id, muted: false, solo: false, locked: false };
         });
-      const subClips = clipsToNest.map(c => ({ ...c, id: createId(), trackId: trackMap.get(c.trackId)!, startFrame: c.startFrame - minStart }));
+      const subClips = clipsToNest.map(c => shiftClipKeyframes({ ...c, id: createId(), trackId: trackMap.get(c.trackId)!, startFrame: c.startFrame - minStart }, -minStart));
       const fps = sequence.settings.fps;
       const assetsById = new Map(state.project.assets.map(a => [a.id, a]));
       const nestedFrames = subClips.reduce((m, c) => {

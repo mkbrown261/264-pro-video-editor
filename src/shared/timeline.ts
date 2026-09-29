@@ -501,3 +501,30 @@ export function rampRate(kfs: Array<{ frame: number; speed: number }>, p: number
   }
   return pts[pts.length - 1][1] / total;
 }
+
+/**
+ * Keyframes are stored in timeline-absolute frames, so when a clip's content
+ * moves in time its animation has to move with it.
+ */
+export function shiftClipKeyframes(clip: TimelineClip, delta: number, prev: TimelineClip = clip): TimelineClip {
+  if (!delta) return clip;
+  const kf = <T extends { frame: number }>(list: T[] | undefined) => list?.map((k) => ({ ...k, frame: k.frame + delta }));
+  const out: TimelineClip = { ...clip };
+  if (clip.keyframes && clip.keyframes === prev.keyframes) {
+    out.keyframes = Object.fromEntries(Object.entries(clip.keyframes).map(([p, t]) => [p, t && { ...t, keyframes: kf(t.keyframes)! }])) as TimelineClip["keyframes"];
+  }
+  if (clip.masks?.length && clip.masks === prev.masks) {
+    out.masks = clip.masks.map((m) => ({
+      ...m,
+      trackingData: kf(m.trackingData) ?? m.trackingData,
+      keyframes: m.keyframes && Object.fromEntries(Object.entries(m.keyframes).map(([p, l]) => [p, kf(l)])),
+    }));
+  }
+  if (clip.effects?.length && clip.effects === prev.effects) {
+    out.effects = clip.effects.map((e) => ({ ...e, keyframes: e.keyframes && Object.fromEntries(Object.entries(e.keyframes).map(([p, l]) => [p, kf(l)!])) }));
+  }
+  if (clip.colorGrade?.keyframes && clip.colorGrade === prev.colorGrade) {
+    out.colorGrade = { ...clip.colorGrade, keyframes: Object.fromEntries(Object.entries(clip.colorGrade.keyframes).map(([p, l]) => [p, kf(l)])) };
+  }
+  return out;
+}

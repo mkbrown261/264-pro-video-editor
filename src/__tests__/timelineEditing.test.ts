@@ -181,6 +181,32 @@ describe("timeline editing", () => {
     expect([seg("a2").startFrame, seg("a2").endFrame]).toEqual([100, 130]);
   });
 
+  it("splitting a sped-up clip keeps both halves contiguous", () => {
+    load([clip("c1", "V1", 0, { speed: 2 })]); // 60 src frames at 2× → 0–30
+    S().splitClipAtFrame("c1", 20);
+    const segs = buildTimelineSegments(S().project.sequence, S().project.assets).sort((x, y) => x.startFrame - y.startFrame);
+    expect(segs.map((s) => [s.startFrame, s.endFrame])).toEqual([[0, 20], [20, 30]]);
+    expect(segs[1].sourceInSeconds).toBeCloseTo((30 + 40) / 30);
+  });
+
+  it("trimming the head of a sped-up clip keeps its out point", () => {
+    load([clip("c1", "V1", 0, { speed: 2 })]);
+    S().trimClipStart("c1", 60); // +30 source frames = 15 timeline frames
+    expect([seg("c1").startFrame, seg("c1").endFrame]).toEqual([15, 30]);
+  });
+
+  it("keyframes move with the clip, but not when it's only trimmed", () => {
+    const keyframes = { opacity: { property: "opacity", keyframes: [{ frame: 10, value: 0 }, { frame: 40, value: 1 }] } };
+    load([clip("c1", "V1", 0, { keyframes })]);
+    S().moveClipTo("c1", "V1", 100);
+    expect(S().project.sequence.clips[0].keyframes?.opacity?.keyframes.map((k) => k.frame)).toEqual([110, 140]);
+    S().trimClipStart("c1", 40);
+    expect(S().project.sequence.clips[0].keyframes?.opacity?.keyframes.map((k) => k.frame)).toEqual([110, 140]);
+    S().duplicateClip("c1");
+    const copy = S().project.sequence.clips.find((c) => c.id !== "c1")!;
+    expect(copy.keyframes?.opacity?.keyframes.map((k) => k.frame)).toEqual([160, 190]);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
