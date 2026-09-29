@@ -200,6 +200,15 @@ interface EditorStore {
   addAsset: (asset: import("../../shared/models").MediaAsset) => void;
   /** Directly insert a clip (already constructed) into the timeline */
   insertClip: (clip: import("../../shared/models").TimelineClip) => void;
+  /** Put a video clip (titles, graphics) on the top video track, adding a new top track if that spot is taken. */
+  insertClipOnTop: (clip: import("../../shared/models").TimelineClip) => void;
+  /**
+   * Source-viewer edit: put [inFrame, outFrame) of an asset at `frame` on the
+   * first unlocked video track (plus its audio on the first unlocked audio
+   * track). "insert" ripples everything after `frame` on unlocked tracks;
+   * "overwrite" replaces what's under the new clip.
+   */
+  editAtFrame: (assetId: string, frame: number, inFrame: number, outFrame: number, mode: "insert" | "overwrite") => void;
   /**
    * Atomically: create a new video track (+ paired audio track if the clip
    * has linked audio), move the dragged clip group into those new tracks,
@@ -342,6 +351,39 @@ function getPrimaryTrackId(project: EditorProjectState, kind: TimelineTrackKind)
  * This is the CORRECT industry-standard behavior: each clip's audio gets its own
  * lane — it never silently stacks on top of an unrelated clip.
  */
+/**
+ * Cut [start, end) out of the given tracks: overlapping clips are trimmed,
+ * split around the range, or removed. start === end splits clips at that
+ * frame. Trims are in source frames, so timeline frames are scaled by speed.
+ */
+function carveRange(project: EditorProjectState, trackIds: Set<string>, start: number, end: number): TimelineClip[] {
+  const fps = project.sequence.settings.fps;
+  const regrouped = new Map<string, string>();
+  const regroup = (g: string) => { if (!regrouped.has(g)) regrouped.set(g, createId()); return regrouped.get(g)!; };
+  return project.sequence.clips.flatMap((c) => {
+    if (!trackIds.has(c.trackId)) return [c];
+    const a = project.assets.find((x) => x.id === c.assetId);
+    if (!a) return [c];
+    const sp = Math.max(0.25, Math.min(4, c.speed ?? 1));
+    const cStart = c.startFrame, cEnd = cStart + getClipDurationFrames(c, a, fps);
+    const overlaps = start === end ? cStart < start && cEnd > start : cStart < end && cEnd > start;
+    if (!overlaps) return [c];
+    const out: TimelineClip[] = [];
+    if (cStart < start) out.push({ ...c, trimEndFrames: c.trimEndFrames + Math.round((cEnd - start) * sp) });
+    if (cEnd > end) {
+      const split = out.length > 0;
+      out.push({
+        ...c,
+        id: split ? createId() : c.id,
+        startFrame: end,
+        trimStartFrames: c.trimStartFrames + Math.round((end - cStart) * sp),
+        linkedGroupId: split && c.linkedGroupId ? regroup(c.linkedGroupId) : c.linkedGroupId,
+      });
+    }
+    return out;
+  });
+}
+
 function findOrCreateFreeAudioTrack(
   project: EditorProjectState,
   asset: MediaAsset,
@@ -1041,56 +1083,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const dropStart = Math.max(0, startFrame);
       const dropEnd   = dropStart + dur;
 
-      // ── NLE overwrite: carve the drop zone out of any clips it overlaps ─
-      // Industry-standard behaviour: the dropped clip occupies exactly its
-      // natural duration.  Existing clips are either trimmed or split so they
-      // continue playing BEFORE and AFTER the dropped clip's span.
-      // BUG fix: replace as-any __splitRight piggyback with flatMap so the
-      // split-inside-clip case returns both left + right stubs type-safely.
-      const updatedClips: TimelineClip[] = nextProject.sequence.clips.flatMap((c) => {
-        if (c.trackId !== trackId) return [c];
-        const cAsset = nextProject.assets.find((a) => a.id === c.assetId);
-        if (!cAsset) return [c];
-        const cDur   = getClipDurationFrames(c, cAsset, fps);
-        const cStart = c.startFrame;
-        const cEnd   = cStart + cDur;
-
-        if (cEnd <= dropStart || cStart >= dropEnd) return [c];  // no overlap
-
-        // Clip completely swallowed → remove
-        if (cStart >= dropStart && cEnd <= dropEnd) return [];
-
-        // Clip straddles the left edge → trim its end
-        if (cStart < dropStart && cEnd > dropStart && cEnd <= dropEnd) {
-          const framesKept = dropStart - cStart;
-          const framesLost = cDur - framesKept;
-          return [{ ...c, trimEndFrames: c.trimEndFrames + framesLost }];
-        }
-
-        // Clip straddles the right edge → trim its start & move startFrame
-        if (cStart >= dropStart && cStart < dropEnd && cEnd > dropEnd) {
-          const framesLost = dropEnd - cStart;
-          return [{ ...c, startFrame: dropEnd, trimStartFrames: c.trimStartFrames + framesLost }];
-        }
-
-        // Drop zone is INSIDE the clip → split into left stub + right stub
-        if (cStart < dropStart && cEnd > dropEnd) {
-          const leftFramesKept = dropStart - cStart;
-          const leftFramesLost = cDur - leftFramesKept;
-          const leftClip: TimelineClip = { ...c, trimEndFrames: c.trimEndFrames + leftFramesLost };
-          const rightFramesLost = dropEnd - cStart;
-          const rightClip: TimelineClip = {
-            ...c,
-            id: createId(),
-            startFrame: dropEnd,
-            trimStartFrames: c.trimStartFrames + rightFramesLost,
-            linkedGroupId: c.linkedGroupId,
-          };
-          return [leftClip, rightClip];
-        }
-
-        return [c];
-      });
+      // NLE overwrite: the dropped clip takes exactly its span; overlapped
+      // clips are trimmed, split around it, or removed.
+      const updatedClips = carveRange(nextProject, new Set([trackId]), dropStart, dropEnd);
 
       // ── Create the new clip ─────────────────────────────────────────────
       const linkedGroupId = asset.hasAudio && track.kind === "video" ? createId() : null;
@@ -2209,6 +2204,78 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       },
       selectedClipId: clip.id,
     })));
+  },
+
+  editAtFrame: (assetId, frame, inFrame, outFrame, mode) => {
+    set(withUndo(mode === "insert" ? "Insert Edit" : "Overwrite Edit", (state) => {
+      const asset = state.project.assets.find((a) => a.id === assetId);
+      if (!asset) return state;
+      let project = withAssetSequenceDefaults(state.project, asset);
+      const fps = project.sequence.settings.fps;
+      const total = Math.round(asset.durationSeconds * fps);
+      const from = Math.max(0, Math.min(inFrame, total - 1));
+      const to = Math.max(from + 1, Math.min(outFrame, total));
+      const dur = to - from;
+      const at = Math.max(0, frame);
+      const hasVideo = asset.width > 0 || !asset.hasAudio;
+
+      const tracks = project.sequence.tracks;
+      const vTrack = hasVideo ? tracks.find((t) => t.kind === "video" && !t.locked) : undefined;
+      if (hasVideo && !vTrack) return state;
+      let aTrack = asset.hasAudio ? tracks.find((t) => t.kind === "audio" && !t.locked) : undefined;
+      if (asset.hasAudio && !aTrack) {
+        aTrack = { id: createId(), name: `A${tracks.filter((t) => t.kind === "audio").length + 1}`, kind: "audio", muted: false, locked: false, solo: false, height: 44, color: "#2fc77a" };
+        project = { ...project, sequence: { ...project.sequence, tracks: [...tracks, aTrack] } };
+      }
+
+      let clips: TimelineClip[];
+      if (mode === "insert") {
+        const unlocked = new Set(project.sequence.tracks.filter((t) => !t.locked).map((t) => t.id));
+        clips = carveRange(project, unlocked, at, at).map((c) =>
+          unlocked.has(c.trackId) && c.startFrame >= at ? { ...c, startFrame: c.startFrame + dur } : c);
+      } else {
+        const targets = new Set([vTrack?.id, aTrack?.id].filter((x): x is string => !!x));
+        clips = carveRange(project, targets, at, at + dur);
+      }
+
+      const group = vTrack && aTrack ? createId() : null;
+      const make = (trackId: string) => ({
+        ...createEmptyClip(asset.id, trackId, at, { linkedGroupId: group }),
+        trimStartFrames: from,
+        trimEndFrames: Math.max(0, total - to),
+      });
+      const added = [vTrack && make(vTrack.id), aTrack && make(aTrack.id)].filter((c): c is TimelineClip => !!c);
+      const next = { ...project, sequence: { ...project.sequence, clips: [...clips, ...added] } };
+      return {
+        project: next,
+        selectedClipId: added[0].id,
+        playback: { ...state.playback, isPlaying: false, playheadFrame: clampPlayhead(next, at + dur) },
+      };
+    }));
+  },
+
+  insertClipOnTop: (clip) => {
+    set(withUndo("Insert Clip", (state) => {
+      const seq = state.project.sequence;
+      const asset = state.project.assets.find((a) => a.id === clip.assetId);
+      const fps = seq.settings.fps || 30;
+      const len = Math.max(1, Math.round((asset?.durationSeconds ?? 5) * fps) - clip.trimStartFrames - clip.trimEndFrames);
+      const start = clip.startFrame, end = start + len;
+      const top = seq.tracks.find((t) => t.kind === "video");
+      const segs = buildTimelineSegments(seq, state.project.assets);
+      const free = top && !top.locked && !segs.some((g) => g.clip.trackId === top.id && g.startFrame < end && g.endFrame > start);
+      let tracks = seq.tracks;
+      let trackId = top?.id ?? "";
+      if (!free) {
+        trackId = createId();
+        const vCount = seq.tracks.filter((t) => t.kind === "video").length;
+        tracks = [{ id: trackId, name: `V${vCount + 1}`, kind: "video", muted: false, locked: false, solo: false, height: 56, color: "#4f8ef7" }, ...seq.tracks];
+      }
+      return {
+        project: { ...state.project, sequence: { ...seq, tracks, clips: [...seq.clips, { ...clip, trackId }] } },
+        selectedClipId: clip.id,
+      };
+    }));
   },
 
   duplicateTrack: (trackId) => {

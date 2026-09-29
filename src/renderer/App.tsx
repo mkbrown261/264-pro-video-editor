@@ -27,6 +27,7 @@ import { toast } from "./lib/toast";
 import { useExportController } from "./hooks/useExportController";
 import { useProjectSafety } from "./hooks/useProjectSafety";
 import { useProjectFile } from "./hooks/useProjectFile";
+import { analyzeTimelineHealth, DELIVERY_FORMATS } from "../shared/timelineHealth";
 import { useEditorStore } from "./store/editorStore";
 import {
   buildTimelineSegments,
@@ -155,6 +156,8 @@ export default function App() {
   const magneticTimeline = useEditorStore((s) => s.project.sequence.settings.magneticTimeline !== false);
   const addAssetToPool = useEditorStore((s) => s.addAsset);
   const insertClip = useEditorStore((s) => s.insertClip);
+  const insertClipOnTop = useEditorStore((s) => s.insertClipOnTop);
+  const editAtFrame = useEditorStore((s) => s.editAtFrame);
   const addTrack = useEditorStore((s) => s.addTrack);
   const removeTrack = useEditorStore((s) => s.removeTrack);
   const duplicateTrack = useEditorStore((s) => s.duplicateTrack);
@@ -409,16 +412,7 @@ export default function App() {
   // ── One-Click Delivery Package ─────────────────────────────────────────────
   const handleDeliveryPackage = useCallback(() => {
     const baseName = project.name || "output";
-    type DeliveryFormat = { label: string; codec: import("../shared/models").ExportCodec; outputWidth: number; outputHeight: number; suffix: string; audioOnly?: boolean };
-    const deliveryFormats: DeliveryFormat[] = [
-      { label: "YouTube 1080p", codec: "libx264", outputWidth: 1920, outputHeight: 1080, suffix: "_youtube" },
-      { label: "Instagram Reel (9:16)", codec: "libx264", outputWidth: 1080, outputHeight: 1920, suffix: "_instagram_reel" },
-      { label: "TikTok (9:16)", codec: "libx264", outputWidth: 1080, outputHeight: 1920, suffix: "_tiktok" },
-      { label: "Twitter/X (720p)", codec: "libx264", outputWidth: 1280, outputHeight: 720, suffix: "_twitter" },
-      { label: "ProRes Master", codec: "prores_ks", outputWidth: 1920, outputHeight: 1080, suffix: "_master" },
-      { label: "Audio Only (AAC)", codec: "libx264", outputWidth: 0, outputHeight: 0, suffix: "_audio", audioOnly: true },
-    ];
-    const newJobs: RenderJob[] = deliveryFormats.map(fmt => ({
+    const newJobs: RenderJob[] = DELIVERY_FORMATS.map(fmt => ({
       id: createId(),
       label: `${baseName}${fmt.suffix} · ${fmt.label}`,
       codec: fmt.codec,
@@ -431,7 +425,7 @@ export default function App() {
     }));
     setRenderJobs(prev => [...prev, ...newJobs]);
     setRenderQueueOpen(true);
-    toast.success("🚀 6 delivery jobs queued! Switch to Render Queue to start.");
+    toast.success(`🚀 ${newJobs.length} delivery jobs queued! Switch to Render Queue to start.`);
   }, [project.name]);
 
   // Subtitle cues state
@@ -446,37 +440,7 @@ export default function App() {
   const [clawbotSuggestions, setClawbotSuggestions] = useState<string[]>([]);
 
   const analyzeTimeline = useCallback(() => {
-    const fps = project.sequence.settings.fps;
-    const segs = buildTimelineSegments(project.sequence, project.assets);
-    const issues: string[] = [];
-    // Check for audio clipping
-    segs.filter(s => s.track.kind === "audio").forEach(s => {
-      if ((s.clip.volume ?? 1) > 1.5) issues.push(`⚠️ "${s.asset.name}" audio may clip (volume ${Math.round((s.clip.volume ?? 1) * 100)}%)`);
-    });
-    // Check for gaps
-    const videoSegs = segs.filter(s => s.track.kind === "video").sort((a, b) => a.startFrame - b.startFrame);
-    for (let i = 1; i < videoSegs.length; i++) {
-      if (videoSegs[i].startFrame > videoSegs[i - 1].endFrame + 2) {
-        const tc = (() => {
-          const f = videoSegs[i - 1].endFrame;
-          const s2 = Math.floor(f / fps) % 60;
-          const m2 = Math.floor(f / fps / 60);
-          return `${m2}:${String(s2).padStart(2, "0")}`;
-        })();
-        issues.push(`📍 Gap at ${tc} between clips`);
-      }
-    }
-    // Check for ungraded clips
-    const vSegs = segs.filter(s => s.track.kind === "video");
-    const ungraded = vSegs.filter(s => !s.clip.colorGrade || s.clip.colorGrade.bypass).length;
-    if (ungraded > 0 && vSegs.length > 2) issues.push(`🎨 ${ungraded} clips have no color grade applied`);
-    // Check for very short clips
-    const shortClips = vSegs.filter(s => s.durationFrames < 15);
-    if (shortClips.length > 0) issues.push(`⚡ ${shortClips.length} very short clips (under 0.5s) — may cause flash cuts`);
-    // Gap detection with close-all-gaps suggestion
-    const gapCount = videoSegs.filter((seg, i) => i > 0 && videoSegs[i].startFrame > videoSegs[i - 1].endFrame + 2).length;
-    if (gapCount > 0) issues.push(`🕳 ${gapCount} gap${gapCount > 1 ? "s" : ""} detected — use Close All Gaps in toolbar to fix`);
-    setClawbotSuggestions(issues.length > 0 ? issues : ["✅ Timeline looks healthy! No obvious issues found."]);
+    setClawbotSuggestions(analyzeTimelineHealth(project));
   }, [project]);
 
   // Subtitles / Title panels
@@ -533,10 +497,10 @@ export default function App() {
     addAssetToPool(titleAsset);
     const titleClip = createEmptyClip(virtualAssetId, firstVideoTrack.id, playback.playheadFrame);
     titleClip.titleConfig = config;
-    insertClip(titleClip);
+    insertClipOnTop(titleClip);
     toast.success(`Title "${config.mainText}" added to timeline`);
     setTitleGenPanelOpen(false);
-  }, [project, playback.playheadFrame, addAssetToPool, insertClip]);
+  }, [project, playback.playheadFrame, addAssetToPool, insertClipOnTop]);
 
   // ── FlowState Panel ────────────────────────────────────────────────────────
   const [flowstatePanelOpen, setFlowstatePanelOpen] = useState(false);
@@ -829,37 +793,19 @@ export default function App() {
 
   // ── ViewerPanel: Insert at playhead ────────────────────────────────────────
   const handleInsertAtPlayhead = useCallback((assetId: string, inFrame: number, outFrame: number) => {
-    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
-    if (!firstVideoTrack) { toast.warning("Add a video track first"); return; }
-    const insertFrame = playback.playheadFrame;
-    const durationFrames = outFrame - inFrame;
-    if (durationFrames <= 0) { toast.warning("Set In/Out points first"); return; }
-    // Ripple: move all clips at or after playhead forward by durationFrames
-    const newClip = createEmptyClip(assetId, firstVideoTrack.id, insertFrame);
-    newClip.trimStartFrames = inFrame;
-    newClip.trimEndFrames = Math.max(0,
-      Math.round((project.assets.find(a => a.id === assetId)?.durationSeconds ?? 0) * project.sequence.settings.fps) - outFrame
-    );
-    insertClip(newClip);
+    if (outFrame - inFrame <= 0) { toast.warning("Set In/Out points first"); return; }
+    pauseViewerPlayback();
+    editAtFrame(assetId, playback.playheadFrame, inFrame, outFrame, "insert");
     toast.success("✅ Clip inserted at playhead");
-  }, [project, playback.playheadFrame, insertClip]);
+  }, [playback.playheadFrame, editAtFrame]);
 
   // ── ViewerPanel: Overwrite at playhead ─────────────────────────────────────
   const handleOverwriteAtPlayhead = useCallback((assetId: string, inFrame: number, outFrame: number) => {
-    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
-    if (!firstVideoTrack) { toast.warning("Add a video track first"); return; }
-    const insertFrame = playback.playheadFrame;
-    const durationFrames = outFrame - inFrame;
-    if (durationFrames <= 0) { toast.warning("Set In/Out points first"); return; }
-    // Overwrite: place clip at playhead, then delete any clip segments it overlaps
-    const newClip = createEmptyClip(assetId, firstVideoTrack.id, insertFrame);
-    newClip.trimStartFrames = inFrame;
-    newClip.trimEndFrames = Math.max(0,
-      Math.round((project.assets.find(a => a.id === assetId)?.durationSeconds ?? 0) * project.sequence.settings.fps) - outFrame
-    );
-    insertClip(newClip);
+    if (outFrame - inFrame <= 0) { toast.warning("Set In/Out points first"); return; }
+    pauseViewerPlayback();
+    editAtFrame(assetId, playback.playheadFrame, inFrame, outFrame, "overwrite");
     toast.success("✅ Clip overwritten at playhead");
-  }, [project, playback.playheadFrame, insertClip]);
+  }, [playback.playheadFrame, editAtFrame]);
 
   function playFeedbackBeep() {
     const Ctor = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;

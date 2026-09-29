@@ -112,4 +112,63 @@ describe("timeline editing", () => {
     S().setClipVolume("c1", 0.4);
     expect(S().undoStack.length).toBe(2);
   });
+
+  it("insert edit ripples later clips and splits the one under the playhead", () => {
+    load([clip("c1", "V1", 0), clip("c2", "V1", 60)], [asset("a"), asset("b")]);
+    S().editAtFrame("b", 30, 0, 45, "insert");
+    const segs = buildTimelineSegments(S().project.sequence, S().project.assets).sort((x, y) => x.startFrame - y.startFrame);
+    expect(segs.map((s) => [s.asset.id, s.startFrame, s.endFrame])).toEqual([["a", 0, 30], ["b", 30, 75], ["a", 75, 105], ["a", 105, 165]]);
+    expect(segs[2].sourceInSeconds).toBeCloseTo((30 + 30) / 30); // right half continues where the left stopped
+  });
+
+  it("overwrite edit replaces what's underneath without moving later clips", () => {
+    load([clip("c1", "V1", 0), clip("c2", "V1", 60)], [asset("a"), asset("b")]);
+    S().editAtFrame("b", 30, 0, 45, "overwrite");
+    const segs = buildTimelineSegments(S().project.sequence, S().project.assets).sort((x, y) => x.startFrame - y.startFrame);
+    expect(segs.map((s) => [s.asset.id, s.startFrame, s.endFrame])).toEqual([["a", 0, 30], ["b", 30, 75], ["a", 75, 120]]);
+  });
+
+  it("source edits bring linked audio", () => {
+    load([], [asset("b", 10, { hasAudio: true })]);
+    S().editAtFrame("b", 0, 30, 90, "overwrite");
+    const clips = S().project.sequence.clips;
+    expect(clips).toHaveLength(2);
+    expect(clips[0].linkedGroupId).toBeTruthy();
+    expect(clips[0].linkedGroupId).toBe(clips[1].linkedGroupId);
+    expect(seg(clips[1].id).track.kind).toBe("audio");
+    expect([seg(clips[1].id).startFrame, seg(clips[1].id).endFrame]).toEqual([0, 60]);
+  });
+
+  it("dropping over a sped-up clip trims it by source frames", () => {
+    load([clip("fast", "V1", 0, { speed: 2, trimStartFrames: 0, trimEndFrames: 0 })], [asset("a"), asset("b", 1)]); // 300 src frames → 150
+    S().dropAssetAtFrame("b", "V1", 50);
+    const segs = buildTimelineSegments(S().project.sequence, S().project.assets).sort((x, y) => x.startFrame - y.startFrame);
+    expect(segs.map((s) => [s.asset.id, s.startFrame, s.endFrame])).toEqual([["a", 0, 50], ["b", 50, 80], ["a", 80, 150]]);
+    expect(segs[2].sourceInSeconds).toBeCloseTo(160 / 30);
+  });
+
+  it("titles go on the top track, or a new top track when it's occupied", () => {
+    load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
+    S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
+    const tracks = S().project.sequence.tracks;
+    expect(tracks).toHaveLength(3);
+    expect(seg("title").track.id).toBe(tracks[0].id);
+    expect(seg("c1").track.id).toBe("V1");
+    S().insertClipOnTop({ ...createEmptyClip("t", "V1", 100), id: "title2" });
+    expect(S().project.sequence.tracks).toHaveLength(3); // free spot on the (new) top track
+  });
+});
+
+import { analyzeTimelineHealth, pictureGaps } from "../shared/timelineHealth";
+describe("timeline health", () => {
+  it("finds gaps in the picture, not per-track holes covered by another track", () => {
+    load([clip("c1", "V1", 0), clip("b", "V2" as string, 60), clip("c2", "V1", 200)]);
+    S().addTrack("video");
+    const p = S().project;
+    const v2 = p.sequence.tracks.find((t) => t.kind === "video" && t.id !== "V1")!.id;
+    const proj = { ...p, sequence: { ...p.sequence, clips: p.sequence.clips.map((c) => c.id === "b" ? { ...c, trackId: v2 } : c) } };
+    expect(pictureGaps(proj)).toEqual([{ start: 120, end: 200 }]);
+    const msgs = analyzeTimelineHealth(proj);
+    expect(msgs.filter((m) => /gap/.test(m))).toHaveLength(1);
+  });
 });
