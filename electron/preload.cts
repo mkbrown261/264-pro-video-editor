@@ -144,6 +144,8 @@ const electronAPI = {
     ipcRenderer.invoke("publish:upload-youtube", params),
   uploadToTikTok: (params: unknown): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke("publish:upload-tiktok", params),
+  generateStoryboard: (prompt: string): Promise<{ success: boolean; scenes?: Array<{ label: string; durationSeconds: number; description: string; broll?: string; musicMood?: string }>; error?: string; noKey?: boolean }> =>
+    ipcRenderer.invoke('ai:storyboard', prompt),
   getAiKeys: (): Promise<{ groq: string; openai: string }> => ipcRenderer.invoke('settings:get-ai-keys'),
   setAiKeys: (keys: { groq?: string; openai?: string }): Promise<{ ok: boolean }> => ipcRenderer.invoke('settings:set-ai-keys', keys),
   testApiKey: (service: string, key: string): Promise<{ ok: boolean | null; message: string }> => ipcRenderer.invoke('settings:test-api-key', service, key),

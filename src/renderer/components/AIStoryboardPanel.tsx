@@ -5,6 +5,7 @@
  */
 import React, { useState } from "react";
 import { createId } from "../../shared/models";
+import { toast } from "../lib/toast";
 import type { TimelineTrack, TimelineClip, TimelineMarker, MediaAsset } from "../../shared/models";
 
 interface StoryboardScene {
@@ -123,15 +124,26 @@ export function AIStoryboardPanel({ fps, onCreateTimeline, onClose }: Props) {
   const [scenes, setScenes] = useState<StoryboardScene[] | null>(null);
   const [generating, setGenerating] = useState(false);
 
-  function handleGenerate() {
+  const [source, setSource] = useState<"ai" | "template" | null>(null);
+
+  async function handleGenerate() {
     if (!prompt.trim()) return;
     setGenerating(true);
-    // Simulate brief AI "thinking" delay
-    setTimeout(() => {
-      const generated = parsePromptToScenes(prompt, fps);
-      setScenes(generated);
+    try {
+      const gen = (window as unknown as { electronAPI?: { generateStoryboard?: (p: string) => Promise<{ success: boolean; scenes?: Omit<StoryboardScene, "id" | "color">[]; error?: string; noKey?: boolean }> } }).electronAPI?.generateStoryboard;
+      const r = gen ? await gen(prompt) : null;
+      if (r?.success && r.scenes?.length) {
+        setScenes(r.scenes.map((sc, i) => ({ ...sc, id: createId(), color: SCENE_COLORS[i % SCENE_COLORS.length] })));
+        setSource("ai");
+        return;
+      }
+      if (r && !r.noKey) toast.warning(`AI storyboard failed (${r.error ?? "unknown error"}) — using the built-in template`);
+      // Built-in structure template from keywords in the prompt.
+      setScenes(parsePromptToScenes(prompt, fps));
+      setSource("template");
+    } finally {
       setGenerating(false);
-    }, 800);
+    }
   }
 
   function handleCreateTimeline() {
@@ -259,7 +271,7 @@ export function AIStoryboardPanel({ fps, onCreateTimeline, onClose }: Props) {
         {scenes && (
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>
-              Generated Structure · {scenes.length} scenes · {fmtDur(totalDur)} total
+              {source === "template" ? "Template structure (add a Groq/OpenAI key for AI planning)" : "AI-planned structure"} · {scenes.length} scenes · {fmtDur(totalDur)} total
             </div>
             {scenes.map((scene, i) => (
               <div

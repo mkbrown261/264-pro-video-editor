@@ -1960,6 +1960,49 @@ async function whisperTranscribe(filePath: string, language?: string): Promise<{
   }
 }
 
+/** JSON-mode chat completion via Groq (preferred) or OpenAI. */
+async function chatJson(system: string, user: string): Promise<unknown> {
+  const groq = getGroqKey(), openai = getOpenAiKey();
+  if (!groq && !openai) throw new Error('NO_AI_KEY');
+  const resp = await fetch(groq ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${groq || openai}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: groq ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini',
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const body = await resp.text();
+  if (!resp.ok) throw new Error(`${groq ? 'Groq' : 'OpenAI'} error ${resp.status}: ${body.slice(0, 200)}`);
+  const content = (JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content ?? '{}';
+  return JSON.parse(content);
+}
+
+ipcMain.handle('ai:storyboard', async (_ev, prompt: string) => {
+  try {
+    const data = await chatJson(
+      'You plan video edits. Reply with JSON {"scenes":[{"label":string,"durationSeconds":number,"description":string,"broll":string,"musicMood":string}]}. ' +
+      'Use 3-12 scenes whose durations add up to the requested length (default 3 minutes). Labels are short (1-4 words).',
+      prompt,
+    ) as { scenes?: Array<Record<string, unknown>> };
+    const scenes = (data.scenes ?? []).filter((x) => typeof x.label === 'string').slice(0, 20).map((x) => ({
+      label: String(x.label).slice(0, 60),
+      durationSeconds: Math.max(1, Math.min(600, Number(x.durationSeconds) || 10)),
+      description: String(x.description ?? '').slice(0, 400),
+      broll: x.broll ? String(x.broll).slice(0, 200) : undefined,
+      musicMood: x.musicMood ? String(x.musicMood).slice(0, 60) : undefined,
+    }));
+    if (!scenes.length) return { success: false, error: 'The model returned no scenes.' };
+    return { success: true, scenes };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: msg, noKey: msg === 'NO_AI_KEY' };
+  }
+});
+
 ipcMain.handle('ai:transcribe', async (_ev, args: { filePath: string; language?: string }) => {
   try {
     const fs = await import('fs');
