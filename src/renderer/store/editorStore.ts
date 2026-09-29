@@ -3443,32 +3443,31 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   closeAllGaps: () => {
     set(withUndo("Close All Gaps", (state) => {
-      // For each video track, ripple clips together (remove all gaps)
-      const fps = state.project.sequence.settings.fps;
-      const assetsById = new Map(state.project.assets.map(a => [a.id, a]));
-      const videoTrackIds = new Set(
-        state.project.sequence.tracks
-          .filter(t => t.kind === "video")
-          .map(t => t.id)
-      );
-      // Group clips by track, sort, repack
-      const cursorByTrack = new Map<string, number>();
-      const newClips = [...state.project.sequence.clips]
-        .sort((a, b) => a.startFrame - b.startFrame)
-        .map(clip => {
-          if (!videoTrackIds.has(clip.trackId)) return clip;
-          const asset = assetsById.get(clip.assetId);
-          if (!asset) return clip;
-          const cursor = cursorByTrack.get(clip.trackId) ?? 0;
-          const duration = getClipDurationFrames(clip, asset, fps);
-          cursorByTrack.set(clip.trackId, cursor + duration);
-          return { ...clip, startFrame: cursor };
-        });
+      // Remove only time that's empty on every track, and ripple all unlocked
+      // tracks together so linked audio and layered clips keep their sync.
+      const seq = state.project.sequence;
+      const spans = buildTimelineSegments(seq, state.project.assets)
+        .map((g) => [g.startFrame, g.endFrame] as const)
+        .sort((a, b) => a[0] - b[0]);
+      if (spans.length === 0) return state;
+      const gaps: Array<[number, number]> = [];
+      let covered = 0;
+      for (const [start, end] of spans) {
+        if (start > covered) gaps.push([covered, start]);
+        covered = Math.max(covered, end);
+      }
+      if (gaps.length === 0) return state;
+      const locked = new Set(seq.tracks.filter((t) => t.locked).map((t) => t.id));
+      const removedBefore = (frame: number) =>
+        gaps.reduce((sum, [a, b]) => sum + Math.max(0, Math.min(b, frame) - a), 0);
       return {
         ...state,
         project: {
           ...state.project,
-          sequence: { ...state.project.sequence, clips: newClips },
+          sequence: {
+            ...seq,
+            clips: seq.clips.map((c) => locked.has(c.trackId) ? c : { ...c, startFrame: c.startFrame - removedBefore(c.startFrame) }),
+          },
         },
       };
     }));

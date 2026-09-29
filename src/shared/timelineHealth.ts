@@ -38,7 +38,7 @@ export function analyzeTimelineHealth(project: EditorProject): string[] {
   const gaps = pictureGaps(project);
   if (gaps.length) {
     const where = gaps.slice(0, 3).map((g) => tc(g.start, fps)).join(", ");
-    issues.push(`🕳 ${gaps.length} gap${gaps.length > 1 ? "s" : ""} in the picture (at ${where}${gaps.length > 3 ? ", …" : ""}) — use Close All Gaps to fix`);
+    issues.push(`🕳 ${gaps.length} black gap${gaps.length > 1 ? "s" : ""} in the picture (at ${where}${gaps.length > 3 ? ", …" : ""}) — Close All Gaps removes the ones with nothing under them`);
   }
 
   // Footage only: titles, generated and nested clips aren't graded or flash-cut candidates.

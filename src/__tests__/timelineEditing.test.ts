@@ -147,6 +147,21 @@ describe("timeline editing", () => {
     expect(segs[2].sourceInSeconds).toBeCloseTo(160 / 30);
   });
 
+  it("close all gaps ripples every track together and keeps linked audio in sync", () => {
+    load([
+      clip("v1", "V1", 30, { linkedGroupId: "g1" }), clip("a1", "A1", 30, { linkedGroupId: "g1" }),
+      clip("v2", "V1", 150, { linkedGroupId: "g2" }), clip("a2", "A1", 150, { linkedGroupId: "g2" }),
+    ]);
+    S().closeAllGaps();
+    expect([seg("v1").startFrame, seg("a1").startFrame, seg("v2").startFrame, seg("a2").startFrame]).toEqual([0, 0, 60, 60]);
+  });
+
+  it("close all gaps keeps a gap that has audio under it", () => {
+    load([clip("v1", "V1", 0), clip("music", "A1", 0, { trimEndFrames: 0 }), clip("v2", "V1", 100)]);
+    S().closeAllGaps();
+    expect(seg("v2").startFrame).toBe(100);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
