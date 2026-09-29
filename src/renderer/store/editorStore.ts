@@ -3402,34 +3402,32 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   syncMulticamClips: (clipIds, offsetsSeconds) => {
+    // offsetsSeconds[i]: how far clip i's audio lags clipIds[0]'s (measured from
+    // each clip's in-point). Clip i goes to start(ref) − lag; everything shifts
+    // right if that would start before frame 0. Linked audio follows its angle.
     set(withUndo("Sync Multicam by Audio", (state) => {
-      // No-op if empty arrays to avoid Math.min(...[]) = Infinity
-      if (!clipIds || clipIds.length === 0 || !offsetsSeconds || offsetsSeconds.length === 0) return state;
-
+      if (!clipIds?.length || clipIds.length !== offsetsSeconds?.length) return state;
       const fps = state.project.sequence.settings.fps;
-      // Normalize so the earliest clip doesn't go negative
-      const minOffset = offsetsSeconds.length > 0 ? Math.min(...offsetsSeconds) : 0;
-      const normalizedOffsets = offsetsSeconds.map(o => o - minOffset);
-      // Each angle's linked partners (its audio) move with it.
+      const byId = new Map(state.project.sequence.clips.map((c) => [c.id, c]));
+      const ref = byId.get(clipIds[0]);
+      if (!ref) return state;
+      const wanted = clipIds.map((id, i) => ref.startFrame - Math.round((offsetsSeconds[i] ?? 0) * fps));
+      const shift = Math.max(0, -Math.min(...wanted));
       const deltaById = new Map<string, number>();
-      clipIds.forEach((id, idx) => {
-        const d = Math.round((normalizedOffsets[idx] ?? 0) * fps);
-        for (const c of getLinkedClips(state.project, id)) if (!deltaById.has(c.id) || c.id === id) deltaById.set(c.id, d);
+      clipIds.forEach((id, i) => {
+        const c = byId.get(id);
+        if (!c) return;
+        const d = wanted[i] + shift - c.startFrame;
+        for (const p of getLinkedClips(state.project, id)) deltaById.set(p.id, d);
       });
-      const newClips = state.project.sequence.clips.map(c => {
-        const deltaFrames = deltaById.get(c.id);
-        if (deltaFrames === undefined) return c;
-        return { ...c, startFrame: Math.max(0, c.startFrame + deltaFrames) };
+      const newClips = state.project.sequence.clips.map((c) => {
+        const d = deltaById.get(c.id);
+        return d ? { ...c, startFrame: c.startFrame + d } : c;
       });
-      return {
-        ...state,
-        project: {
-          ...state.project,
-          sequence: { ...state.project.sequence, clips: newClips },
-        },
-      };
+      return { project: { ...state.project, sequence: { ...state.project.sequence, clips: newClips } } };
     }));
   },
+
 
   patchAsset: (assetId, updates) => {
     set((state) => ({

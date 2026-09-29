@@ -250,6 +250,17 @@ describe("timeline editing", () => {
     expect([seg("x").startFrame, seg("y").startFrame, seg("z").startFrame, seg("ya").startFrame]).toEqual([0, 60, 150, 60]);
   });
 
+  it("multicam sync places each angle at the reference start minus its lag, with its audio", () => {
+    load([
+      clip("cam1", "V1", 100), clip("cam2", "V2" as string, 0, { linkedGroupId: "g" }), clip("cam2a", "A1", 0, { linkedGroupId: "g" }),
+    ]);
+    S().syncMulticamClips(["cam1", "cam2"], [0, 1.5]); // cam2's audio lags by 1.5 s = 45 frames
+    const at = (id: string) => S().project.sequence.clips.find((c) => c.id === id)!.startFrame;
+    expect([at("cam1"), at("cam2"), at("cam2a")]).toEqual([100, 55, 55]);
+    S().syncMulticamClips(["cam1", "cam2"], [0, 5]); // would start at −50 → everything shifts right
+    expect([at("cam1"), at("cam2"), at("cam2a")]).toEqual([150, 0, 0]);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });

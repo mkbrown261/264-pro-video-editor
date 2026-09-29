@@ -110,7 +110,7 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
           clipId: a.clipId,
           assetPath: seg?.asset.sourcePath ?? '',
           trimStartSeconds: (seg?.clip.trimStartFrames ?? 0) / (sequenceFps || 30),
-          durationSeconds: Math.min(30, seg?.asset.durationSeconds ?? 30),
+          durationSeconds: Math.min(120, seg?.durationSeconds ?? 30),
         };
       }).filter(c => c.assetPath);
 
@@ -121,7 +121,7 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await (window as any).electronAPI?.syncMulticamByAudio?.({ clips: clipsWithPaths }) as { success: boolean; offsets?: number[]; error?: string } | undefined;
+      const result = await (window as any).electronAPI?.syncMulticamByAudio?.({ clips: clipsWithPaths }) as { success: boolean; offsets?: number[]; confidences?: number[]; error?: string } | undefined;
 
       if (!result?.success) {
         setSyncStatus(`Sync failed: ${result?.error ?? 'unknown error'}`);
@@ -131,7 +131,8 @@ export function MulticamPanel({ segments, playheadFrame, sequenceFps, onCutToAng
 
       const clipIds = clipsWithPaths.map(c => c.clipId);
       onSyncByAudio?.(clipIds, result.offsets ?? []);
-      setSyncStatus(`✅ Synced ${clipIds.length} angles`);
+      const weak = (result.confidences ?? []).filter((c, i) => i > 0 && c < 0.2).length;
+      setSyncStatus(weak ? `⚠️ Synced — ${weak} angle${weak > 1 ? 's' : ''} had little matching audio; check by eye` : `✅ Synced ${clipIds.length} angles`);
       setTimeout(() => setSyncStatus(''), 3000);
     } catch (err) {
       setSyncStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);

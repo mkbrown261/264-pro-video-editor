@@ -32,6 +32,7 @@ function getOpenAiKey(): string {
   return typeof k === "string" ? k : "";
 }
 import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
+import { estimateAudioOffset } from "../src/shared/audioSync.js";
 import { cancelGpuExport, finishGpuExport, readGpuSourceFrame, startGpuExport, writeGpuFrame } from "./gpuExport.js";
 import {
   detectBestHWEncoder,
@@ -2376,132 +2377,36 @@ ipcMain.handle('export:fcpxml', async (_ev, project: unknown) => {
 });
 
 // ── Multicam Audio Sync ───────────────────────────────────────────────────────
+/** Mono float PCM of a file's audio (for sync analysis). */
+async function readMonoPcm(filePath: string, startSeconds = 0, durationSeconds = 120, sampleRate = 8000): Promise<Float32Array> {
+  const { spawn } = await import('child_process');
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const p = spawn(getEnvironmentStatus().ffmpegPath, ['-v', 'error', '-ss', Math.max(0, startSeconds).toFixed(3), '-i', filePath,
+      '-t', durationSeconds.toFixed(3), '-vn', '-ac', '1', '-ar', String(sampleRate), '-f', 'f32le', 'pipe:1']);
+    const timer = setTimeout(() => { p.kill(); reject(new Error('Audio analysis timed out')); }, 60_000);
+    p.stdout.on('data', (d: Buffer) => chunks.push(d));
+    p.on('error', (e) => { clearTimeout(timer); reject(e); });
+    p.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`Couldn't read audio from ${basename(filePath)}`));
+      const buf = Buffer.concat(chunks);
+      resolve(new Float32Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 4)));
+    });
+  });
+}
+
 ipcMain.handle('multicam:sync-by-audio', async (_ev, args: {
   clips: Array<{ clipId: string; assetPath: string; trimStartSeconds: number; durationSeconds: number }>;
 }) => {
-  let pcmFiles: string[] | undefined;
+  // offsets[i] = seconds by which clip i's audio lags clip 0's (see estimateAudioOffset).
   try {
-    const fsM = await import('fs');
-    const pathM = await import('path');
-    const osM = await import('os');
-    const { spawn } = await import('child_process');
-
-    // Get ffmpeg path
-    let ffmpegBin = 'ffmpeg';
-    try {
-      const ffmpegStatic = require('ffmpeg-static');
-      const p = (ffmpegStatic as { default?: string }).default ?? (ffmpegStatic as string);
-      if (typeof p === 'string' && p) ffmpegBin = p;
-    } catch { /* use system ffmpeg */ }
-
-    const tmpDir = pathM.join(osM.tmpdir(), '264pro-multicam-sync');
-    fsM.mkdirSync(tmpDir, { recursive: true });
-
-    // Step 1: Extract mono 8kHz audio PCM for each clip (fast, low memory)
-    pcmFiles = [];
-    for (let i = 0; i < args.clips.length; i++) {
-      const clip = args.clips[i];
-      const outPcm = pathM.join(tmpDir, `clip_${i}.pcm`);
-      pcmFiles.push(outPcm);
-
-      await new Promise<void>((resolve, reject) => {
-        const proc = spawn(ffmpegBin, [
-          '-y',
-          '-ss', clip.trimStartSeconds.toFixed(3),
-          '-i', clip.assetPath,
-          '-t', Math.min(clip.durationSeconds, 60).toFixed(3), // max 60s for correlation
-          '-vn',
-          '-ac', '1',        // mono
-          '-ar', '8000',     // 8kHz — enough for correlation
-          '-f', 'f32le',     // raw 32-bit float PCM
-          outPcm,
-        ]);
-        proc.on('close', (code: number) => code === 0 ? resolve() : reject(new Error(`FFmpeg exit ${code}`)));
-        proc.on('error', reject);
-        setTimeout(() => { proc.kill(); reject(new Error('timeout')); }, 30000);
-      });
-    }
-
-    if (pcmFiles.length < 2) {
-      return { success: false, error: 'Need at least 2 clips to sync' };
-    }
-
-    // Step 2: Read PCM data
-    const sampleRate = 8000;
-    const waveforms: Float32Array[] = pcmFiles.map(f => {
-      const buf = fsM.readFileSync(f);
-      const arr = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
-      return arr;
-    });
-
-    // Step 3: Cross-correlate each clip against the reference (clip 0)
-    // Find the lag that maximizes correlation → that's the sync offset
-    const reference = waveforms[0];
-    const offsets: number[] = [0]; // reference is 0 offset
-
-    for (let i = 1; i < waveforms.length; i++) {
-      const target = waveforms[i];
-      const maxLagSamples = sampleRate * 30; // search up to ±30 seconds
-      const refLen = Math.min(reference.length, sampleRate * 30);
-      const tgtLen = Math.min(target.length, sampleRate * 30);
-
-      let bestLag = 0;
-      let bestScore = -Infinity;
-
-      // Normalized cross-correlation via sliding window
-      // Use step size of 100 samples (12.5ms at 8kHz) for speed, then refine
-      const step = 100;
-      for (let lag = -maxLagSamples; lag <= maxLagSamples; lag += step) {
-        let score = 0;
-        const samples = Math.min(refLen, tgtLen, 4000); // use 0.5s window
-        for (let j = 0; j < samples; j++) {
-          const ri = j;
-          const ti = j + lag;
-          if (ti < 0 || ti >= target.length || ri >= reference.length) continue;
-          score += reference[ri] * target[ti];
-        }
-        if (score > bestScore) {
-          bestScore = score;
-          bestLag = lag;
-        }
-      }
-
-      // Refine around best lag with step 1
-      for (let lag = bestLag - step; lag <= bestLag + step; lag++) {
-        let score = 0;
-        const samples = Math.min(refLen, tgtLen, 8000);
-        for (let j = 0; j < samples; j++) {
-          const ri = j;
-          const ti = j + lag;
-          if (ti < 0 || ti >= target.length || ri >= reference.length) continue;
-          score += reference[ri] * target[ti];
-        }
-        if (score > bestScore) {
-          bestScore = score;
-          bestLag = lag;
-        }
-      }
-
-      // Convert lag in samples to seconds
-      offsets.push(bestLag / sampleRate);
-    }
-
-    return {
-      success: true,
-      offsets, // offsets[i] = seconds to shift clip i relative to clip 0
-      // Positive offset = clip i starts later than reference
-      // Negative offset = clip i starts earlier than reference
-    };
-  } catch(e) {
+    if (args.clips.length < 2) return { success: false, error: 'Need at least 2 clips to sync' };
+    const pcm = await Promise.all(args.clips.map((c) => readMonoPcm(c.assetPath, c.trimStartSeconds, Math.min(120, Math.max(5, c.durationSeconds)))));
+    const results = pcm.map((p, i) => (i === 0 ? { lagSeconds: 0, confidence: 1 } : estimateAudioOffset(pcm[0], p, 8000, 60)));
+    return { success: true, offsets: results.map((r) => r.lagSeconds), confidences: results.map((r) => r.confidence) };
+  } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    // Clean up temp files regardless of success or failure
-    if (pcmFiles) {
-      try {
-        const fsClean = require('fs') as typeof import('fs');
-        pcmFiles.forEach(f => { try { fsClean.unlinkSync(f); } catch { /* ignore */ } });
-      } catch { /* ignore */ }
-    }
   }
 });
 
@@ -2831,107 +2736,12 @@ ipcMain.handle('ai:frame-interpolate', async (_ev, args: {
 // Returns deltaSeconds: how many seconds to shift clip B to align with clip A.
 ipcMain.handle('ai:audio-sync', async (_ev, args: { pathA: string; pathB: string }) => {
   try {
-    const { pathA, pathB } = args;
-    if (!pathA || !pathB) return { success: false, error: 'Missing paths' };
-    const fsM = await import('fs');
-    if (!fsM.existsSync(pathA)) return { success: false, error: `File not found: ${pathA}` };
-    if (!fsM.existsSync(pathB)) return { success: false, error: `File not found: ${pathB}` };
-    const pathM = await import('path');
-    const os = await import('os');
-    const { spawn } = await import('child_process');
-    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
-    const tmpDir = os.tmpdir();
-    const wavA = pathM.join(tmpDir, `sync_a_${Date.now()}.wav`);
-    const wavB = pathM.join(tmpDir, `sync_b_${Date.now()}.wav`);
-    // Extract mono 8kHz audio for fast correlation
-    const extractWav = (input: string, output: string) => new Promise<void>((res, rej) => {
-      const p = spawn(ffmpegBin, ['-i', input, '-ac', '1', '-ar', '8000', '-t', '60', '-y', output]);
-      p.on('close', (c) => c === 0 ? res() : rej(new Error(`FFmpeg exit ${c}`)));
-      p.on('error', rej);
-    });
-    await extractWav(pathA, wavA);
-    await extractWav(pathB, wavB);
-    // Use FFmpeg amerge + correlation filter to find offset
-    // We use the `aresample+astats` approach: cross-correlate via channelsplit
-    // Simpler: use FFmpeg's `ametadata` with `silencedetect` on both then match peaks
-    // Best practical approach without scipy: find loudest peak in each, diff the timestamps
-    const findPeak = (wavPath: string): Promise<number> => new Promise((res) => {
-      const out: string[] = [];
-      const p = spawn(ffmpegBin, [
-        '-i', wavPath,
-        '-af', 'silencedetect=noise=-30dB:d=0.1,ametadata=print:key=lavfi.silence_start',
-        '-f', 'null', '-',
-      ]);
-      p.stderr?.on('data', (d: Buffer) => out.push(d.toString()));
-      const p2 = spawn(ffmpegBin, [
-        '-i', wavPath,
-        '-af', 'astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level',
-        '-f', 'null', '-',
-      ]);
-      // Use volumedetect to find approximate loudest moment
-      const out2: string[] = [];
-      const p3 = spawn(ffmpegBin, ['-i', wavPath, '-af', 'volumedetect', '-f', 'null', '-']);
-      p3.stderr?.on('data', (d: Buffer) => out2.push(d.toString()));
-      p3.on('close', () => {
-        // Fall back: just find first loud transient via showinfo
-        const out3: string[] = [];
-        const p4 = spawn(ffmpegBin, [
-          '-i', wavPath,
-          '-af', `agate=threshold=0.1,ametadata=print:file=-`,
-          '-f', 'null', '-',
-        ]);
-        p4.stderr?.on('data', (d: Buffer) => out3.push(d.toString()));
-        p4.on('close', () => {
-          // Parse pts_time from showinfo
-          const showInfo: string[] = [];
-          const p5 = spawn(ffmpegBin, ['-i', wavPath, '-af', 'asetnsamples=1024,showinfo', '-f', 'null', '-']);
-          p5.stderr?.on('data', (d: Buffer) => showInfo.push(d.toString()));
-          p5.on('close', () => {
-            // Find first frame with high RMS
-            const allText = showInfo.join('');
-            const match = allText.match(/pts_time:(\d+\.?\d*)/);
-            res(match ? parseFloat(match[1]) : 0);
-          });
-          p5.on('error', () => res(0));
-        });
-        p4.on('error', () => res(0));
-      });
-      p3.on('error', () => res(0));
-      p.on('error', () => res(0));
-      p2.on('error', () => {});
-    });
-
-    // Simpler & more reliable: extract peak loudness timestamp via astats per chunk
-    const findLoudestTimestamp = (wavPath: string): Promise<number> => new Promise((res) => {
-      const out: string[] = [];
-      const p = spawn(ffmpegBin, [
-        '-i', wavPath,
-        '-af', 'asplit[a][b],[a]showinfo[a2],[b]anull',
-        '-map', '[a2]', '-f', 'null', '-',
-      ]);
-      p.stderr?.on('data', (d: Buffer) => out.push(d.toString()));
-      p.on('close', () => {
-        const text = out.join('');
-        // Find pts_time with highest rms — approximate by finding clap/transient
-        // Use simplest heuristic: first non-silence onset
-        const silOut: string[] = [];
-        const ps = spawn(ffmpegBin, ['-i', wavPath, '-af', 'silencedetect=noise=-25dB:d=0.05', '-f', 'null', '-']);
-        ps.stderr?.on('data', (d: Buffer) => silOut.push(d.toString()));
-        ps.on('close', () => {
-          const silText = silOut.join('');
-          const endMatch = silText.match(/silence_end:\s*([\d.]+)/);
-          res(endMatch ? parseFloat(endMatch[1]) : 0);
-        });
-        ps.on('error', () => res(0));
-      });
-      p.on('error', () => res(0));
-    });
-
-    const [peakA, peakB] = await Promise.all([findLoudestTimestamp(wavA), findLoudestTimestamp(wavB)]);
-    // Clean up temp files
-    try { fsM.unlinkSync(wavA); fsM.unlinkSync(wavB); } catch {}
-    const deltaSeconds = peakA - peakB; // shift B by this many seconds to align with A
-    return { success: true, deltaSeconds, peakA, peakB };
+    if (!args.pathA || !args.pathB) return { success: false, error: 'Missing paths' };
+    const [a, b] = await Promise.all([readMonoPcm(args.pathA), readMonoPcm(args.pathB)]);
+    const r = estimateAudioOffset(a, b, 8000, 60);
+    if (r.confidence < 0.15) return { success: false, error: "Couldn't find matching audio in the two clips." };
+    // B's content lags A by lagSeconds, so B moves earlier by that much.
+    return { success: true, deltaSeconds: -r.lagSeconds, confidence: r.confidence };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -3370,29 +3180,10 @@ ipcMain.handle('ai:extract-waveform', async (_ev, args: { filePath: string; samp
 // ── W2-4: Multicam Audio Sync (align multiple clips by audio) ────────────────
 ipcMain.handle('ai:multicam-sync', async (_ev, args: { clips: Array<{ id: string; filePath: string }> }) => {
   try {
-    const { clips } = args;
-    if (!clips || clips.length < 2) return { success: false, error: 'Need at least 2 clips' };
-    const fsM = await import('fs');
-    const pathM = await import('path');
-    const os = await import('os');
-    const { spawn } = await import('child_process');
-    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
-    // Extract onset timestamps for each clip
-    const getOnset = async (filePath: string): Promise<number> => {
-      if (!fsM.existsSync(filePath)) return 0;
-      const silOut: string[] = [];
-      await new Promise<void>((res) => {
-        const p = spawn(ffmpegBin, ['-i', filePath, '-af', 'silencedetect=noise=-25dB:d=0.05', '-f', 'null', '-']);
-        p.stderr?.on('data', (d: Buffer) => silOut.push(d.toString()));
-        p.on('close', () => res()); p.on('error', () => res());
-      });
-      const m = silOut.join('').match(/silence_end:\s*([\d.]+)/);
-      return m ? parseFloat(m[1]) : 0;
-    };
-    const onsets = await Promise.all(clips.map(c => getOnset(c.filePath)));
-    const reference = onsets[0];
-    const offsets = onsets.map(t => reference - t); // shift each clip by this many seconds
-    return { success: true, offsets: clips.map((c, i) => ({ id: c.id, offsetSeconds: offsets[i] })) };
+    if (!args.clips || args.clips.length < 2) return { success: false, error: 'Need at least 2 clips' };
+    const pcm = await Promise.all(args.clips.map((c) => readMonoPcm(c.filePath)));
+    // offsetSeconds: how far to shift each clip (relative to the first) to align.
+    return { success: true, offsets: args.clips.map((c, i) => ({ id: c.id, offsetSeconds: i === 0 ? 0 : -estimateAudioOffset(pcm[0], pcm[i], 8000, 60).lagSeconds })) };
   } catch (e) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
 });
 
