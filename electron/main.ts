@@ -33,6 +33,7 @@ function getOpenAiKey(): string {
 }
 import type { ExportRequest, MediaAsset } from "../src/shared/models.js";
 import { estimateAudioOffset } from "../src/shared/audioSync.js";
+import { trackBeats } from "../src/shared/beatTrack.js";
 import { cancelGpuExport, finishGpuExport, readGpuSourceFrame, startGpuExport, writeGpuFrame } from "./gpuExport.js";
 import {
   detectBestHWEncoder,
@@ -2751,71 +2752,10 @@ ipcMain.handle('ai:audio-sync', async (_ev, args: { pathA: string; pathB: string
 // Returns BPM + beat timestamps for the audio track so cuts can snap to beats.
 ipcMain.handle('ai:detect-beats', async (_ev, args: { filePath: string }) => {
   try {
-    const { filePath } = args;
-    if (!filePath) return { success: false, error: 'Missing filePath' };
-    const fsM = await import('fs');
-    if (!fsM.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
-    const pathM = await import('path');
-    const os = await import('os');
-    const { spawn } = await import('child_process');
-    const ffmpegBin = getEnvironmentStatus().ffmpegPath ?? 'ffmpeg';
-    const tmpWav = pathM.join(os.tmpdir(), `beats_${Date.now()}.wav`);
-    // Extract mono 22050Hz (standard for beat detection)
-    await new Promise<void>((res, rej) => {
-      const p = spawn(ffmpegBin, ['-i', filePath, '-ac', '1', '-ar', '22050', '-t', '300', '-y', tmpWav]);
-      p.on('close', (c) => c === 0 ? res() : rej(new Error(`FFmpeg exit ${c}`)));
-      p.on('error', rej);
-    });
-    // Use FFmpeg ebur128 + astats to estimate BPM via energy envelope
-    // Real BPM detection without aubio/librosa: analyze energy peaks in 512-sample windows
-    // We compute RMS per 23ms window (512/22050) and find periodic peaks
-    const out: string[] = [];
-    await new Promise<void>((res) => {
-      const p = spawn(ffmpegBin, [
-        '-i', tmpWav,
-        '-af', 'asetnsamples=512,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-',
-        '-f', 'null', '-',
-      ]);
-      p.stdout?.on('data', (d: Buffer) => out.push(d.toString()));
-      p.stderr?.on('data', (d: Buffer) => out.push(d.toString()));
-      p.on('close', () => res());
-      p.on('error', () => res());
-    });
-    try { fsM.unlinkSync(tmpWav); } catch {}
-    // Parse RMS values and find periodic peaks
-    const rmsValues: number[] = [];
-    const frameSize = 512 / 22050; // seconds per frame
-    const lines = out.join('').split('\n');
-    for (const line of lines) {
-      const m = line.match(/lavfi\.astats\.Overall\.RMS_level=([\-\d.]+)/);
-      if (m) {
-        const db = parseFloat(m[1]);
-        rmsValues.push(isFinite(db) ? db : -91);
-      }
-    }
-    // Find peaks (local maxima above median)
-    if (rmsValues.length < 10) return { success: true, bpm: 120, beats: [], confidence: 0 };
-    const sorted = [...rmsValues].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length * 0.7)];
-    const peaks: number[] = [];
-    const minPeakGap = Math.round(0.2 / frameSize); // min 200ms between beats
-    let lastPeak = -minPeakGap;
-    for (let i = 1; i < rmsValues.length - 1; i++) {
-      if (rmsValues[i] > median && rmsValues[i] >= rmsValues[i-1] && rmsValues[i] >= rmsValues[i+1] && i - lastPeak >= minPeakGap) {
-        peaks.push(i * frameSize);
-        lastPeak = i;
-      }
-    }
-    // Estimate BPM from peak intervals
-    if (peaks.length < 2) return { success: true, bpm: 120, beats: peaks, confidence: 0 };
-    const intervals = peaks.slice(1).map((p, i) => p - peaks[i]);
-    const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    const bpm = Math.round(60 / avgInterval);
-    const clampedBpm = Math.max(60, Math.min(200, bpm));
-    // Confidence: how consistent are the intervals?
-    const variance = intervals.reduce((a, b) => a + Math.pow(b - avgInterval, 2), 0) / intervals.length;
-    const confidence = Math.max(0, Math.min(1, 1 - Math.sqrt(variance) / avgInterval));
-    return { success: true, bpm: clampedBpm, beats: peaks, confidence: Math.round(confidence * 100) };
+    if (!args.filePath) return { success: false, error: 'Missing filePath' };
+    const r = trackBeats(await readMonoPcm(args.filePath, 0, 600, 22050), 22050);
+    if (!r.beats.length) return { success: false, error: 'No beat found in this audio.' };
+    return { success: true, bpm: Math.round(r.bpm), beats: r.beats, confidence: Math.round(r.confidence * 100) };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }

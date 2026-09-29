@@ -6,13 +6,14 @@
  * positions.
  *
  * Upgrades (v2):
- *  - Sensitivity slider (0.3–0.8) controls threshold multiplier
+ *  - Sensitivity slider (0.3–0.8): how weak a beat may be and still be kept
  *  - BPM display derived from median inter-beat interval
  *  - Beat waveform mini-preview canvas (288×40px)
  *  - Snap-to-Frame toggle (on by default, rounds beat times to nearest frame)
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { trackBeats } from "../../shared/beatTrack";
 import type { TimelineTrack, TimelineMarker, MediaAsset } from "../../shared/models";
 
 export interface BeatSyncPanelProps {
@@ -26,36 +27,14 @@ export interface BeatSyncPanelProps {
 
 type BeatDivision = 1 | 2 | 4;
 
-async function detectBeats(audioBuffer: AudioBuffer, sensitivity: number): Promise<number[]> {
-  const channelData = audioBuffer.getChannelData(0);
-  const sampleRate = audioBuffer.sampleRate;
-  const windowSize = Math.floor(sampleRate * 0.04); // 40ms window
-  const minBeatInterval = Math.floor(sampleRate * 0.3); // min 300ms between beats
-
-  let maxAmplitude = 0;
-  for (let i = 0; i < channelData.length; i++) {
-    const abs = Math.abs(channelData[i]);
-    if (abs > maxAmplitude) maxAmplitude = abs;
-  }
-
-  const threshold = maxAmplitude * sensitivity;
-  const beats: number[] = [];
-  let lastBeat = -minBeatInterval;
-
-  for (let i = windowSize; i < channelData.length - windowSize; i += windowSize) {
-    let sum = 0;
-    for (let j = i; j < i + windowSize; j++) {
-      sum += channelData[j] * channelData[j];
-    }
-    const rms = Math.sqrt(sum / windowSize);
-
-    if (rms > threshold && (i - lastBeat) > minBeatInterval) {
-      beats.push(i / sampleRate);
-      lastBeat = i;
-    }
-  }
-
-  return beats;
+/**
+ * Beats from the shared tracker (tempo + phase + drift following). Sensitivity
+ * sets how weak a beat may be and still be kept (quiet passages).
+ */
+function detectBeats(audioBuffer: AudioBuffer, sensitivity: number): { beats: number[]; bpm: number } {
+  const r = trackBeats(audioBuffer.getChannelData(0), audioBuffer.sampleRate);
+  const minStrength = Math.max(0, (1 - sensitivity) * 0.5);
+  return { beats: r.beats.filter((_, i) => r.strengths[i] >= minStrength), bpm: r.bpm };
 }
 
 /** Compute BPM from median inter-beat interval */
@@ -169,17 +148,17 @@ export function BeatSyncPanel({
       const ctx = new AudioContext();
       audioCtxRef.current = ctx;
 
-      const response = await fetch(`file://${asset.sourcePath}`);
+      const response = await fetch(`media://asset?path=${encodeURIComponent(asset.sourcePath)}`);
       const arrayBuffer = await response.arrayBuffer();
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
 
-      const allBeats = await detectBeats(audioBuffer, sensitivity);
+      const { beats: allBeats, bpm: trackedBpm } = detectBeats(audioBuffer, sensitivity);
       const filteredBeats = allBeats.filter((_, idx) => idx % beatDivision === 0);
 
       setDetectedBeats(filteredBeats);
       setAudioDuration(audioBuffer.duration);
 
-      const bpm = computeBpm(filteredBeats);
+      const bpm = trackedBpm ? Math.round(trackedBpm) : computeBpm(filteredBeats);
       const bpmLabel = bpm ? `  ·  🎵 ~${bpm} BPM` : "";
       setStatus(`✅ Found ${filteredBeats.length} beats (every ${beatDivision} beat${beatDivision > 1 ? "s" : ""})${bpmLabel}`);
 
