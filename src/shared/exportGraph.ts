@@ -459,7 +459,7 @@ function effectFilters(ctx: Ctx, clip: TimelineClip): string[] {
     warnGpu(ctx, "NodeFX graphs need the GPU render.");
   }
   if (clip.aiBackgroundRemoval?.enabled) {
-    ctx.warnings.add("AI background removal is preview-only and is not included in the export.");
+    warnGpu(ctx, "AI background removal needs the GPU render.");
   }
   return out;
 }

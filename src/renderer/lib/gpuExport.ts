@@ -14,6 +14,7 @@ import { buildExportGraph } from "../../shared/exportGraph";
 import { computePreviewUnits, type PreviewLayer, type PreviewUnit } from "../../shared/previewLayers";
 import { ViewerCompositor } from "./viewerCompositor";
 import { effectsAtFrame } from "./effectsAtFrame";
+import { loadSegmenter } from "./backgroundRemoval";
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|avif)$/i;
 
@@ -67,6 +68,11 @@ export async function runGpuExport({ request, onProgress, isCancelled }: GpuExpo
     return s;
   };
 
+  const allClips = [project.sequence.clips, ...Object.values(project.nestedSequences ?? {}).map((s) => s.clips)].flat();
+  if (allClips.some((c) => c.aiBackgroundRemoval?.enabled) && !(await loadSegmenter())) {
+    await api.gpuExportCancel?.(jobId);
+    throw new Error("AI background removal model failed to load.");
+  }
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const compositor = new ViewerCompositor(canvas, () => {}, { readback: true });

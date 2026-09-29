@@ -33,6 +33,7 @@ import { computePreviewUnits, type NestedResolver, type PreviewUnit } from "../.
 import { ViewerCompositor } from "../lib/viewerCompositor";
 import { LayerSourcePool } from "../lib/layerSourcePool";
 import { effectsAtFrame } from "../lib/effectsAtFrame";
+import { loadSegmenter, onSegmenterReady } from "../lib/backgroundRemoval";
 
 export interface ViewerPanelHandle {
   togglePlayback: () => Promise<void>;
@@ -604,6 +605,8 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       [segments, playheadFrame, sequenceFps, resolveNestedSegments]
     );
     const compositorActive = !compositorFailed && previewUnits.length > 0;
+    const usesBgRemoval = segments.some((s) => s.clip.aiBackgroundRemoval?.enabled);
+    useEffect(() => { if (usesBgRemoval) void loadSegmenter(); }, [usesBgRemoval]);
     const seqW = sequenceSize?.width || 1920;
     const seqH = sequenceSize?.height || 1080;
     const compositorState = useRef({
@@ -636,6 +639,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
         return;
       }
       const pool = new LayerSourcePool(markDirty, compositorState.current.proxy);
+      const offSegmenter = onSegmenterReady(markDirty);
       let raf = 0;
       let badFrames = 0;
       let lastPrimaryTime = -1;
@@ -663,6 +667,7 @@ export const ViewerPanel = forwardRef<ViewerPanelHandle, ViewerPanelProps>(
       raf = requestAnimationFrame(tick);
       return () => {
         cancelAnimationFrame(raf);
+        offSegmenter();
         pool.dispose();
         compositor.dispose();
       };

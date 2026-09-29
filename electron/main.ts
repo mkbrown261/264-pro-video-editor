@@ -91,6 +91,11 @@ const VIDEO_FILE_EXTENSIONS = [
   "flv"
 ];
 const MEDIA_CONTENT_TYPES: Record<string, string> = {
+  // App assets served through media:// (fetch is blocked on file:// in the packaged app)
+  ".wasm": "application/wasm",
+  ".js": "text/javascript",
+  ".tflite": "application/octet-stream",
+  ".cube": "text/plain",
   ".mp4": "video/mp4",
   ".mov": "video/quicktime",
   ".m4v": "video/x-m4v",

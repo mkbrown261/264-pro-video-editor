@@ -1122,8 +1122,19 @@ Runner: graph written to -filter_complex_script (no command-line limit),
 The viewer (`src/shared/previewLayers.ts` + `ViewerCompositor`) uses the same
 layer/transition rules, so preview and export match.
 
-Not rendered in export (reported as warnings): Fusion node graphs, AI
-background removal / AI effects, bezier masks, speed ramps (constant speed).
+Two render engines (Export panel: Auto / FFmpeg / GPU):
+- FFmpeg graph (above) — fastest; used by Auto unless the graph reports a
+  GPU-only feature (`needsGpu`).
+- GPU engine (`src/renderer/lib/gpuExport.ts` + `electron/gpuExport.ts`) — every
+  frame rendered by the viewer's ViewerCompositor (NodeFX, speed ramps,
+  animated/tracked/bezier masks, masked effects, animated effect params, AI
+  background removal); sources decoded by sequential FFmpeg readers in main;
+  frames streamed to an FFmpeg encoder that adds burn-ins and the audio mix.
+
+AI background removal runs on-device (MediaPipe selfie segmenter; model in
+public/models, WASM copied to public/mediapipe at build). App assets that must
+be fetched are served via media:// in the packaged app (`appAssetUrl`).
+Cloud-only AI effects (ai_*, clawflow_style) are still skipped with a warning.
 
 ---
 

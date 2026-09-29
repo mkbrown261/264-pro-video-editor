@@ -4,3 +4,4 @@ dist-electron
 release
 *.log
 *.pdf
+public/mediapipe

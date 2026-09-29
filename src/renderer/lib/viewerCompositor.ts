@@ -27,6 +27,8 @@ import { computeCssFilterFromEffects } from "../../shared/effectsCss";
 import { maskAtFrame, type PreviewLayer, type PreviewUnit } from "../../shared/previewLayers";
 import { compGraphActive } from "../../shared/exportGraph";
 import { CompRenderer } from "./CompRenderer";
+import { appAssetUrl } from "./appAssets";
+import { cutout } from "./backgroundRemoval";
 
 // ─── File LUT cache (async) ───────────────────────────────────────────────────
 
@@ -36,7 +38,7 @@ let onLutLoaded: (() => void) | null = null;
 function lutUrl(path: string): string {
   if (/^(https?:|media:|data:)/.test(path)) return path;
   if (/^([a-zA-Z]:[\\/]|\/)/.test(path)) return `media://asset?path=${encodeURIComponent(path)}`;
-  return `./${path.replace(/^\.?\//, "")}`;
+  return appAssetUrl(path);
 }
 
 function getFileLut(path: string): Lut3D | null {
@@ -391,7 +393,20 @@ export class ViewerCompositor {
     const fit = Math.min(W / sw0, H / sh0);
     const fw = sw0 * fit, fh = sh0 * fit;
     const workScale = Math.min(fit, 1);
-    const base = this.runComp(layer, source, sw0 * workScale, sh0 * workScale);
+    let base = this.runComp(layer, source, sw0 * workScale, sh0 * workScale);
+    // AI background removal (on-device segmentation) happens before grading.
+    const bg = clip.aiBackgroundRemoval;
+    if (bg?.enabled) {
+      const bw = Math.max(2, Math.round(sw0 * workScale)), bh = Math.max(2, Math.round(sh0 * workScale));
+      const cut = cutout(base, bw, bh, bg);
+      if (cut) {
+        const snap = this.buf(`bgcut${depth}`, bw, bh);
+        const g = snap.getContext("2d")!;
+        g.clearRect(0, 0, bw, bh);
+        g.drawImage(cut, 0, 0);
+        base = snap;
+      }
+    }
 
     let graded: CanvasImageSource | null = null;
     const lut = gradeLutFor(clip, frame);
