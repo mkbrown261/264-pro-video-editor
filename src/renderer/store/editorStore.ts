@@ -1408,12 +1408,21 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Duplicate Clip", (state) => {
       const clip = state.project.sequence.clips.find((c) => c.id === clipId);
       if (!clip) return state;
-      const seg = buildTimelineSegments(state.project.sequence, state.project.assets).find((s) => s.clip.id === clipId);
+      const segs = buildTimelineSegments(state.project.sequence, state.project.assets);
+      const seg = segs.find((s) => s.clip.id === clipId);
       if (!seg) return state;
-      // Place duplicate right after the original
-      const newStartFrame = seg.endFrame;
       const newLinkedGroupId = clip.linkedGroupId ? createId() : null;
       const linked = clip.linkedGroupId ? getLinkedClips(state.project, clipId) : [clip];
+      // First spot at or after the original's end that's free on every involved track.
+      const dur = seg.endFrame - seg.startFrame;
+      const trackIds = new Set(linked.map((c) => c.trackId));
+      const busy = segs.filter((g) => trackIds.has(g.clip.trackId)).sort((a, b) => a.startFrame - b.startFrame);
+      let newStartFrame = seg.endFrame;
+      for (const g of busy) {
+        if (g.endFrame <= newStartFrame) continue;
+        if (g.startFrame >= newStartFrame + dur) break;
+        newStartFrame = g.endFrame;
+      }
       const newClips = linked.map((lc) => ({
         ...lc,
         id: createId(),

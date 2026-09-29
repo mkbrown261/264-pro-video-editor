@@ -162,6 +162,14 @@ describe("timeline editing", () => {
     expect(seg("v2").startFrame).toBe(100);
   });
 
+  it("duplicate lands in the first free spot instead of on top of the next clip", () => {
+    load([clip("c1", "V1", 0, { linkedGroupId: "g" }), clip("a1", "A1", 0, { linkedGroupId: "g" }), clip("c2", "V1", 60), clip("c3", "A1", 150)]);
+    S().duplicateClip("c1");
+    const copies = S().project.sequence.clips.filter((c) => !["c1", "a1", "c2", "c3"].includes(c.id));
+    expect(copies).toHaveLength(2);
+    expect(copies.map((c) => seg(c.id).startFrame)).toEqual([210, 210]); // V1 busy to 120, A1 busy 150–210
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
