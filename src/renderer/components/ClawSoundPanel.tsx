@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import type { TimelineTrack, EQBand, CompressorSettings, DuckingSettings, EditorProject } from "../../shared/models";
 import { createId } from "../../shared/models";
+import type { MediaAsset } from "../../shared/models";
+import { useEditorStore } from "../store/editorStore";
 
 interface ClawSoundPanelProps {
   tracks: TimelineTrack[];
@@ -215,20 +217,38 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
     aiToastTimerRef.current = setTimeout(() => setAiToast(null), 4000);
   };
 
+  // Local FFmpeg processing: voice clean-up and mid/side (centre vs sides)
+  // separation. The result replaces the clip's audio (undoable); a second
+  // stem goes on another audio track.
   const applyAudioAI = async (mode: string) => {
     if (!selectedClipId) {
       showAiToast('⚠️ No clip selected. Select a clip on the timeline first.');
       return;
     }
-    showAiToast('⏳ Processing…');
+    const process = (window as unknown as { electronAPI?: { processClipAudio?: (a: { filePath: string; recipe: string; strength?: number }) => Promise<MediaAsset> } }).electronAPI?.processClipAudio;
+    if (!process) { showAiToast('Audio processing needs the desktop app.'); return; }
+    const st = useEditorStore.getState();
+    const { clips, tracks } = st.project.sequence;
+    const clip = clips.find((c) => c.id === selectedClipId);
+    const kind = (id: string) => tracks.find((t) => t.id === id)?.kind;
+    const target = clip && (kind(clip.trackId) === 'audio' ? clip
+      : clip.linkedGroupId ? clips.find((c) => c.linkedGroupId === clip.linkedGroupId && kind(c.trackId) === 'audio') : undefined);
+    const asset = target && st.project.assets.find((a) => a.id === target.assetId);
+    if (!target || !asset?.sourcePath || !asset.hasAudio) { showAiToast('⚠️ The selected clip has no audio to process.'); return; }
+
+    const [tool, option] = mode.split(':');
+    const plan: [string, string | null, number] =
+      tool === 'voice_isolation' ? ['voice', null, Number(option)]
+      : tool === 'dialogue_separator' ? (option === 'background' ? ['background', null, 0] : option === 'both' ? ['dialogue', 'background', 0] : ['dialogue', null, 0])
+      : option === 'vocals_only' ? ['vocals', null, 0] : option === 'instrumental' ? ['instrumental', null, 0] : ['vocals', 'instrumental', 0];
+    showAiToast('⏳ Processing audio…');
     try {
-      const api = (window as unknown as { electronAPI?: { applyAudioAI?: (id: string, mode: string) => Promise<{ success: boolean; message: string }> } }).electronAPI;
-      const result = api?.applyAudioAI
-        ? await api.applyAudioAI(selectedClipId, mode)
-        : { success: true, message: 'AI audio processing requires API key. Add REPLICATE_API_KEY in Settings.' };
-      showAiToast(result.message);
-    } catch {
-      showAiToast('AI audio processing requires API key. Add REPLICATE_API_KEY in Settings.');
+      const main = await process({ filePath: asset.sourcePath, recipe: plan[0], strength: plan[2] });
+      const extra = plan[1] ? await process({ filePath: asset.sourcePath, recipe: plan[1] }) : null;
+      useEditorStore.getState().applyProcessedAudio(target.id, main, extra);
+      showAiToast(`✅ ${extra ? 'Split into two tracks' : 'Clip audio replaced'} — undo to revert`);
+    } catch (e) {
+      showAiToast(`❌ ${e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e)}`);
     }
   };
 
@@ -579,7 +599,7 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
                 <span style={{ fontSize: 14 }}>🎵</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>Music Remixer</span>
               </div>
-              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Isolate stems from any music track</div>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Vocal/instrumental split by centre vs sides — for stereo mixes with centred vocals</div>
               <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
                 {(['all', 'vocals_only', 'instrumental'] as const).map(mode => (
                   <button key={mode} onClick={() => setMusicStemMode(mode)} style={{ padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 600, background: musicStemMode === mode ? '#7c3aed' : 'rgba(255,255,255,0.07)', color: musicStemMode === mode ? '#fff' : '#94a3b8' }}>
@@ -603,7 +623,7 @@ export function ClawSoundPanel({ tracks, fps, onUpdateTrack, masterVolume, onSet
                 <span style={{ fontSize: 14 }}>🎤</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>Dialogue Separator</span>
               </div>
-              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Extract clean dialogue from ambient audio</div>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 8 }}>Centre/side separation — best on stereo mixes with centred dialogue</div>
               <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
                 {(['dialogue', 'background', 'both'] as const).map(mode => (
                   <button key={mode} onClick={() => setDialogueMode(mode)} style={{ padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 10, fontWeight: 600, background: dialogueMode === mode ? '#7c3aed' : 'rgba(255,255,255,0.07)', color: dialogueMode === mode ? '#fff' : '#94a3b8', textTransform: 'capitalize' }}>

@@ -102,6 +102,11 @@ interface EditorStore {
   removeSubtitleCue: (id: string) => void;
   /** Add a recorded (voiceover) asset and place it on a free audio track at startFrame. */
   addRecordedAudio: (asset: MediaAsset, startFrame: number) => void;
+  /**
+   * Swap a clip's audio for a processed render of it (same timing). `extra`
+   * (e.g. the second stem) lands on a free audio track under the clip.
+   */
+  applyProcessedAudio: (clipId: string, processed: MediaAsset, extra?: MediaAsset | null) => void;
   selectAsset: (assetId: string | null) => void;
   selectClip: (clipId: string | null) => void;
 
@@ -1071,6 +1076,31 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Remove Subtitle", (state) => ({
       project: { ...state.project, subtitleCues: (state.project.subtitleCues ?? []).filter((c) => c.id !== id) },
     })));
+  },
+
+  applyProcessedAudio: (clipId, processed, extra) => {
+    set(withUndo("Process Audio", (state) => {
+      const seq = state.project.sequence;
+      const trackKind = (id: string) => seq.tracks.find((t) => t.id === id)?.kind;
+      const clip = seq.clips.find((c) => c.id === clipId);
+      if (!clip) return state;
+      // The clip itself if it's on an audio track, else its linked audio.
+      const target = trackKind(clip.trackId) === "audio" ? clip
+        : getLinkedClips(state.project, clipId).find((c) => trackKind(c.trackId) === "audio");
+      if (!target) return state;
+      let project: EditorProjectState = {
+        ...state.project,
+        assets: [...state.project.assets, processed, ...(extra ? [extra] : [])],
+        sequence: { ...seq, clips: seq.clips.map((c) => c.id === target.id ? { ...c, assetId: processed.id } : c) },
+      };
+      if (extra) {
+        const { project: withTrack, audioTrackId } = findOrCreateFreeAudioTrack(project, extra, target.startFrame);
+        project = withTrack;
+        const second: TimelineClip = { ...target, id: createId(), assetId: extra.id, trackId: audioTrackId, linkedGroupId: null };
+        project = { ...project, sequence: { ...project.sequence, clips: [...project.sequence.clips, second] } };
+      }
+      return { project, selectedClipId: target.id };
+    }));
   },
 
   addRecordedAudio: (asset, startFrame) => {

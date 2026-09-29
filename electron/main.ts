@@ -750,6 +750,38 @@ ipcMain.handle("media:request-mic", async () => {
 });
 
 /** Save a MediaRecorder capture as 48 kHz WAV in the user's recordings folder and probe it. */
+// ── Local audio processing (FFmpeg DSP): voice clean-up and mid/side separation ──
+// Renders the source's audio through a filter chain to a WAV the renderer swaps
+// in for the clip. Mid/side separation works on stereo mixes with centred
+// dialogue/vocals; it is not ML stem separation.
+const AUDIO_RECIPES: Record<string, (strength: number) => string> = {
+  voice: (s) => `highpass=f=80,lowpass=f=9000,afftdn=nr=${(6 + 24 * s).toFixed(1)}:nf=-35,anlmdn=s=${(1 + 6 * s).toFixed(2)}`,
+  dialogue: () => "aformat=channel_layouts=stereo,pan=mono|c0=0.5*c0+0.5*c1,highpass=f=100,lowpass=f=7500,afftdn=nr=10:nf=-35",
+  background: () => "aformat=channel_layouts=stereo,pan=stereo|c0=c0-c1|c1=c1-c0",
+  vocals: () => "aformat=channel_layouts=stereo,pan=mono|c0=0.5*c0+0.5*c1,highpass=f=120,lowpass=f=9000",
+  instrumental: () => "aformat=channel_layouts=stereo,pan=stereo|c0=c0-c1|c1=c1-c0",
+};
+
+ipcMain.handle("audio:process-clip", async (_e, args: { filePath: string; recipe: string; strength?: number }) => {
+  const recipe = AUDIO_RECIPES[args.recipe];
+  if (!recipe) throw new Error(`Unknown audio process: ${args.recipe}`);
+  const dir = join(app.getPath("documents"), "264 Pro", "Processed Audio");
+  await mkdirAsync(dir, { recursive: true });
+  const base = basename(args.filePath, extname(args.filePath)).replace(/[^\w -]/g, "_");
+  const out = join(dir, `${base} - ${args.recipe} ${Date.now().toString(36)}.wav`);
+  const { spawn } = await import("node:child_process");
+  await new Promise<void>((resolve, reject) => {
+    let err = "";
+    const child = spawn(getEnvironmentStatus().ffmpegPath, ["-v", "error", "-y", "-i", args.filePath, "-vn",
+      "-af", recipe(Math.max(0, Math.min(1, args.strength ?? 0.5))), "-ar", "48000", "-c:a", "pcm_s16le", out]);
+    child.stderr.on("data", (d: Buffer) => { err += d.toString(); });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.trim().slice(-300) || `ffmpeg exited with code ${code}`))));
+  });
+  const [asset] = await probeMediaFiles([out]);
+  return asset;
+});
+
 ipcMain.handle("media:save-recording", async (_e, data: Uint8Array, name?: string) => {
   const dir = join(app.getPath("documents"), "264 Pro", "Recordings");
   await mkdirAsync(dir, { recursive: true });
