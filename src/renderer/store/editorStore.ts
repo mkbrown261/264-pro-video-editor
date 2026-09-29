@@ -2469,17 +2469,28 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   reorderClips: (draggedClipId, targetClipId) => {
+    // Storyboard move: the dragged clip takes the target's slot on its track,
+    // the track's clips re-pack in the new order (keeping the first clip's
+    // start), and every clip's linked partners follow it.
     set(withUndo("Reorder Clips", (state) => {
-      const clips = state.project.sequence.clips;
-      const dragIdx = clips.findIndex(c => c.id === draggedClipId);
-      const targIdx = clips.findIndex(c => c.id === targetClipId);
-      if (dragIdx === -1 || targIdx === -1 || dragIdx === targIdx) return state;
-      const newClips = clips.map((c, i) => {
-        if (i === dragIdx) return { ...c, startFrame: clips[targIdx].startFrame, trackId: clips[targIdx].trackId };
-        if (i === targIdx) return { ...c, startFrame: clips[dragIdx].startFrame, trackId: clips[dragIdx].trackId };
-        return c;
-      });
-      return { project: { ...state.project, sequence: { ...state.project.sequence, clips: newClips } } };
+      const seq = state.project.sequence;
+      const segs = buildTimelineSegments(seq, state.project.assets);
+      const dragged = segs.find((g) => g.clip.id === draggedClipId);
+      const target = segs.find((g) => g.clip.id === targetClipId);
+      if (!dragged || !target || dragged === target || dragged.clip.trackId !== target.clip.trackId) return state;
+      const row = segs.filter((g) => g.clip.trackId === target.clip.trackId).sort((a, b) => a.startFrame - b.startFrame);
+      const order = row.filter((g) => g !== dragged);
+      const at = order.indexOf(target) + (dragged.startFrame < target.startFrame ? 1 : 0);
+      order.splice(at, 0, dragged);
+      const delta = new Map<string, number>();
+      let cursor = row[0].startFrame;
+      for (const g of order) {
+        const d = cursor - g.startFrame;
+        for (const c of getLinkedClips(state.project, g.clip.id)) delta.set(c.id, d);
+        cursor += g.durationFrames;
+      }
+      const clips = seq.clips.map((c) => delta.get(c.id) ? { ...c, startFrame: c.startFrame + delta.get(c.id)! } : c);
+      return { project: { ...state.project, sequence: { ...seq, clips } } };
     }));
   },
 

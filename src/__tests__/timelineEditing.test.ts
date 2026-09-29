@@ -239,6 +239,17 @@ describe("timeline editing", () => {
     expect(seg("v1").startFrame).toBe(30);
   });
 
+  it("storyboard reorder re-packs the track and moves linked audio", () => {
+    load([
+      clip("x", "V1", 0), clip("y", "V1", 60, { trimEndFrames: 180, linkedGroupId: "g" }), clip("ya", "A1", 60, { trimEndFrames: 180, linkedGroupId: "g" }),
+      clip("z", "V1", 150),
+    ]); // x 0–60, y 60–150, z 150–210
+    S().reorderClips("z", "x");
+    expect([seg("z").startFrame, seg("x").startFrame, seg("y").startFrame, seg("ya").startFrame]).toEqual([0, 60, 120, 120]);
+    S().reorderClips("z", "y");
+    expect([seg("x").startFrame, seg("y").startFrame, seg("z").startFrame, seg("ya").startFrame]).toEqual([0, 60, 150, 60]);
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });
