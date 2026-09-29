@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { buildTimelineSegments, getTotalDurationFrames } from "../../shared/timeline";
 import { useEditorStore } from "../store/editorStore";
 import {
   projectMemory,
@@ -315,10 +316,13 @@ export function FlowStatePanel({
     const ctx = {
       projectId: `local_${Date.now()}`,
       projectName: project.name ?? "Untitled Project",
-      totalDurationSec: clips.length > 0 ? (Math.max(...clips.map((c: any) => (c.startFrame ?? 0) + (c.durationFrames ?? 0))) / fps) : 0,
+      totalDurationSec: getTotalDurationFrames(buildTimelineSegments(project.sequence, project.assets)) / fps,
       trackCount: tracks.length,
       clipCount: clips.length,
-      assetTypes: [...new Set(clips.map((c: any) => c.assetType ?? "video"))],
+      assetTypes: [...new Set(clips.map((c) => {
+        const a = project.assets.find((x) => x.id === c.assetId);
+        return !a ? "unknown" : a.width > 0 ? (a.durationSeconds > 0 && a.nativeFps ? "video" : "image") : "audio";
+      }))],
       fps,
       resolution: `${width}×${height}`,
       lastModified: new Date().toISOString(),
