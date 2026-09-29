@@ -142,6 +142,8 @@ declare global {
       saveProject: (json: string, suggestedName: string) => Promise<string | null>;
       openProject: () => Promise<OpenProjectResult | null>;
       saveProjectAs: (json: string, filePath: string) => Promise<string>;
+      /** Reveal a file in Finder / Explorer. */
+      showInFolder?: (filePath: string) => Promise<void>;
       /** Re-open a recent .264proj by path (no dialog). */
       openProjectPath?: (filePath: string) => Promise<OpenProjectResult | { success: false; error: string }>;
       /** Auto-save current project to userData/autosave (silent, no dialog) */

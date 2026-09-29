@@ -427,6 +427,14 @@ function createMainWindow(splashWindow: BrowserWindow | null): BrowserWindow {
   // closeConfirmedGlobal is module-scoped so the IPC handler can set it.
   closeConfirmedGlobal = false;
   mainWindow = window;
+  // Links opened by the page (window.open / target=_blank) go to the browser,
+  // never to a bare in-app window.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      if (["https:", "http:"].includes(new URL(url).protocol)) void shell.openExternal(url);
+    } catch { /* ignore malformed */ }
+    return { action: "deny" };
+  });
   window.on("close", (e) => {
     if (closeConfirmedGlobal) return;
     e.preventDefault();
@@ -1037,6 +1045,11 @@ ipcMain.handle("app:confirm-close", () => {
 
 ipcMain.handle("updater:install-now", () => {
   requestUpdateInstall();
+});
+
+ipcMain.handle("app:show-in-folder", async (_event, filePath: string) => {
+  if (typeof filePath !== "string" || !isAbsolute(filePath)) return;
+  try { await stat(filePath); shell.showItemInFolder(filePath); } catch { /* gone */ }
 });
 
 ipcMain.handle("app:open-external", (_event, url: string) => {

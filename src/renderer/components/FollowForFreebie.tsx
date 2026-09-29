@@ -55,8 +55,8 @@ export function FollowForFreebie({ onClose, aiCredits, onAddCredits }: FollowFor
   }, []);
 
   function handleOpen(url: string) {
-    if (typeof (window as any).electronAPI?.openExternalUrl === "function") {
-      (window as any).electronAPI.openExternalUrl(url);
+    if (typeof (window as any).electronAPI?.openExternal === "function") {
+      (window as any).electronAPI.openExternal(url);
     } else {
       window.open(url, "_blank");
     }
