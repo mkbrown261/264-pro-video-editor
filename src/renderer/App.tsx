@@ -155,7 +155,6 @@ export default function App() {
   const addCaptionsFromTranscript = useEditorStore((s) => s.addCaptionsFromTranscript);
   const magneticTimeline = useEditorStore((s) => s.project.sequence.settings.magneticTimeline !== false);
   const addAssetToPool = useEditorStore((s) => s.addAsset);
-  const insertClip = useEditorStore((s) => s.insertClip);
   const insertClipOnTop = useEditorStore((s) => s.insertClipOnTop);
   const editAtFrame = useEditorStore((s) => s.editAtFrame);
   const addTrack = useEditorStore((s) => s.addTrack);
@@ -508,19 +507,12 @@ export default function App() {
   // Text-Based Editing: add clip from transcript selection
   const handleAddClipFromTranscript = useCallback((assetId: string, startMs: number, endMs: number) => {
     const asset = project.assets.find(a => a.id === assetId);
-    const firstVideoTrack = project.sequence.tracks.find(t => t.kind === "video");
-    if (!asset || !firstVideoTrack) { toast.warning("No video track found"); return; }
-    // Trims are in timeline frames (see buildTimelineSegments), not source frames.
+    if (!asset) return;
     const fps = project.sequence.settings.fps;
-    const trimStart = Math.round((startMs / 1000) * fps);
-    const totalFrames = Math.round(asset.durationSeconds * fps);
-    const trimEnd = Math.max(0, totalFrames - Math.round((endMs / 1000) * fps));
-    const clip = createEmptyClip(assetId, firstVideoTrack.id, playback.playheadFrame);
-    clip.trimStartFrames = trimStart;
-    clip.trimEndFrames = trimEnd;
-    insertClip(clip);
+    pauseViewerPlayback();
+    editAtFrame(assetId, playback.playheadFrame, Math.round((startMs / 1000) * fps), Math.round((endMs / 1000) * fps), "insert");
     toast.success(`Added ${asset.name} clip from transcript (${((endMs - startMs) / 1000).toFixed(2)}s)`);
-  }, [project, playback.playheadFrame, insertClip]);
+  }, [project, playback.playheadFrame, editAtFrame]);
 
   // ── AI Tools Panel ─────────────────────────────────────────────────────────
   const [aiToolsPanelOpen, setAiToolsPanelOpen] = useState(false);
@@ -665,18 +657,23 @@ export default function App() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
   // Build segments once and reuse — avoids double-build (buildTrackLayouts would rebuild internally)
-  const segments = buildTimelineSegments(project.sequence, project.assets);
-  const trackLayouts = buildTrackLayouts(project.sequence, project.assets, segments);
-  const totalFrames = getTotalDurationFrames(segments);
+  // Memoized: App re-renders on every playhead frame during playback.
+  const segments = useMemo(() => buildTimelineSegments(project.sequence, project.assets), [project.sequence, project.assets]);
+  const trackLayouts = useMemo(() => buildTrackLayouts(project.sequence, project.assets, segments), [project.sequence, project.assets, segments]);
+  const totalFrames = useMemo(() => getTotalDurationFrames(segments), [segments]);
 
   // ── Claw Guide ──────────────────────────────────────────────────────────
   const timelineClipAssetIds = useMemo(
     () => new Set(project.sequence.clips.map(c => c.assetId)),
     [project.sequence.clips]
   );
+  const clawGuideClips = useMemo(
+    () => project.sequence.clips.map(c => ({ id: c.id, speed: c.speed, volume: c.volume, colorGrade: c.colorGrade })),
+    [project.sequence.clips]
+  );
   const { tips: clawTips, dismiss: dismissClawTip } = useClawGuide({
     enabled: clawGuideEnabled,
-    clips: project.sequence.clips.map(c => ({ id: c.id, speed: c.speed, volume: c.volume, colorGrade: c.colorGrade })),
+    clips: clawGuideClips,
     mediaPoolAssets: project.assets,
     timelineClipIds: timelineClipAssetIds,
     playheadStallMs: 0,
