@@ -1,250 +1,159 @@
 /**
  * EDL & FCP XML Export
  * ─────────────────────────────────────────────────────────────────────────────
- * generateEDL   → CMX 3600 EDL  (NLE compatible)
- * generateFCPXML → FCPXML 1.10  (Apple XML)
+ * generateEDL    → CMX 3600 EDL: the top video track + two audio channels,
+ *                  cuts, dissolves and M2 speed changes.
+ * generateFCPXML → FCPXML 1.10: every track, as connected clips on lanes
+ *                  over a full-length gap (video lanes 1…, audio −1…).
+ * Both read the shared timeline segments, so speed and trims match the edit.
  */
 
+import { pathToFileURL } from 'url';
 import type { EditorProject } from '../src/shared/models.js';
+import { buildTimelineSegments, type TimelineSegment } from '../src/shared/timeline.js';
+
+const isNtsc = (fps: number) => Math.abs(fps - Math.round(fps)) > 0.001;
+
+function framesToTC(frames: number, fps: number): string {
+  const f = Math.max(0, Math.round(frames));
+  const fpsR = Math.max(1, Math.round(fps));
+  const ff = f % fpsR;
+  const totalSec = Math.floor(f / fpsR);
+  return `${pad(Math.floor(totalSec / 3600))}:${pad(Math.floor(totalSec / 60) % 60)}:${pad(totalSec % 60)}:${pad(ff)}`;
+}
+
+function pad(n: number): string { return String(n).padStart(2, '0'); }
+
+function reelName(name: string | undefined): string {
+  return ((name ?? 'AX').replace(/[^\x00-\x7F]/g, '_').replace(/[^A-Z0-9_]/gi, '').substring(0, 8).toUpperCase() || 'AX').padEnd(8);
+}
+
+function playableSegments(project: EditorProject): TimelineSegment[] {
+  return buildTimelineSegments(project.sequence, project.assets).filter((s) => s.clip.isEnabled !== false);
+}
 
 // ── CMX 3600 EDL ──────────────────────────────────────────────────────────────
 
 export function generateEDL(project: EditorProject): string {
   const fps = Math.max(1, project.sequence.settings.fps);
-  const title = project.name ?? 'Untitled';
+  const lines: string[] = [`TITLE: ${project.name ?? 'Untitled'}`, 'FCM: NON-DROP FRAME', ''];
+  if (!project.assets || !project.sequence?.clips?.length) return lines.join('\n');
 
-  const lines: string[] = [
-    `TITLE: ${title}`,
-    `FCM: NON-DROP FRAME`,
-    '',
+  const segs = playableSegments(project);
+  const tracks = project.sequence.tracks;
+  const topVideo = tracks.find((t) => t.kind === 'video');
+  const audio = tracks.filter((t) => t.kind === 'audio').slice(0, 2);
+  const channels: Array<{ trackId: string; code: string }> = [
+    ...(topVideo ? [{ trackId: topVideo.id, code: 'V' }] : []),
+    ...audio.map((t, i) => ({ trackId: t.id, code: i === 0 ? 'A' : 'A2' })),
   ];
 
-  // Handle empty assets or missing video track gracefully
-  if (!project.assets || !project.sequence?.clips || project.sequence.clips.length === 0) {
-    return lines.join('\n');
+  let edit = 1;
+  const tc = (f: number) => framesToTC(f, fps);
+  for (const { trackId, code } of channels) {
+    const row = segs.filter((s) => s.clip.trackId === trackId).sort((a, b) => a.startFrame - b.startFrame);
+    row.forEach((seg, i) => {
+      const reel = reelName(seg.asset.name);
+      const srcIn = Math.round(seg.sourceInSeconds * fps);
+      const srcOut = Math.round(seg.sourceOutSeconds * fps);
+      const num = String(edit++).padStart(3, '0');
+      const prev = row[i - 1];
+      const t = seg.clip.transitionIn;
+      const dissolve = code === 'V' && prev && prev.endFrame === seg.startFrame && t && t.type !== 'cut' && t.durationFrames > 0;
+      if (dissolve) {
+        // Outgoing clip held at its out point, then the dissolve into this one.
+        const prevOut = Math.round(prev.sourceOutSeconds * fps);
+        lines.push(`${num}  ${reelName(prev.asset.name)} ${code.padEnd(5)} C        ${tc(prevOut)} ${tc(prevOut)} ${tc(seg.startFrame)} ${tc(seg.startFrame)}`);
+        lines.push(`${num}  ${reel} ${code.padEnd(5)} D    ${String(Math.min(999, t.durationFrames)).padStart(3, '0')} ${tc(srcIn)} ${tc(srcOut)} ${tc(seg.startFrame)} ${tc(seg.endFrame)}`);
+      } else {
+        lines.push(`${num}  ${reel} ${code.padEnd(5)} C        ${tc(srcIn)} ${tc(srcOut)} ${tc(seg.startFrame)} ${tc(seg.endFrame)}`);
+      }
+      const speed = seg.clip.speed ?? 1;
+      if (Math.abs(speed - 1) > 1e-3) {
+        lines.push(`M2   ${reel}       ${(speed * fps).toFixed(1).padStart(5, '0')}                ${tc(srcIn)}`);
+      }
+      lines.push(`* FROM CLIP NAME: ${seg.asset.name ?? 'Untitled'}`, '');
+    });
   }
-
-  // Get all video clips sorted by start frame
-  const videoTrack = project.sequence.tracks.find(t => t.kind === 'video');
-  if (!videoTrack) return lines.join('\n');
-
-  const clips = project.sequence.clips
-    .filter(c => c.trackId === videoTrack.id && c.isEnabled !== false)
-    .sort((a, b) => a.startFrame - b.startFrame);
-
-  // Handle empty clips array
-  if (clips.length === 0) return lines.join('\n');
-
-  // editNumber is local — reset per call, not module-level
-  let editNumber = 1;
-
-  for (const clip of clips) {
-    const asset = project.assets.find(a => a.id === clip.assetId);
-    if (!asset) continue;
-
-    const trimStart = clip.trimStartFrames ?? 0;
-    const trimEnd = clip.trimEndFrames ?? 0;
-    const assetTotalFrames = Math.round((asset.durationSeconds ?? 0) * fps);
-    const clipDurationFrames = Math.max(0, assetTotalFrames - trimStart - trimEnd);
-
-    if (clipDurationFrames <= 0) continue;
-
-    // Source in/out (within the source file)
-    const srcIn  = trimStart;
-    const srcOut = trimStart + clipDurationFrames;
-
-    // Record in/out (position on timeline)
-    const recIn  = clip.startFrame;
-    const recOut = clip.startFrame + clipDurationFrames;
-
-    const srcInTC  = framesToTC(srcIn,  fps);
-    const srcOutTC = framesToTC(srcOut, fps);
-    const recInTC  = framesToTC(recIn,  fps);
-    const recOutTC = framesToTC(recOut, fps);
-
-    const editNum  = String(editNumber).padStart(3, '0');
-    // Sanitize reel name: strip non-ASCII (Unicode/emoji) first, then non-alphanumeric
-    const reelName = (asset.name ?? 'AX')
-      .replace(/[^\x00-\x7F]/g, '_')  // replace non-ASCII with underscore
-      .replace(/[^A-Z0-9_]/gi, '')    // strip remaining non-alphanumeric
-      .substring(0, 8)
-      .toUpperCase() || 'AX';
-
-    // Standard CMX 3600 edit line
-    lines.push(`${editNum}  ${reelName.padEnd(8)} V     C        ${srcInTC} ${srcOutTC} ${recInTC} ${recOutTC}`);
-
-    // Clip name comment
-    lines.push(`* FROM CLIP NAME: ${asset.name ?? 'Untitled'}`);
-
-    // Speed if not 1.0
-    if (clip.speed && clip.speed !== 1) {
-      lines.push(`* SPEED: ${clip.speed.toFixed(2)}`);
-    }
-
-    lines.push('');
-    editNumber++;
-  }
-
   return lines.join('\n');
 }
-
-function framesToTC(frames: number, fps: number): string {
-  const f     = Math.max(0, Math.round(frames));
-  const fpsR  = Math.max(1, Math.round(fps));  // guard fps === 0
-  const ff    = f % fpsR;
-  const totalSec = Math.floor(f / fpsR);
-  const ss    = totalSec % 60;
-  const mm    = Math.floor(totalSec / 60) % 60;
-  const hh    = Math.floor(totalSec / 3600);
-  return `${pad(hh)}:${pad(mm)}:${pad(ss)}:${pad(ff)}`;
-}
-
-function pad(n: number): string { return String(n).padStart(2, '0'); }
 
 // ── FCPXML 1.10 ───────────────────────────────────────────────────────────────
 
 /** Escape a string for use in XML attribute values and text content. */
 function xmlEscape(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 export function generateFCPXML(project: EditorProject): string {
-  const fps      = Math.max(1, project.sequence.settings.fps);
-  const w        = project.sequence.settings.width;
-  const h        = project.sequence.settings.height;
-  const title    = xmlEscape(project.name ?? 'Untitled');
-  const timebase = Math.round(fps);
-  const frameDur = `1/${timebase}s`;
+  const fps = Math.max(1, project.sequence.settings.fps);
+  const { width: w, height: h } = project.sequence.settings;
+  const title = xmlEscape(project.name ?? 'Untitled');
+  // Rational times: 29.97 etc. are 1001/30000 s per frame.
+  const base = Math.round(fps);
+  const ntsc = isNtsc(fps);
+  const rt = (frames: number) => {
+    const f = Math.max(0, Math.round(frames));
+    return ntsc ? `${f * 1001}/${base * 1000}s` : `${f}/${base}s`;
+  };
+  const secs = (seconds: number) => rt(seconds * fps);
 
-  // Handle empty project gracefully
-  if (!project.assets || !project.sequence?.clips) {
-    return buildFCPXMLSkeleton(title, timebase, frameDur, w, h, 0, [], []);
-  }
+  const segs = project.assets && project.sequence?.clips ? playableSegments(project) : [];
+  const total = segs.reduce((m, s) => Math.max(m, s.endFrame), 0);
 
-  // Total timeline duration in frames — guard against empty clips array
-  const totalFrames = project.sequence.clips.length === 0 ? 0 :
-    project.sequence.clips.reduce((max, c) => {
-      const asset = project.assets.find(a => a.id === c.assetId);
-      const dur = Math.max(0, Math.round((asset?.durationSeconds ?? 0) * fps)
-        - (c.trimStartFrames ?? 0)
-        - (c.trimEndFrames ?? 0));
-      return Math.max(max, c.startFrame + dur);
-    }, 0);
-
-  // Asset resources
-  const resources: string[] = [];
-  const assetsSeen = new Set<string>();
-
-  for (const asset of project.assets) {
-    if (assetsSeen.has(asset.id)) continue;
-    assetsSeen.add(asset.id);
-
-    const assetDurFrames = Math.round((asset.durationSeconds ?? 0) * fps);
-    const safeName = xmlEscape(asset.name ?? 'clip');
-    const safePath = xmlEscape(asset.sourcePath ?? '');
-
-    resources.push(
-      `    <asset id="r_${asset.id}" name="${safeName}" start="0s" duration="${assetDurFrames}/${timebase}s" hasVideo="1" hasAudio="${asset.hasAudio ? '1' : '0'}">`,
-      `      <media-rep kind="original-media" src="file://${safePath}"/>`,
+  const used = new Map(segs.map((s) => [s.asset.id, s.asset]));
+  const resources = [...used.values()].map((a) => {
+    const src = a.sourcePath ? xmlEscape(pathToFileURL(a.sourcePath).href) : '';
+    return [
+      `    <asset id="r_${xmlEscape(a.id)}" name="${xmlEscape(a.name ?? 'clip')}" start="0s" duration="${secs(a.durationSeconds ?? 0)}" hasVideo="${a.width > 0 ? 1 : 0}" hasAudio="${a.hasAudio ? 1 : 0}" format="r_format">`,
+      `      <media-rep kind="original-media" src="${src}"/>`,
       `    </asset>`,
-    );
-  }
-
-  // Build timeline clips — video tracks only
-  const videoClips = project.sequence.clips
-    .filter(c => {
-      const track = project.sequence.tracks.find(t => t.id === c.trackId);
-      return track?.kind === 'video' && c.isEnabled !== false;
-    })
-    .sort((a, b) => a.startFrame - b.startFrame);
-
-  const clipElements: string[] = [];
-
-  // Check if any clip has a color correction so we can declare the resource
-  const hasColorCorrection = videoClips.some(c => {
-    const grade = c.colorGrade;
-    return grade && !grade.bypass && (grade.exposure !== 0 || grade.saturation !== 1 || grade.contrast !== 0);
+    ].join('\n');
   });
 
-  for (const clip of videoClips) {
-    const asset = project.assets.find(a => a.id === clip.assetId);
-    if (!asset) continue;
+  // Lanes: video tracks bottom→top = 1, 2, …; audio tracks = −1, −2, …
+  const tracks = project.sequence.tracks;
+  const videoTracks = tracks.filter((t) => t.kind === 'video');
+  const audioTracks = tracks.filter((t) => t.kind === 'audio');
+  const laneOf = (trackId: string) => {
+    const vi = videoTracks.findIndex((t) => t.id === trackId);
+    if (vi >= 0) return videoTracks.length - vi;
+    return -(audioTracks.findIndex((t) => t.id === trackId) + 1);
+  };
 
-    const trimStart = clip.trimStartFrames ?? 0;
-    const trimEnd   = clip.trimEndFrames ?? 0;
-    const assetTotalFrames = Math.round((asset.durationSeconds ?? 0) * fps);
-    const clipDur   = Math.max(0, assetTotalFrames - trimStart - trimEnd);
-
-    if (clipDur <= 0) continue;
-
-    const safeName = xmlEscape(asset.name ?? 'clip');
-
-    clipElements.push(
-      `        <clip name="${safeName}" ref="r_${asset.id}" offset="${clip.startFrame}/${timebase}s" duration="${clipDur}/${timebase}s" start="${trimStart}/${timebase}s">`,
-    );
-
-    // Color correction block if grade has non-default values
-    const grade = clip.colorGrade;
-    if (grade && !grade.bypass && (grade.exposure !== 0 || grade.saturation !== 1 || grade.contrast !== 0)) {
-      clipElements.push(
-        `          <filter-video ref="r_colorCorrection">`,
-        `            <param name="Exposure" value="${(grade.exposure ?? 0).toFixed(3)}"/>`,
-        `            <param name="Saturation" value="${(grade.saturation ?? 1).toFixed(3)}"/>`,
-        `            <param name="Contrast" value="${(grade.contrast ?? 0).toFixed(3)}"/>`,
-        `          </filter-video>`,
-      );
-    }
-
-    // Speed (clip retiming)
-    if (clip.speed && clip.speed !== 1) {
-      clipElements.push(
-        `          <timeMap>`,
-        `            <timept time="0s" value="0s" interp="smooth2"/>`,
-        `            <timept time="${clipDur}/${timebase}s" value="${Math.round(clipDur * clip.speed)}/${timebase}s" interp="smooth2"/>`,
-        `          </timeMap>`,
-      );
-    }
-
-    clipElements.push(`        </clip>`);
-  }
-
-  return buildFCPXMLSkeleton(title, timebase, frameDur, w, h, totalFrames, resources, clipElements, hasColorCorrection);
-}
-
-function buildFCPXMLSkeleton(
-  title: string,
-  timebase: number,
-  frameDur: string,
-  w: number,
-  h: number,
-  totalFrames: number,
-  resources: string[],
-  clipElements: string[],
-  hasColorCorrection = false
-): string {
-  // Add the r_colorCorrection effect resource if any clip references it
-  const colorCorrectionResource = hasColorCorrection
-    ? `\n    <effect id="r_colorCorrection" name="Color Correction" uid=".../ColorCorrection.localized"/>`
-    : '';
+  const clips = segs
+    .filter((s) => s.asset.sourcePath)
+    .sort((a, b) => a.startFrame - b.startFrame)
+    .map((s) => {
+      const speed = s.clip.speed ?? 1;
+      const isAudio = s.track.kind === 'audio';
+      const attrs = `name="${xmlEscape(s.asset.name ?? 'clip')}" ref="r_${xmlEscape(s.asset.id)}" lane="${laneOf(s.clip.trackId)}" offset="${rt(s.startFrame)}" duration="${rt(s.durationFrames)}" start="${secs(s.sourceInSeconds)}"${isAudio ? ' srcEnable="audio"' : s.asset.hasAudio ? ' srcEnable="video"' : ''}`;
+      if (Math.abs(speed - 1) < 1e-3) return `            <asset-clip ${attrs}/>`;
+      return [
+        `            <asset-clip ${attrs}>`,
+        `              <timeMap>`,
+        `                <timept time="0s" value="0s" interp="linear"/>`,
+        `                <timept time="${rt(s.durationFrames)}" value="${rt(s.durationFrames * speed)}" interp="linear"/>`,
+        `              </timeMap>`,
+        `            </asset-clip>`,
+      ].join('\n');
+    });
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
 <fcpxml version="1.10">
   <resources>
+    <format id="r_format" name="FFVideoFormat${h}p${ntsc ? (fps).toFixed(2).replace('.', '') : base}" frameDuration="${rt(1)}" width="${w}" height="${h}"/>
 ${resources.join('\n')}
-    <format id="r_format" name="FFVideoFormat${h}p${timebase}" frameDuration="${frameDur}" width="${w}" height="${h}"/>${colorCorrectionResource}
   </resources>
   <library>
     <event name="${title}">
       <project name="${title}">
-        <sequence format="r_format" duration="${totalFrames}/${timebase}s" tcStart="0s" tcFormat="NDF">
+        <sequence format="r_format" duration="${rt(total)}" tcStart="0s" tcFormat="NDF">
           <spine>
-${clipElements.join('\n')}
+            <gap name="Gap" offset="0s" duration="${rt(total)}" start="0s">
+${clips.join('\n')}
+            </gap>
           </spine>
         </sequence>
       </project>
