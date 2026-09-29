@@ -888,6 +888,11 @@ ipcMain.handle('export:cancel-bg', async (_ev, jobId: string) => {
 
 // ── Project persistence (.264proj) ───────────────────────────────────────────
 
+// Project files the user picked through a main-process dialog this session.
+// Saving to one of these again (⌘S) needs no dialog; any other renderer-supplied
+// path still goes through a save dialog.
+const userChosenProjectPaths = new Set<string>();
+
 ipcMain.handle("project:save", async (event, json: string, suggestedName: string) => {
   try {
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -904,6 +909,7 @@ ipcMain.handle("project:save", async (event, json: string, suggestedName: string
       : await dialog.showSaveDialog(dialogOptions);
     if (result.canceled || !result.filePath) return null;
     await writeFile(result.filePath, json, "utf-8");
+    userChosenProjectPaths.add(result.filePath);
     return result.filePath;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -927,6 +933,7 @@ ipcMain.handle("project:open", async (event) => {
       : await dialog.showOpenDialog(dialogOptions);
     if (result.canceled || !result.filePaths[0]) return null;
     const json = await readFile(result.filePaths[0], "utf-8");
+    userChosenProjectPaths.add(result.filePaths[0]);
     return { json, filePath: result.filePaths[0] };
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -936,13 +943,18 @@ ipcMain.handle("project:open", async (event) => {
 
 ipcMain.handle("project:save-as", async (_event, json: string, filePath: string) => {
   try {
+    if (filePath && userChosenProjectPaths.has(filePath)) {
+      await writeFile(filePath, json, "utf-8");
+      return filePath;
+    }
     const { canceled, filePath: chosen } = await dialog.showSaveDialog({
       title: 'Save Project As',
       defaultPath: filePath,
-      filters: [{ name: '264 Pro Project', extensions: ['264pro'] }],
+      filters: [{ name: '264 Pro Project', extensions: ['264proj'] }],
     });
     if (canceled || !chosen) return null;
     await writeFile(chosen, json, "utf-8");
+    userChosenProjectPaths.add(chosen);
     return chosen;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
