@@ -5,7 +5,7 @@
  * Multicam Sync, Waveform Extraction
  */
 import { buildTimelineSegments } from '../../shared/timeline';
-import type { MediaAsset } from '../../shared/models';
+import { adoptProcessedFile } from '../lib/processedMedia';
 import React, { useState, useCallback } from 'react';
 import { getClipDurationFrames as sharedClipDuration } from "../../shared/timeline";
 import { useEditorStore } from '../store/editorStore';
@@ -172,18 +172,7 @@ export function AIToolsWave2Panel() {
 
 
   // Put a processed render in place of the selected clip's media (undoable).
-  const useResult = useCallback(async (outputPath: string | undefined, label: string): Promise<string> => {
-    const probe = (window as unknown as { electronAPI?: { probePaths?: (p: string[]) => Promise<MediaAsset[]> } }).electronAPI?.probePaths;
-    if (!outputPath || !probe || !selectedClipId) return `Saved: ${outputPath ?? ''}`;
-    try {
-      const [asset] = await probe([outputPath]);
-      if (!asset) return `Saved: ${outputPath}`;
-      useEditorStore.getState().replaceClipMedia(selectedClipId, { ...asset, name: `${selectedAsset?.name ?? asset.name} (${label})` });
-      return `✓ ${label} applied to the clip — undo to revert`;
-    } catch {
-      return `Saved: ${outputPath}`;
-    }
-  }, [selectedClipId, selectedAsset]);
+  const useResult = useCallback((outputPath: string | undefined, label: string) => adoptProcessedFile(outputPath, label, selectedClipId), [selectedClipId]);
 
   const handleBurnSubs = useCallback(async () => {
     if (!clipPath) { setSubError('Select a clip first'); return; }

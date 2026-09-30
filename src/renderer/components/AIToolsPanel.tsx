@@ -1,3 +1,4 @@
+import { adoptProcessedFile } from '../lib/processedMedia';
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AIToolsWave2Panel } from "./AIToolsWave2Panel";
 import { useAuthGate, AuthGateModal, AuthGateWrapper, type RequiredAccess } from "./AuthGateModal";
@@ -497,7 +498,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
       ? project.assets.find((a) => a.id === clip.assetId)
       : project.assets.find((a) => a.id === selectedAssetId);
     if (asset?.sourcePath) {
-      setInputUrl(`media://localhost?path=${encodeURIComponent(asset.sourcePath)}`);
+      setInputUrl(`media://asset?path=${encodeURIComponent(asset.sourcePath)}`);
       setInputFileName(asset.name);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -567,7 +568,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
       const outputPath = inputPath.replace(ext, `_isolated${ext}`);
       const res = await window.electronAPI.voiceIsolate({ inputPath, outputPath });
       if (res?.success) {
-        setVoiceIsolateResult(res.outputPath ?? outputPath);
+        setVoiceIsolateResult(await adoptProcessedFile(res.outputPath ?? outputPath, 'voice isolated', selectedClipId));
       } else {
         setVoiceIsolateError(res?.error ?? 'Voice isolation failed');
       }
@@ -576,7 +577,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
     } finally {
       setVoiceIsolateBusy(false);
     }
-  }, [getSelectedAssetPath]);
+  }, [getSelectedAssetPath, selectedClipId]);
 
   const cutAtAllScenes = useCallback(() => {
     if (!detectedScenes.length) return;
@@ -617,9 +618,9 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
       try {
         const res = await window.electronAPI.voiceIsolate({ inputPath: filePath });
         if (res?.success && res.outputPath) {
-          const outUrl = `media://localhost?path=${encodeURIComponent(res.outputPath)}`;
+          const outUrl = `media://asset?path=${encodeURIComponent(res.outputPath)}`;
           setStatus("complete");
-          setResult({ outputUrl: outUrl, message: `Saved to ${res.outputPath}` });
+          setResult({ outputUrl: outUrl, message: await adoptProcessedFile(res.outputPath, 'voice isolated', selectedClipId) });
         } else {
           setStatus("error");
           setResult({ error: res?.error || "Voice isolation failed." });
@@ -679,7 +680,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
       setResult({ error: e.message });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTool, inputUrl, paramValues, tool]);
+  }, [selectedTool, inputUrl, paramValues, tool, selectedClipId]);
 
   const startPolling = (predId: string) => {
     let attempts = 0;
@@ -1103,7 +1104,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   <button
                     onClick={async () => {
                       const r = await (window as any).flowstateAPI?.pickMediaFile?.();
-                      if (r?.filePath) { setVgImageUrl(`media://localhost?path=${encodeURIComponent(r.filePath)}`); setVgImageName(r.name); }
+                      if (r?.filePath) { setVgImageUrl(`media://asset?path=${encodeURIComponent(r.filePath)}`); setVgImageName(r.name); }
                     }}
                     style={{ width: "100%", padding: "10px", borderRadius: 9, border: "1px dashed rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.5)", fontSize: 12, cursor: "pointer" }}
                   >
@@ -1622,7 +1623,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   setInterpBusy(true); setInterpError(null); setInterpResult(null);
                   const res = await (window as any).electronAPI?.frameInterpolate?.({ inputPath: asset.sourcePath, multiplier: interpMultiplier, quality: interpQuality });
                   setInterpBusy(false);
-                  if (res?.success) setInterpResult(res.outputPath ?? 'Done');
+                  if (res?.success) setInterpResult(await adoptProcessedFile(res.outputPath, 'interpolated', null));
                   else setInterpError(res?.error ?? 'Failed');
                 }}
                 style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: interpBusy ? 'wait' : 'pointer', background: interpBusy ? 'rgba(59,138,247,0.1)' : 'rgba(59,138,247,0.2)', border: '1px solid rgba(59,138,247,0.4)', color: '#3b8af7' }}>
@@ -1719,7 +1720,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                     sourceWidth: asset.width ?? 1920, sourceHeight: asset.height ?? 1080,
                   });
                   setReframeBusy(false);
-                  if (res?.success) setReframeResult(res.outputPath);
+                  if (res?.success) setReframeResult(await adoptProcessedFile(res.outputPath, 'reframed', null));
                   else setReframeError(res?.error ?? 'Failed');
                 }}
                 style={{ width: '100%', padding: '7px 0', fontSize: 12, fontWeight: 600, borderRadius: 7, cursor: reframeBusy ? 'wait' : 'pointer', background: reframeBusy ? 'rgba(249,115,22,0.08)' : 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.4)', color: '#fb923c' }}>
@@ -1868,7 +1869,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                   : project.assets.find((a) => a.id === selectedAssetId);
 
                 if (asset && asset.sourcePath) {
-                  const assetMediaUrl = `media://localhost?path=${encodeURIComponent(asset.sourcePath)}`;
+                  const assetMediaUrl = `media://asset?path=${encodeURIComponent(asset.sourcePath)}`;
                   const isCurrentlySet = inputUrl === assetMediaUrl;
                   return (
                     <div style={{
@@ -1927,7 +1928,7 @@ export function AIToolsPanel({ isOpen, onClose, inlineMode, onAddGeneratedClip }
                 onClick={async () => {
                   const result = await (window as any).flowstateAPI?.pickMediaFile?.();
                   if (result?.filePath) {
-                    const url = `media://localhost?path=${encodeURIComponent(result.filePath)}`;
+                    const url = `media://asset?path=${encodeURIComponent(result.filePath)}`;
                     setInputUrl(url);
                     setInputFileName(result.name);
                   }
