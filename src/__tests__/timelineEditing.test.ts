@@ -261,6 +261,15 @@ describe("timeline editing", () => {
     expect([at("cam1"), at("cam2"), at("cam2a")]).toEqual([150, 0, 0]);
   });
 
+  it("replaceClipMedia swaps the clip's media in place and undoes cleanly", () => {
+    load([clip("c1", "V1", 0)], [asset("a"), asset("b")]);
+    S().replaceClipMedia("c1", asset("a_denoised"));
+    expect(seg("c1").asset.id).toBe("a_denoised");
+    expect([seg("c1").startFrame, seg("c1").endFrame]).toEqual([0, 60]);
+    S().undo();
+    expect(seg("c1").asset.id).toBe("a");
+  });
+
   it("titles go on the top track, or a new top track when it's occupied", () => {
     load([clip("c1", "V1", 0)], [asset("a"), asset("t", 2, { sourcePath: "" })]);
     S().insertClipOnTop({ ...createEmptyClip("t", "V1", 10), id: "title" });

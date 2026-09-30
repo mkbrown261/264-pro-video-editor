@@ -819,6 +819,11 @@ async function sampleFramesRgba(filePath: string, fps: number, width: number, ma
 ipcMain.handle("media:sample-frames", (_e, args: { filePath: string; fps: number; width: number; maxSeconds?: number }) =>
   sampleFramesRgba(args.filePath, args.fps, args.width, args.maxSeconds));
 
+ipcMain.handle("media:probe-paths", async (_e, paths: string[]) => {
+  const ok = (Array.isArray(paths) ? paths : []).filter((x) => typeof x === "string" && isAbsolute(x));
+  return ok.length ? probeMediaFiles(ok) : [];
+});
+
 ipcMain.handle("media:save-recording", async (_e, data: Uint8Array, name?: string) => {
   const dir = join(app.getPath("documents"), "264 Pro", "Recordings");
   await mkdirAsync(dir, { recursive: true });

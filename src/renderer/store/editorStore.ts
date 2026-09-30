@@ -107,6 +107,8 @@ interface EditorStore {
    * (e.g. the second stem) lands on a free audio track under the clip.
    */
   applyProcessedAudio: (clipId: string, processed: MediaAsset, extra?: MediaAsset | null) => void;
+  /** Use a processed render of a clip's media (denoised, stabilised…) in its place; same timing, undoable. */
+  replaceClipMedia: (clipId: string, asset: MediaAsset) => void;
   selectAsset: (assetId: string | null) => void;
   selectClip: (clipId: string | null) => void;
 
@@ -1076,6 +1078,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set(withUndo("Remove Subtitle", (state) => ({
       project: { ...state.project, subtitleCues: (state.project.subtitleCues ?? []).filter((c) => c.id !== id) },
     })));
+  },
+
+  replaceClipMedia: (clipId, asset) => {
+    set(withUndo("Replace Clip Media", (state) => {
+      if (!state.project.sequence.clips.some((c) => c.id === clipId)) return state;
+      const assets = state.project.assets.some((a) => a.id === asset.id) ? state.project.assets : [...state.project.assets, asset];
+      return {
+        project: {
+          ...state.project,
+          assets,
+          sequence: { ...state.project.sequence, clips: state.project.sequence.clips.map((c) => (c.id === clipId ? { ...c, assetId: asset.id } : c)) },
+        },
+      };
+    }));
   },
 
   applyProcessedAudio: (clipId, processed, extra) => {

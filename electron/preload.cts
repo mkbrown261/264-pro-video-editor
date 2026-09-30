@@ -152,6 +152,7 @@ const electronAPI = {
   transcribeAudio: (args: { filePath: string; language?: string }) =>
     ipcRenderer.invoke('ai:transcribe', args),
   // ── Voice Isolation — FFmpeg anlmdn denoiser, no model file required ─────
+  probePaths: (paths: string[]): Promise<MediaAsset[]> => ipcRenderer.invoke('media:probe-paths', paths),
   sampleFrames: (args: { filePath: string; fps: number; width: number; maxSeconds?: number }): Promise<{ width: number; height: number; fps: number; count: number; frames: Uint8Array }> =>
     ipcRenderer.invoke('media:sample-frames', args),
   processClipAudio: (args: { filePath: string; recipe: string; strength?: number }): Promise<MediaAsset> =>

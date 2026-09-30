@@ -5,6 +5,7 @@
  * Multicam Sync, Waveform Extraction
  */
 import { buildTimelineSegments } from '../../shared/timeline';
+import type { MediaAsset } from '../../shared/models';
 import React, { useState, useCallback } from 'react';
 import { getClipDurationFrames as sharedClipDuration } from "../../shared/timeline";
 import { useEditorStore } from '../store/editorStore';
@@ -169,15 +170,30 @@ export function AIToolsWave2Panel() {
   const [mcResult, setMcResult] = useState<Array<{ id: string; offsetSeconds: number }> | null>(null);
   const [mcError, setMcError] = useState<string | null>(null);
 
+
+  // Put a processed render in place of the selected clip's media (undoable).
+  const useResult = useCallback(async (outputPath: string | undefined, label: string): Promise<string> => {
+    const probe = (window as unknown as { electronAPI?: { probePaths?: (p: string[]) => Promise<MediaAsset[]> } }).electronAPI?.probePaths;
+    if (!outputPath || !probe || !selectedClipId) return `Saved: ${outputPath ?? ''}`;
+    try {
+      const [asset] = await probe([outputPath]);
+      if (!asset) return `Saved: ${outputPath}`;
+      useEditorStore.getState().replaceClipMedia(selectedClipId, { ...asset, name: `${selectedAsset?.name ?? asset.name} (${label})` });
+      return `✓ ${label} applied to the clip — undo to revert`;
+    } catch {
+      return `Saved: ${outputPath}`;
+    }
+  }, [selectedClipId, selectedAsset]);
+
   const handleBurnSubs = useCallback(async () => {
     if (!clipPath) { setSubError('Select a clip first'); return; }
     if (!srtContent.trim()) { setSubError('Paste SRT content above'); return; }
     setSubBusy(true); setSubError(null); setSubResult(null);
     const res = await API?.burnSubtitles?.({ inputPath: clipPath, srtContent, style: subStyle });
     setSubBusy(false);
-    if (res?.success) setSubResult(`Saved: ${res.outputPath}`);
+    if (res?.success) setSubResult(await useResult(res.outputPath, 'subtitles burned in'));
     else setSubError(res?.error ?? 'Failed');
-  }, [clipPath, srtContent, subStyle]);
+  }, [clipPath, srtContent, subStyle, useResult]);
 
   const handleRevision = useCallback(async () => {
     if (!revisionText.trim()) { setRevisionError('Enter revision instructions'); return; }
@@ -202,9 +218,9 @@ export function AIToolsWave2Panel() {
     setNrBusy(true); setNrError(null); setNrResult(null);
     const res = await API?.noiseReduce?.({ inputPath: clipPath, strength: nrStrength });
     setNrBusy(false);
-    if (res?.success) setNrResult(`Saved: ${res.outputPath}`);
+    if (res?.success) setNrResult(await useResult(res.outputPath, 'denoised'));
     else setNrError(res?.error ?? 'Failed');
-  }, [clipPath, nrStrength]);
+  }, [clipPath, nrStrength, useResult]);
 
   const handleColorMatch = useCallback(async () => {
     if (!clipPath) { setCmError('Select a target clip first'); return; }
@@ -224,18 +240,18 @@ export function AIToolsWave2Panel() {
     setNormBusy(true); setNormError(null); setNormResult(null);
     const res = await API?.normalizeClip?.({ inputPath: clipPath, targetLufs: normLufs });
     setNormBusy(false);
-    if (res?.success) setNormResult(`Saved: ${res.outputPath}`);
+    if (res?.success) setNormResult(await useResult(res.outputPath, 'normalized'));
     else setNormError(res?.error ?? 'Failed');
-  }, [clipPath, normLufs]);
+  }, [clipPath, normLufs, useResult]);
 
   const handleStabilize = useCallback(async () => {
     if (!clipPath) { setStabError('Select a clip first'); return; }
     setStabBusy(true); setStabError(null); setStabResult(null);
     const res = await API?.stabilize?.({ inputPath: clipPath, strength: stabStr });
     setStabBusy(false);
-    if (res?.success) setStabResult(`Saved: ${res.outputPath} (${res.method})`);
+    if (res?.success) setStabResult(await useResult(res.outputPath, 'stabilized'));
     else setStabError(res?.error ?? 'Failed');
-  }, [clipPath, stabStr]);
+  }, [clipPath, stabStr, useResult]);
 
   const handleProxy = useCallback(async () => {
     if (!clipPath) { setProxyError('Select a clip first'); return; }
@@ -253,9 +269,9 @@ export function AIToolsWave2Panel() {
     setDeintBusy(true); setDeintError(null); setDeintResult(null);
     const res = await API?.deinterlace?.({ inputPath: clipPath });
     setDeintBusy(false);
-    if (res?.success) setDeintResult(`Saved: ${res.outputPath}`);
+    if (res?.success) setDeintResult(await useResult(res.outputPath, 'deinterlaced'));
     else setDeintError(res?.error ?? 'Failed');
-  }, [clipPath]);
+  }, [clipPath, useResult]);
 
   const handleAudioDuck = useCallback(async () => {
     if (!clipPath) { setDuckError('Select a voice/dialogue clip first'); return; }
