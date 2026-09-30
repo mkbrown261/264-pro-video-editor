@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { getClipDurationFrames as sharedClipDuration } from "../../shared/timeline";
 import { EditorProject, TimelineClip, MediaAsset } from '../../shared/models';
 
 interface PrecisionTrimPanelProps {
@@ -27,7 +28,7 @@ function framesToTC(frames: number, fps: number): string {
 function getClipDurationFrames(clip: TimelineClip, fps: number, assets: MediaAsset[]): number {
   const asset = assets.find((a: MediaAsset) => a.id === clip.assetId);
   if (!asset) return 0;
-  return Math.round(asset.durationSeconds * fps) - (clip.trimStartFrames ?? 0) - (clip.trimEndFrames ?? 0);
+  return sharedClipDuration(clip, asset, fps);
 }
 
 export const PrecisionTrimPanel: React.FC<PrecisionTrimPanelProps> = ({

@@ -6,6 +6,7 @@
  */
 
 import React, { useMemo, useState, useCallback } from "react";
+import { getClipDurationFrames as sharedClipDuration } from "../../shared/timeline";
 import type { TimelineClip, TimelineTrack, TimelineMarker, MediaAsset } from "../../shared/models";
 
 interface TimelineIndexProps {
@@ -140,8 +141,7 @@ export function TimelineIndexPanel({
             )}
             {clipRows.map(({ clip, asset, track }) => {
               const clipAsset = assets.find(a => a.id === clip.assetId);
-              const clipDur = clipAsset ? Math.round(clipAsset.durationSeconds * fps) : 0;
-              const durationFrames = Math.max(0, clipDur - clip.trimStartFrames - clip.trimEndFrames);
+              const durationFrames = clipAsset ? sharedClipDuration(clip, clipAsset, fps) : 0;
               const active = isAtPlayhead(clip.startFrame, clip.startFrame + durationFrames);
               return (
                 <div

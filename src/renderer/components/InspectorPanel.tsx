@@ -1961,7 +1961,7 @@ export function InspectorPanel({
                     clip={selectedSegment.clip}
                     totalFrames={totalFrames ?? 3000}
                     clipStartFrame={selectedSegment.clip.startFrame}
-                    clipDurationFrames={Math.max(1, (() => { const a = selectedSegment.asset; const dur = a ? Math.round(a.durationSeconds * sequenceSettings.fps) : 60; return dur - selectedSegment.clip.trimStartFrames - selectedSegment.clip.trimEndFrames; })())}
+                    clipDurationFrames={Math.max(1, selectedSegment.durationFrames)}
                     playheadFrame={currentPlayheadFrame ?? 0}
                     fps={sequenceSettings.fps}
                     onUpdateKeyframes={onSetClipKeyframes}

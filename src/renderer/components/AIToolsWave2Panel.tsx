@@ -5,6 +5,7 @@
  * Multicam Sync, Waveform Extraction
  */
 import React, { useState, useCallback } from 'react';
+import { getClipDurationFrames as sharedClipDuration } from "../../shared/timeline";
 import { useEditorStore } from '../store/editorStore';
 
 const API = (window as any).electronAPI;
@@ -127,8 +128,7 @@ export function AIToolsWave2Panel() {
       fps: project.sequence.settings.fps,
       clips: project.sequence.clips.map(c => {
         const asset = project.assets.find(a => a.id === c.assetId);
-        const assetDur = asset ? Math.round((asset.durationSeconds ?? 0) * project.sequence.settings.fps) : 0;
-        const clipEnd = c.startFrame + Math.max(0, assetDur - c.trimStartFrames - c.trimEndFrames);
+        const clipEnd = c.startFrame + (asset ? sharedClipDuration(c, asset, project.sequence.settings.fps) : 0);
         return { id: c.id, name: asset?.name, startFrame: c.startFrame, endFrame: clipEnd, trackId: c.trackId };
       }),
     });
