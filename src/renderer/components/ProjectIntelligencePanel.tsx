@@ -1,3 +1,7 @@
+import type { EditorProject, MediaAsset, TimelineClip } from "../../shared/models";
+import { isColorGradeDefault } from "../../shared/models";
+import { buildTimelineSegments, getTotalDurationFrames } from "../../shared/timeline";
+import { pictureGaps } from "../../shared/timelineHealth";
 import React, { useEffect, useState, useRef } from 'react';
 
 interface Issue {
@@ -9,7 +13,7 @@ interface Issue {
 }
 
 interface ProjectIntelligencePanelProps {
-  project: any;
+  project: EditorProject;
   fps: number;
   onClose: () => void;
   onAutoFixAll: () => void;
@@ -19,33 +23,29 @@ interface ProjectIntelligencePanelProps {
   onCloseGaps: () => void;
 }
 
-function getClipDurationFrames(clip: any, assets: any[], fps: number): number {
-  const asset = assets?.find((a: any) => a.id === clip.assetId);
-  const totalFrames = asset ? Math.round(asset.durationSeconds * fps) : 0;
-  return Math.max(0, totalFrames - (clip.trimStartFrames ?? 0) - (clip.trimEndFrames ?? 0));
-}
-
-function analyzeProject(project: any, fps: number) {
+function analyzeProject(project: EditorProject, fps: number) {
   if (!project?.sequence?.tracks) {
     return { score: 100, issues: [], checks: [] };
   }
 
-  const assets: any[] = project.assets ?? [];
-  const allClips: any[] = project.sequence.clips ?? [];
+  const assets: MediaAsset[] = project.assets ?? [];
+  const allClips: TimelineClip[] = project.sequence.clips ?? [];
 
-  const videoTracks = project.sequence.tracks.filter((t: any) => t.kind === 'video');
-  const audioTracks = project.sequence.tracks.filter((t: any) => t.kind === 'audio');
-  const videoTrackIds = new Set<string>(videoTracks.map((t: any) => t.id));
-  const audioTrackIds = new Set<string>(audioTracks.map((t: any) => t.id));
-  const allVideoClips = allClips.filter((c: any) => videoTrackIds.has(c.trackId));
-  const allAudioClips = allClips.filter((c: any) => audioTrackIds.has(c.trackId));
+  const videoTracks = project.sequence.tracks.filter((t) => t.kind === 'video');
+  const audioTracks = project.sequence.tracks.filter((t) => t.kind === 'audio');
+  const videoTrackIds = new Set<string>(videoTracks.map((t) => t.id));
+  const audioTrackIds = new Set<string>(audioTracks.map((t) => t.id));
+  const allVideoClips = allClips.filter((c) => videoTrackIds.has(c.trackId));
+  const allAudioClips = allClips.filter((c) => audioTrackIds.has(c.trackId));
 
   const issues: Array<{ severity: 'high' | 'medium' | 'low'; label: string; detail: string; fixLabel: string }> = [];
   const checks: string[] = [];
 
-  // Ungraded clips
-  const ungradedCount = allVideoClips.filter((c: any) =>
-    !c.colorGrade || (c.colorGrade.exposure === 0 && c.colorGrade.contrast === 0)
+  // Ungraded footage (any active grade or grade node counts)
+  const segs = buildTimelineSegments(project.sequence, assets).filter((g) => g.clip.isEnabled);
+  const footage = segs.filter((g) => g.track.kind === 'video' && g.asset.sourcePath && !g.clip.titleConfig && !g.clip.nestedSequenceId);
+  const ungradedCount = footage.filter((g) =>
+    !((g.clip.colorGrade && !g.clip.colorGrade.bypass && !isColorGradeDefault(g.clip.colorGrade)) || (g.clip.gradeNodes?.length ?? 0) > 0)
   ).length;
   if (ungradedCount > 0) {
     issues.push({
@@ -59,7 +59,7 @@ function analyzeProject(project: any, fps: number) {
   }
 
   // Audio peaks
-  const peakingCount = allAudioClips.filter((c: any) => (c.volume ?? 1) > 1.3).length;
+  const peakingCount = allAudioClips.filter((c) => (c.volume ?? 1) > 1.3).length;
   if (peakingCount > 0) {
     issues.push({
       severity: 'high',
@@ -71,23 +71,13 @@ function analyzeProject(project: any, fps: number) {
     checks.push('Audio levels are safe');
   }
 
-  // Gaps
-  const sortedVideoClips = [...allVideoClips].sort(
-    (a: any, b: any) => (a.startFrame ?? 0) - (b.startFrame ?? 0)
-  );
-  let gapCount = 0;
-  for (let i = 1; i < sortedVideoClips.length; i++) {
-    const prev = sortedVideoClips[i - 1];
-    const curr = sortedVideoClips[i];
-    const prevDur = getClipDurationFrames(prev, assets, fps);
-    const prevEnd = (prev.startFrame ?? 0) + prevDur;
-    if ((curr.startFrame ?? 0) > prevEnd + 5) gapCount++;
-  }
+  // Black gaps in the composed picture
+  const gapCount = pictureGaps(project, 5).length;
   if (gapCount > 0) {
     issues.push({
       severity: 'low',
       label: 'GAPS',
-      detail: `${gapCount} gap${gapCount > 1 ? 's' : ''} detected in timeline`,
+      detail: `${gapCount} black gap${gapCount > 1 ? 's' : ''} in the picture`,
       fixLabel: 'Close Gaps',
     });
   } else {
@@ -96,7 +86,7 @@ function analyzeProject(project: any, fps: number) {
 
   // Avg cut duration
   if (allVideoClips.length >= 3) {
-    const avgCutSec = allVideoClips.reduce((sum: number, c: any) => sum + (getClipDurationFrames(c, assets, fps) / fps), 0) / allVideoClips.length;
+    const avgCutSec = footage.reduce((sum: number, g) => sum + g.durationFrames / fps, 0) / Math.max(1, footage.length);
     if (avgCutSec > 6) {
       issues.push({
         severity: 'medium',
@@ -154,14 +144,7 @@ export function ProjectIntelligencePanel({
 
   const projectName = project?.name ?? 'Untitled Project';
   const clipCount = project?.sequence?.clips?.length ?? 0;
-  const allProjectClips: any[] = project?.sequence?.clips ?? [];
-  const projectAssets: any[] = project?.assets ?? [];
-  const totalDurationFrames = allProjectClips.length > 0
-    ? allProjectClips.reduce((max: number, c: any) => {
-        const dur = getClipDurationFrames(c, projectAssets, fps);
-        return Math.max(max, (c.startFrame ?? 0) + dur);
-      }, 0)
-    : 0;
+  const totalDurationFrames = project?.sequence ? getTotalDurationFrames(buildTimelineSegments(project.sequence, project.assets ?? [])) : 0;
   const totalMinutes = Math.floor(totalDurationFrames / fps / 60);
   const totalSeconds = Math.floor((totalDurationFrames / fps) % 60);
 
