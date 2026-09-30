@@ -4,6 +4,7 @@
  * Per-Clip Normalize, Stabilization, Proxy Media, Deinterlace,
  * Multicam Sync, Waveform Extraction
  */
+import { buildTimelineSegments } from '../../shared/timeline';
 import React, { useState, useCallback } from 'react';
 import { getClipDurationFrames as sharedClipDuration } from "../../shared/timeline";
 import { useEditorStore } from '../store/editorStore';
@@ -40,6 +41,8 @@ function ActionBtn({ label, color, onClick, disabled }: { label: string; color: 
   );
 }
 
+type RevisionOp = { op: string; clipId?: string | null; startSec?: number; endSec?: number; value?: number; note?: string };
+
 export function AIToolsWave2Panel() {
   const project = useEditorStore(s => s.project);
   const selectedClipId = useEditorStore(s => s.selectedClipId);
@@ -61,7 +64,62 @@ export function AIToolsWave2Panel() {
   // ── Revision Mode ─────────────────────────────────────────────────────────
   const [revisionText, setRevisionText] = useState('');
   const [revisionBusy, setRevisionBusy] = useState(false);
-  const [revisionOps, setRevisionOps] = useState<Array<{ op: string; clipId?: string; note?: string; value?: number }> | null>(null);
+  const [revisionOps, setRevisionOps] = useState<RevisionOp[] | null>(null);
+  const [revisionApplied, setRevisionApplied] = useState<string | null>(null);
+
+  // Execute parsed revision ops through the normal (undoable) store actions.
+  const applyRevisionOps = useCallback(() => {
+    if (!revisionOps?.length) return;
+    const st = () => useEditorStore.getState();
+    const fps = st().project.sequence.settings.fps || 30;
+    const segs = () => buildTimelineSegments(st().project.sequence, st().project.assets);
+    const clipAt = (sec: number) => segs().find((g) => g.track.kind === 'video' && g.clip.isEnabled && sec * fps >= g.startFrame && sec * fps < g.endFrame);
+    const valid = (id?: string | null) => (id && st().project.sequence.clips.some((c) => c.id === id) ? id : null);
+    let applied = 0;
+    const skipped: string[] = [];
+    // Removals last so earlier ops still find their clips.
+    const ordered = [...revisionOps].sort((a, b) => Number(a.op === 'remove_clip') - Number(b.op === 'remove_clip'));
+    for (const op of ordered) {
+      const id = valid(op.clipId) ?? (op.startSec != null ? clipAt(op.startSec)?.clip.id ?? null : null);
+      switch (op.op) {
+        case 'remove_clip':
+          if (id) { st().removeClipById(id); applied++; } else skipped.push('remove (clip not found)');
+          break;
+        case 'trim_clip': {
+          const g = id ? segs().find((x) => x.clip.id === id) : null;
+          if (!g) { skipped.push('trim (clip not found)'); break; }
+          const sp = Math.max(0.25, Math.min(4, g.clip.speed ?? 1));
+          if (op.startSec != null && op.startSec * fps > g.startFrame) st().trimClipStart(g.clip.id, g.clip.trimStartFrames + Math.round((op.startSec * fps - g.startFrame) * sp));
+          const g2 = segs().find((x) => x.clip.id === g.clip.id);
+          if (g2 && op.endSec != null && op.endSec * fps < g2.endFrame) st().trimClipEnd(g2.clip.id, g2.clip.trimEndFrames + Math.round((g2.endFrame - op.endSec * fps) * sp));
+          applied++;
+          break;
+        }
+        case 'adjust_volume': {
+          if (op.value == null) { skipped.push('volume (no value)'); break; }
+          // Small negatives/large values are dB; 0–4 is a gain factor.
+          const gain = op.value < 0 || op.value > 4 ? Math.pow(10, op.value / 20) : op.value;
+          const targets = id ? [id] : segs().filter((g) => g.track.kind === 'audio').map((g) => g.clip.id);
+          targets.forEach((cid) => st().setClipVolume(cid, Math.max(0, Math.min(2, gain))));
+          if (targets.length) applied++; else skipped.push('volume (no audio clips)');
+          break;
+        }
+        case 'add_marker':
+          if (op.startSec == null) { skipped.push('marker (no time)'); break; }
+          st().addMarker({ frame: Math.round(op.startSec * fps), label: op.note ?? 'AI note', color: '#a855f7' });
+          applied++;
+          break;
+        case 'split_at':
+          if (op.startSec == null) { skipped.push('split (no time)'); break; }
+          st().splitClipsAtBeats([Math.round(op.startSec * fps)], valid(op.clipId) ? [op.clipId!] : undefined);
+          applied++;
+          break;
+        default:
+          skipped.push(`${op.op.replace(/_/g, ' ')} (do this one by hand${op.note ? `: ${op.note}` : ''})`);
+      }
+    }
+    setRevisionApplied(`Applied ${applied} of ${revisionOps.length}${skipped.length ? ` — skipped: ${skipped.join('; ')}` : ''}. Undo reverts each step.`);
+  }, [revisionOps]);
   const [revisionError, setRevisionError] = useState<string | null>(null);
 
   // ── Noise Reduction ───────────────────────────────────────────────────────
@@ -134,7 +192,8 @@ export function AIToolsWave2Panel() {
     });
     const res = await API?.parseRevision?.({ instructions: revisionText, projectJson });
     setRevisionBusy(false);
-    if (res?.success) setRevisionOps(res.ops as any);
+    setRevisionApplied(null);
+    if (res?.success) setRevisionOps((res.ops ?? []) as RevisionOp[]);
     else setRevisionError(res?.error ?? 'Failed');
   }, [revisionText, project]);
 
@@ -290,6 +349,8 @@ export function AIToolsWave2Panel() {
             ))}
           </div>
         )}
+        {revisionOps && revisionOps.length > 0 && <div style={{ marginTop: 6 }}><ActionBtn label="✅ Apply to Timeline" color="#22c55e" onClick={applyRevisionOps} disabled={false} /></div>}
+        {revisionApplied && <div style={{ marginTop: 6, fontSize: 11, color: '#86efac' }}>{revisionApplied}</div>}
         {revisionOps?.length === 0 && <div style={{ marginTop: 6, fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>No actionable operations found — try being more specific.</div>}
         {revisionError && <div style={{ marginTop: 6, fontSize: 11, color: '#ef4444' }}>⚠ {revisionError}</div>}
       </Card>
