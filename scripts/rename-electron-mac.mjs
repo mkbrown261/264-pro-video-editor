@@ -4,7 +4,7 @@
  * to "264 Pro" so the dock shows the correct name and icon.
  * No-op on Windows/Linux.
  */
-import { existsSync, renameSync, readdirSync, cpSync } from "node:fs";
+import { existsSync, renameSync, readdirSync, cpSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,5 +91,11 @@ try {
   execSync(`killall Dock`);
   console.log("[rename-electron] Cleared dock cache");
 } catch { /* non-critical */ }
+
+// Point Electron's launcher (`electron .` / npm start) at the renamed binary.
+try {
+  writeFileSync(join(ROOT, "node_modules", "electron", "path.txt"), `${APP_NAME}.app/Contents/MacOS/${APP_NAME}`);
+  console.log("[rename-electron] Updated electron/path.txt");
+} catch (e) { console.error("[rename-electron] path.txt update failed:", e.message); }
 
 console.log("[rename-electron] Done — 264 Pro is ready");
